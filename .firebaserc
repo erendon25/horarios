@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "lc-scheduler"
+  },
+  "targets": {
+    "lc-scheduler": {
+      "hosting": {
+        "lc-scheduler": [
+          "lc-scheduler"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}
