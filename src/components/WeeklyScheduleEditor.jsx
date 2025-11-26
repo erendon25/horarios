@@ -149,6 +149,10 @@ useEffect(() => {
     };
 
     const detectScheduleConflict = (staff, day, shift) => {
+    // Si no hay turno asignado (sin entrada, salida o posición), NO mostrar conflicto
+    if (!shift || !shift.start || !shift.end || !shift.position) {
+        return null;
+    }
     // 🛑 No validar conflictos en feriados
     const isFeriado = schedules[staff.id]?.[day]?.feriado;
     if (isFeriado) return null;
@@ -315,7 +319,7 @@ useEffect(() => {
 
     // Función para formatear mensaje de conflicto
     const formatConflictMessage = (conflicts) => {
-        if (conflicts === 'estudia') return 'Tiene clases este día';
+        if (conflicts === 'estudia') return 'Solicito el dia Libre';
         if (conflicts === 'incompatible') return 'No tiene las habilidades requeridas';
         if (conflicts === 'conflicto') return 'Conflicto con horario de estudio';
         return 'Conflicto detectado';
