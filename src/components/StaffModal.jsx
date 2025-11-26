@@ -2,12 +2,13 @@
 import { useEffect, useState } from 'react';
 import { getFirestore, doc, setDoc, addDoc, collection } from 'firebase/firestore';
 
-function StaffModal({ staff = null, onClose, onSaved }) {
+function StaffModal({ staff = null, userData, onClose, onSaved }) {
   const [form, setForm] = useState({
     name: staff?.name || '',
     lastName: staff?.lastName || '',
     modality: staff?.modality || 'Full-Time',
     dni: staff?.dni || '',
+    sanitaryCardDate: staff?.sanitaryCardDate || '',
   });
   const [loading, setLoading] = useState(false);
   const db = getFirestore();
@@ -30,7 +31,8 @@ function StaffModal({ staff = null, onClose, onSaved }) {
         });
       } else {
         await addDoc(collection(db, 'staff_profiles'), {
-          ...form,
+            ...form,
+          storeId: userData.storeId, // ✅ Esto faltaba, añadir siempre storeId
           status: 'pending',
           createdAt: new Date(),
         });
@@ -93,6 +95,17 @@ function StaffModal({ staff = null, onClose, onSaved }) {
               <option>Part-Time</option>
             </select>
           </div>
+<div>
+  <label className="block text-sm">Fecha de vencimiento del carnet</label>
+  <input
+    type="date"
+    name="sanitaryCardDate"
+    value={form.sanitaryCardDate}
+    onChange={handleChange}
+    className="w-full border p-2 rounded"
+  />
+</div>
+
           <button
             type="submit"
             disabled={loading}

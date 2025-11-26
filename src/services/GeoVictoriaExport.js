@@ -1,12 +1,19 @@
+// GeoVictoriaExport.js – Versión corregida
 import * as XLSX from "xlsx";
 import { parseISO, addDays, format } from "date-fns";
 
-export const exportGeoVictoriaExcel = (staff, schedules, turnoMap, weekStartDate) => {
+export const exportGeoVictoriaExcel = (staff, schedules, weekKey, turnoMap) => {
+  if (!weekKey || !weekKey.includes('_to_')) {
+    alert("Error: semana no válida");
+    return;
+  }
+
+  const startDateStr = weekKey.split('_to_')[0];
+  const startDate = parseISO(startDateStr);
+
   const wsData = [];
   const header = ["Nombre", "DNI", ...Array.from({ length: 31 }, (_, i) => i + 1)];
   wsData.push(header);
-
-  const startDate = parseISO(weekStartDate); // Lunes
 
   const normalizeTime = (timeStr) => {
     if (!timeStr) return '';
@@ -23,13 +30,9 @@ export const exportGeoVictoriaExcel = (staff, schedules, turnoMap, weekStartDate
     row[0] = fullName;
     row[1] = dni;
 
-    const schedule = schedules[person.id];
-    if (!schedule) {
-      wsData.push(row);
-      return;
-    }
+    const personSchedule = schedules[person.id] || {};
 
-    Object.entries(schedule).forEach(([weekday, data]) => {
+    Object.entries(personSchedule).forEach(([weekday, data]) => {
       const dayOffset = {
         monday: 0, tuesday: 1, wednesday: 2, thursday: 3,
         friday: 4, saturday: 5, sunday: 6
@@ -38,30 +41,40 @@ export const exportGeoVictoriaExcel = (staff, schedules, turnoMap, weekStartDate
       if (dayOffset === undefined) return;
 
       const date = addDays(startDate, dayOffset);
-      const dayOfMonth = parseInt(format(date, "d")); // 1–31
+      const dayOfMonth = parseInt(format(date, "d"), 10);
 
+      // Día libre
       if (data?.off) {
         row[dayOfMonth + 1] = -1;
         return;
       }
 
+      // Sin horario definido
       if (!data?.start || !data?.end) return;
 
-      const start = normalizeTime(data.start);
-      const end = normalizeTime(data.end === "00:00" ? "00:00" : data.end);
+      // CORRECCIÓN: Primero definir start y end
+      let start = normalizeTime(data.start);
+      let end = normalizeTime(data.end);
+
+      // Luego crear el turnoKey para el mapeo
       const turnoKey = `${start}-${end}`;
       const turnoNumber = turnoMap[turnoKey];
+
+      let displayValue = turnoNumber;
+
+      // Solo para visualización, si no se encontró el turno y termina a las 00:00
+      if (turnoNumber === undefined) {
+        const displayEnd = end === "00:00" ? "24:00" : end;
+        displayValue = {
+          v: `${start}-${displayEnd}`,
+          s: { fill: { fgColor: { rgb: "FFCCCC" } } }
+        };
+      }
 
       if (turnoNumber !== undefined) {
         row[dayOfMonth + 1] = turnoNumber;
       } else {
-        // ⛔ Turno no encontrado → celda con fondo rojo claro
-        row[dayOfMonth + 1] = {
-          v: turnoKey,
-          s: {
-            fill: { fgColor: { rgb: "FFCCCC" } }
-          }
-        };
+        row[dayOfMonth + 1] = displayValue;
       }
     });
 
@@ -70,17 +83,15 @@ export const exportGeoVictoriaExcel = (staff, schedules, turnoMap, weekStartDate
 
   const ws = XLSX.utils.aoa_to_sheet(wsData);
 
-  // Corrige formato para celdas con objetos tipo {v, s}
-  Object.keys(ws).forEach((addr) => {
-    const cell = ws[addr];
-    if (cell && typeof cell.v === 'object' && 'v' in cell.v && 's' in cell.v) {
-      ws[addr].v = cell.v.v;
-      ws[addr].s = cell.v.s;
+  Object.keys(ws).forEach(addr => {
+    if (ws[addr] && ws[addr].v && typeof ws[addr].v === 'object') {
+      const temp = ws[addr].v;
+      ws[addr].v = temp.v;
+      ws[addr].s = temp.s;
     }
   });
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Planificacion");
-  XLSX.writeFile(wb, "PlanificacionMensualMasiva.xlsx");
+  XLSX.writeFile(wb, "Planificacion_Mensual_GeoVictoria.xlsx");
 };
-

@@ -21,6 +21,11 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase";
 import StudyScheduleEditor from './StudyScheduleEditor';
+import ModalSelectorDePosiciones from './ModalSelectorDePosiciones';
+import StaffModal from './StaffModal';
+
+
+
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
@@ -32,7 +37,7 @@ function AdminDashboard() {
     const [partTimeCount, setPartTimeCount] = useState(0);
     const [editModal, setEditModal] = useState(null);
     const [modalityFilter, setModalityFilter] = useState("Todos");
-    const [searchTerm, setSearchTerm] = useState(""); // ✅ Agregado para evitar error
+    const [searchTerm, setSearchTerm] = useState("");
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [storeName, setStoreName] = useState("");
@@ -40,13 +45,50 @@ function AdminDashboard() {
     const [selectedStaff, setSelectedStaff] = useState(null);
     const [selectedHolidays, setSelectedHolidays] = useState([]);
     const [showHolidayModal, setShowHolidayModal] = useState(false);
+    const [positionList, setPositionList] = useState([]);
+    const [positionModalOpen, setPositionModalOpen] = useState(false);
+    const [positionTarget, setPositionTarget] = useState(null);
+    const [tempAbilities, setTempAbilities] = useState([]);
+
     const isCardExpiringSoon = (dateString) => {
-    if (!dateString) return false;
-    const now = new Date();
-    const expiry = new Date(dateString);
-    const diffDays = (expiry - now) / (1000 * 60 * 60 * 24);
-    return diffDays <= 15;
-  };
+        if (!dateString) return false;
+        const now = new Date();
+        const expiry = new Date(dateString);
+        const diffDays = (expiry - now) / (1000 * 60 * 60 * 24);
+        return diffDays <= 15;
+    };
+
+    const openPositionModal = (colab) => {
+        setPositionTarget(colab);
+        setTempAbilities(colab.positionAbilities || []);
+        setPositionModalOpen(true);
+    };
+
+    const savePositionAbilities = async () => {
+        if (!positionTarget?.id) return;
+        try {
+            await updateDoc(doc(db, "staff_profiles", positionTarget.id), {
+                positionAbilities: tempAbilities,
+            });
+            setPositionModalOpen(false);
+            setPositionTarget(null);
+            await fetchAllStaffProfiles();
+        } catch (error) {
+            console.error("Error actualizando habilidades:", error);
+        }
+    };
+
+    const fetchAllPositions = async () => {
+  const snapshot = await getDocs(collection(db, "positioning_requirements"));
+  const positions = new Set();
+  snapshot.forEach(doc => {
+    const posList = doc.data().positions || [];
+    posList.forEach(pos => positions.add(pos));
+  });
+  setPositionList(Array.from(positions));
+};
+
+
 const exportCarnetExpiringPDF = () => {
   const doc = new jsPDF();
   doc.text("Colaboradores con carnet de sanidad próximo a vencer", 14, 14);
@@ -112,7 +154,7 @@ const handleUnlinkEmail = async (staffId) => {
             if (colab.uid) {
                 feriados = await getWorkedHolidaysByUid(colab.uid);
 
-                const staffDoc = await getDoc(doc(db, "staff_profiles", colab.id));
+                
                 if (staffDoc.exists()) {
                     const profileData = staffDoc.data();
                     const pending = profileData.pendingHolidays || [];
@@ -127,80 +169,52 @@ const handleUnlinkEmail = async (staffId) => {
         }
     };
 
-
-    // Esta función obtiene TODOS los perfiles y luego filtra por storeId
-    // La usamos como alternativa cuando no se pueden usar consultas con where()
     const fetchAllStaffProfiles = async () => {
+        fetchAllPositions();
         setLoading(true);
         setError(null);
 
         try {
             if (!userData?.storeId) {
-                console.error("No hay storeId disponible en userData");
-                setError("No se encontró el ID de la tienda. Por favor vuelve a iniciar sesión.");
+                setError("No se encontró el ID de la tienda.");
                 setLoading(false);
                 return;
             }
 
-            console.log("Obteniendo todos los perfiles y filtrando por storeId:", userData.storeId);
+            // 1. Cargar todos los perfiles de la tienda
+            const profilesQuery = query(collection(db, 'staff_profiles'), where('storeId', '==', userData.storeId));
+            const profilesSnap = await getDocs(profilesQuery);
+            const profiles = profilesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-            // Obtenemos TODOS los perfiles sin filtrar en Firestore
-            const querySnapshot = await getDocs(collection(db, 'staff_profiles'));
-
-            // Filtramos manualmente por storeId
-            const profiles = [];
-            querySnapshot.forEach(doc => {
-                const data = doc.data();
-                if (data.storeId === userData.storeId) {
-                    profiles.push({ id: doc.id, ...data });
-                }
+            // 2. Cargar todos los study_schedules de una vez
+            const studySnap = await getDocs(collection(db, 'study_schedules'));
+            const studyMap = {};
+            studySnap.forEach(doc => {
+                studyMap[doc.id] = doc.data();
             });
 
-            console.log(`Se encontraron ${profiles.length} perfiles para la tienda ${userData.storeId}`);
+            // 3. Enriquecer perfiles (sin más getDoc)
+            const enriched = profiles.map(profile => ({
+                ...profile,
+                study_schedule: studyMap[profile.uid] || {},
+                feriados: profile.pendingHolidays?.length || 0,
+                horasNocturnas: 0, // Si no tienes colección, calcular en backend
+            }));
 
-            // Procesamos los perfiles con la información adicional
-            const updatedStaff = await Promise.all(
-                profiles.map(async (user) => {
-                    let feriados = [];
-                    let pendingHolidays = [];
-                    let nocturnas = 0;
+            // 4. Si necesitas feriados trabajados y nocturnidad → hazlo en Cloud Function
+            // O carga solo si uid existe y en batch
 
-                    try {
-                        if (user.uid) {
-                            feriados = await getWorkedHolidaysByUid(user.uid);
-                            nocturnas = await getNightHoursByUid(user.uid);
+            setStaff(enriched);
+            setFullTimeCount(enriched.filter(u => u.modality === "Full-Time").length);
+            setPartTimeCount(enriched.filter(u => u.modality === "Part-Time").length);
 
-                            // Obtener feriados personales registrados desde staff_profiles
-                            const staffDoc = await getDoc(doc(db, "staff_profiles", user.id));
-                            if (staffDoc.exists()) {
-                                const profileData = staffDoc.data();
-                                const pending = profileData.pendingHolidays || [];
-                                feriados = [...feriados, ...pending];
-                            }
-                        }
-                    } catch (error) {
-                        console.error(`Error obteniendo datos adicionales para ${user.name}:`, error);
-                    }
-
-                    return {
-                        ...user,
-                        feriados: feriados.length,
-                        horasNocturnas: nocturnas,
-                    };
-                })
-            );
-
-            setStaff(updatedStaff);
-            setFullTimeCount(updatedStaff.filter((u) => u.modality === "Full-Time").length);
-            setPartTimeCount(updatedStaff.filter((u) => u.modality === "Part-Time").length);
         } catch (error) {
-            console.error("Error al obtener perfiles del personal:", error);
-            setError(`Error al cargar los datos: ${error.message}`);
+            console.error("Error:", error);
+            setError(`Error: ${error.message}`);
         } finally {
             setLoading(false);
         }
     };
-
     useEffect(() => {
         if (userData?.storeId) {
             console.log("userData cambiado, actualizando perfiles");
@@ -232,7 +246,8 @@ const handleUnlinkEmail = async (staffId) => {
             modality: 'Full-Time',
             isNew: true,
             position: 'colaborador',
-            storeId: userData?.storeId || ''
+            storeId: userData?.storeId || '',
+            sanitaryCardDate: '', // <-- Nuevo campo
         });
     };
 
@@ -306,27 +321,23 @@ const handleUnlinkEmail = async (staffId) => {
         }
     };
 
- const filteredStaff = staff.filter(s => {
-    const matchesModality = modalityFilter === "Todos" || s.modality === modalityFilter;
-    const fullName = (s.name + " " + s.lastName).toLowerCase();
-    const matchesSearch = fullName.includes(searchTerm.toLowerCase());
-    return matchesModality && matchesSearch;
-  });
-
+    const filteredStaff = staff.filter(s => {
+        const matchesModality = modalityFilter === "Todos" || s.modality === modalityFilter;
+        const fullName = (s.name + " " + s.lastName).toLowerCase();
+        const matchesSearch = fullName.includes(searchTerm.toLowerCase());
+        return matchesModality && matchesSearch;
+    });
     return (
         <div className="p-4">
             <div className="flex justify-between items-center mb-4">
-                <h1 className="text-2xl font-bold text-red-700">Panel de Administración</h1>
+                <h1 className="text-2xl font-bold text-red-700">Panel de administración</h1>
                 <div className="flex gap-2">
                     <button onClick={() => navigate("/admin/requirements/lunes")} className="bg-green-600 text-white px-4 py-2 rounded">Requerimientos</button>
                     <button onClick={() => navigate("/admin/generate-schedules")} className="bg-blue-600 text-white px-4 py-2 rounded">Visualizar Horarios</button>
                     <button onClick={() => navigate("/admin/nocturnidad")} className="bg-purple-600 text-white px-4 py-2 rounded">Consultas</button>
-<button
-            onClick={exportCarnetExpiringPDF}
-            className="bg-red-600 text-white px-4 py-2 rounded flex items-center gap-1"
-          >
-            <FaFilePdf /> Carnets por vencer
-          </button>
+                    <button onClick={exportCarnetExpiringPDF} className="bg-red-600 text-white px-4 py-2 rounded flex items-center gap-1">
+                        <FaFilePdf /> Carnets por vencer
+                    </button>
                     <button onClick={handleLogout} className="bg-gray-800 text-white px-4 py-2 rounded">Cerrar sesión</button>
                 </div>
             </div>
@@ -344,49 +355,31 @@ const handleUnlinkEmail = async (staffId) => {
             )}
 
             <div className="flex justify-between items-center mb-2">
-        <div className="text-sm text-gray-700">
-          <p>Total Full-Time: <strong>{fullTimeCount}</strong></p>
-          <p>Total Part-Time: <strong>{partTimeCount}</strong></p>
-        </div>
-        <div className="flex gap-2 items-center">
-          <input
-            type="text"
-            placeholder="Buscar colaborador..."
-            className="border px-2 py-1 rounded"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-          <select
-            className="border px-2 py-1 rounded"
-            value={modalityFilter}
-            onChange={(e) => setModalityFilter(e.target.value)}
-          >
-            <option value="Todos">Todos</option>
-            <option value="Full-Time">Full-Time</option>
-            <option value="Part-Time">Part-Time</option>
-          </select>
-          <button
-            onClick={() => setEditModal({
-              name: '',
-              lastName: '',
-              modality: 'Full-Time',
-              isNew: true,
-              position: 'colaborador',
-              storeId: userData?.storeId || '',
-              sanitaryCardDate: ''
-            })}
-            className="bg-blue-500 text-white px-4 py-1 rounded"
-          >
-            Agregar Personal
-          </button>
-          <button
-            onClick={fetchAllStaffProfiles}
-            className="bg-gray-500 text-white px-4 py-1 rounded"
-          >
-            Actualizar
-          </button>
-        </div>
-      </div>
+                <div className="text-sm text-gray-700">
+                    <p>Total Full-Time: <strong>{fullTimeCount}</strong></p>
+                    <p>Total Part-Time: <strong>{partTimeCount}</strong></p>
+                </div>
+                <div className="flex gap-2 items-center">
+                    <input
+                        type="text"
+                        placeholder="Buscar colaborador..."
+                        className="border px-2 py-1 rounded"
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                    />
+                    <select
+                        className="border px-2 py-1 rounded"
+                        value={modalityFilter}
+                        onChange={(e) => setModalityFilter(e.target.value)}
+                    >
+                        <option value="Todos">Todos</option>
+                        <option value="Full-Time">Full-Time</option>
+                        <option value="Part-Time">Part-Time</option>
+                    </select>
+                    <button onClick={handleAddStaff} className="bg-blue-500 text-white px-4 py-1 rounded">Agregar Personal</button>
+                    <button onClick={fetchAllStaffProfiles} className="bg-gray-500 text-white px-4 py-1 rounded">Actualizar</button>
+                </div>
+            </div>
 
             {loading ? (
                 <div className="py-8 text-center">
@@ -408,69 +401,57 @@ const handleUnlinkEmail = async (staffId) => {
                             {filteredStaff.map((colab, idx) => (
                                 <tr key={idx} className="border hover:bg-gray-50 group">
                                     <td className="px-2 py-1 relative">
-                                        <span
-                                            className="text-blue-600 hover:underline cursor-pointer"
-                                            onClick={() => handleViewHolidays(colab)}
-                                        >
+                                        <span onClick={() => handleViewHolidays(colab)} className="text-blue-600 hover:underline cursor-pointer">
                                             {`${colab.name} ${colab.lastName}`}
                                         </span>
-                                        <div className="hidden group-hover:block absolute top-6 left-0 bg-white shadow-lg p-2 text-xs border z-10">
-                                            <p>Correo: {colab.email || "No vinculado"}</p>
-                                            <p>Feriados: {colab.feriados}</p>
-                                            <p>DNI: {colab.dni || "No registrado"}</p>
-                                            <p>StoreId: {colab.storeId || "No asignado"}</p>
-                                        </div>
-                                    </td>
+                                        {/* Tooltip mejorado */}
+    <div className="hidden group-hover:block absolute top-full left-0 bg-white shadow-lg p-2 text-xs border z-10 w-64">
+        <div className="space-y-1">
+            <p><strong>ID:</strong> {colab.id}</p>
+            <p><strong>Correo:</strong> {colab.email || "No vinculado"}</p>
+            <p><strong>Feriados:</strong> {colab.feriados}</p>
+            <p><strong>DNI:</strong> {colab.dni || "No registrado"}</p>
+            <p><strong>StoreId:</strong> {colab.storeId || "No asignado"}</p>
+            {colab.uid && <p><strong>UID:</strong> {colab.uid}</p>}
+        </div>
+    </div>
+</td>
                                     <td className="px-2 py-1">{colab.modality}</td>
                                     <td className="px-2 py-1 text-center">{colab.position || 'colaborador'}</td>
                                     <td className="px-2 py-1 text-center">
-                                        {colab.email ? (
-                                            <FaCheck className="text-green-600 inline" />
-                                        ) : (
-                                            <FaTimes className="text-red-500 inline" />
-                                        )}
+                                        {colab.email ? <FaCheck className="text-green-600 inline" /> : <FaTimes className="text-red-500 inline" />}
+                                        <div>
+                                            <button onClick={() => openPositionModal(colab)} className="text-sm text-indigo-600 hover:underline">Asignar posiciones</button>
+                                        </div>
                                     </td>
-                                     <td className="px-2 py-1 space-x-2">
-                            <button
-                                onClick={() => handleUnlinkEmail(colab.id)}
-                                className="text-sm text-red-600 hover:underline"
-                                disabled={!colab.email}
-                            >Desvincular correo</button>
-                           
-                        </td>
-                                    <td className="px-2 py-1 space-x-2">
-                                        <button
-                                            onClick={async () => {
-                                                if (!colab.uid) {
-                                                    const generatedUid = generateUid();
-                                                    try {
-                                                        await setDoc(doc(db, 'staff_profiles', colab.id), { uid: generatedUid }, { merge: true });
-                                                        await setDoc(doc(db, 'study_schedules', generatedUid), {});
-                                                        colab.uid = generatedUid; // actualizar manualmente en memoria
-                                                    } catch (err) {
-                                                        console.error("Error generando UID:", err);
-                                                        alert("No se pudo generar el UID automáticamente para este colaborador.");
-                                                        return;
+                                    <td className="px-2 py-1 space-y-1">
+                                        <button onClick={() => handleUnlinkEmail(colab.id)} className="text-sm text-red-600 hover:underline" disabled={!colab.email}>Desvincular correo</button>
+                                        <div className="space-x-2">
+                                            <button
+                                                onClick={async () => {
+                                                    if (!colab.uid) {
+                                                        const generatedUid = generateUid();
+                                                        try {
+                                                            await setDoc(doc(db, 'staff_profiles', colab.id), { uid: generatedUid }, { merge: true });
+                                                            await setDoc(doc(db, 'study_schedules', generatedUid), {});
+                                                            colab.uid = generatedUid;
+                                                        } catch (err) {
+                                                            console.error("Error generando UID:", err);
+                                                            alert("No se pudo generar el UID automáticamente para este colaborador.");
+                                                            return;
+                                                        }
                                                     }
-                                                }
-
-                                                setSelectedStaff(colab);
-                                                setShowScheduleEditor(true);
-                                            }}
-                                            className="text-purple-600 hover:text-purple-800"
-                                            title="Ver horarios"
-                                        >
-                                            <FaCalendarAlt className="inline" />
-                                        </button>
-
-                                        <button
-                                            onClick={() => setEditModal({ ...colab, isNew: false })}
-                                            className="text-sm text-blue-600 hover:underline"
-                                        >Editar</button>
-                                        <button
-                                            onClick={() => handleDelete(colab.uid, colab.id)}
-                                            className="text-sm text-red-600 hover:underline"
-                                        >Eliminar</button>
+                                                    setSelectedStaff(colab);
+                                                    setShowScheduleEditor(true);
+                                                }}
+                                                className="text-purple-600 hover:text-purple-800"
+                                                title="Ver horarios"
+                                            >
+                                                <FaCalendarAlt className="inline" />
+                                            </button>
+                                            <button onClick={() => setEditModal({ ...colab, isNew: false })} className="text-sm text-blue-600 hover:underline">Editar</button>
+                                            <button onClick={() => handleDelete(colab.uid, colab.id)} className="text-sm text-red-600 hover:underline">Eliminar</button>
+                                        </div>
                                     </td>
                                 </tr>
                             ))}
@@ -483,118 +464,63 @@ const handleUnlinkEmail = async (staffId) => {
                 )
             )}
 
+            {/* MODALES */}
             {editModal && (
-                <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
-                    <div className="bg-white p-6 rounded shadow-xl w-full max-w-md overflow-y-auto max-h-screen">
-                        <h3 className="text-lg font-semibold mb-4">{editModal.isNew ? 'Agregar Personal' : 'Editar Usuario'}</h3>
-
-                        <label className="block text-sm font-medium mb-1">Nombre</label>
-                        <input className="w-full mb-3 p-2 border rounded" value={editModal.name} onChange={(e) => setEditModal({ ...editModal, name: e.target.value })} />
-
-                        <label className="block text-sm font-medium mb-1">Apellido</label>
-                        <input className="w-full mb-3 p-2 border rounded" value={editModal.lastName} onChange={(e) => setEditModal({ ...editModal, lastName: e.target.value })} />
-
-                        <label className="block text-sm font-medium mb-1">DNI</label>
-                        <input className="w-full mb-3 p-2 border rounded" value={editModal.dni || ''} onChange={(e) => setEditModal({ ...editModal, dni: e.target.value })} />
-<label className="block text-sm font-medium mb-1">
-              Fecha Carnet Sanidad
-            </label>
-            <input
-              type="date"
-              className="w-full mb-3 p-2 border rounded"
-              value={editModal.sanitaryCardDate || ""}
-              onChange={(e) =>
-                setEditModal({
-                  ...editModal,
-                  sanitaryCardDate: e.target.value,
-                })
-              }
-            />
-
-                        <label className="block text-sm font-medium mb-1">Rol</label>
-                        <select className="w-full mb-3 p-2 border rounded" value={editModal.position || ''} onChange={(e) => setEditModal({ ...editModal, position: e.target.value })}>
-                            <option value="colaborador">Colaborador</option>
-                            <option value="admin">Admin</option>
-                        </select>
-
-                        {editModal.position === "admin" && (
-                            <>
-                                <label className="block text-sm font-medium mb-1">Correo electrónico</label>
-                                <input type="email" className="w-full mb-3 p-2 border rounded" value={editModal.email || ''} onChange={(e) => setEditModal({ ...editModal, email: e.target.value })} />
-                            </>
-                        )}
-
-                        <label className="block text-sm font-medium mb-1">Modalidad</label>
-                        <select className="w-full mb-3 p-2 border rounded" value={editModal.modality} onChange={(e) => setEditModal({ ...editModal, modality: e.target.value })}>
-                            <option value="Full-Time">Full-Time</option>
-                            <option value="Part-Time">Part-Time</option>
-                        </select>
-
-                        <label className="block text-sm font-medium mb-1">Tienda </label>
-                        <input
-                            className="w-full mb-3 p-2 border rounded bg-gray-100"
-                            value={storeName || userData?.storeId || ''}
-                            disabled
-                            title="Este valor se asigna automáticamente según tu tienda"
-                        />
-
-                        <div className="flex justify-end gap-2 mt-4">
-                            <button onClick={() => setEditModal(null)} className="px-4 py-2 bg-gray-400 text-white rounded">Cancelar</button>
-                            <button onClick={handleEditSave} className="px-4 py-2 bg-blue-600 text-white rounded">Guardar</button>
-                        </div>
-                    </div>
-                </div>
+                <StaffModal
+                    staff={editModal.isNew ? null : editModal}
+                    userData={userData}
+                    onClose={() => setEditModal(null)}
+                    onSaved={async () => {
+                        setEditModal(null);
+                        await fetchAllStaffProfiles();
+                    }}
+                />
             )}
-            {selectedStaff && showScheduleEditor && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                    <div className="bg-white rounded-lg shadow-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto p-6">
-                        <h2 className="text-xl font-bold mb-4 text-center text-blue-800">Visualizar y/o editar horarios</h2>
+
+            {showScheduleEditor && selectedStaff && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    width: '100vw',
+                    height: '100vh',
+                    backgroundColor: 'rgba(0,0,0,0.5)',
+                    zIndex: 1000,
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                }}>
+                    <div style={{
+                        background: 'white',
+                        padding: '1.5rem',
+                        borderRadius: '8px',
+                        maxHeight: '90vh',
+                        overflowY: 'auto'
+                    }}>
                         <StudyScheduleEditor
                             uid={selectedStaff.uid}
-                            showAllDays
-                            onClose={() => setShowScheduleEditor(false)}
+                            onClose={() => {
+                                setShowScheduleEditor(false);
+                                setSelectedStaff(null);
+                            }}
+                            onSaved={fetchAllStaffProfiles} // 👈 Actualizar datos después de guardar
                         />
                     </div>
                 </div>
             )}
-            {showHolidayModal && selectedStaff && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                    <div className="bg-white p-6 rounded shadow-md max-w-md w-full max-h-[80vh] overflow-y-auto">
-                        <h2 className="text-lg font-semibold mb-4 text-center">
-                            Feriados de {selectedStaff.name} {selectedStaff.lastName}
-                        </h2>
-                        <ul className="list-disc pl-5 text-sm">
-                            {selectedHolidays.length > 0 ? (
-                                selectedHolidays.map((date, idx) => (
-                                    <li key={idx}>
-                                        {typeof date === "string"
-                                            ? date // mantiene el string exacto registrado
-                                            : new Date(date).toLocaleDateString("es-PE")} {/* solo si es Date */}
-                                    </li>
-                                ))
-                            ) : (
-                                <li>No tiene feriados registrados.</li>
-                            )}
 
-                        </ul>
-                        <div className="flex justify-end mt-4">
-                            <button
-                                onClick={() => setShowHolidayModal(false)}
-                                className="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700"
-                            >
-                                Cerrar
-                            </button>
-                        </div>
-                    </div>
-                </div>
+            {positionModalOpen && (
+                <ModalSelectorDePosiciones
+                    docId={positionTarget?.id} // ✅ Asegúrate que sea `.id`, no `.uid`
+                    onClose={() => setPositionModalOpen(false)}
+                />
             )}
 
 
         </div>
-
     );
-}
 
+}
 export default AdminDashboard;
 
 

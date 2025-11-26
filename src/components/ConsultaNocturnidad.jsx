@@ -1,4 +1,4 @@
-// ConsultaNocturnidad.jsx corregido y completo
+// ConsultaNocturnidad.jsx corregido - Problema de nombres resuelto
 import React, { useEffect, useState } from 'react';
 import {
     getFirestore,
@@ -59,179 +59,261 @@ function getDateFromWeekKeyAndDay(weekKey, day) {
 }
 
 function calcularHorasNocturnas(inicio, fin) {
-  if (!inicio || !fin) return 0;
-  const [ih, im] = inicio.split(':').map(Number);
-  const [fh, fm] = fin.split(':').map(Number);
-  let startMin = ih * 60 + im;
-  let endMin = fh * 60 + fm;
-  if (endMin <= startMin) endMin += 1440;
-  const windows = [{ start: 1320, end: 1440 }, { start: 0, end: 360 }];
-  let noctMins = 0;
-  for (const w of windows) {
-    const overlapStart = Math.max(startMin, w.start);
-    const overlapEnd = Math.min(endMin, w.end);
-    if (overlapEnd > overlapStart) noctMins += overlapEnd - overlapStart;
-  }
-  return noctMins / 60;
+    if (!inicio || !fin) return 0;
+    const [ih, im] = inicio.split(':').map(Number);
+    const [fh, fm] = fin.split(':').map(Number);
+    let startMin = ih * 60 + im;
+    let endMin = fh * 60 + fm;
+    if (endMin <= startMin) endMin += 1440; // cruzó medianoche
+
+    let noctMins = 0;
+
+    // Bloques nocturnos válidos: 22:00 - 06:00
+    const nocturnos = [
+        { start: 1320, end: 1440 }, // 22:00 a 00:00
+        { start: 0, end: 360 }      // 00:00 a 06:00
+    ];
+
+    for (let i = startMin; i < endMin; i++) {
+        const minRel = i % 1440; // para ciclar sobre medianoche
+        if (minRel >= 1320 || minRel < 360) noctMins++;
+    }
+
+    return noctMins / 60;
 }
+
 function calcularDuracionHoras(start, end) {
-  if (!start || !end) return 0;
+    if (!start || !end) return 0;
 
-  // Suponemos misma fecha arbitraria
-  const fechaBase = '2000-01-01';
-  const inicio = new Date(`${fechaBase}T${start}:00`);
-  let fin = new Date(`${fechaBase}T${end}:00`);
+    // Suponemos misma fecha arbitraria
+    const fechaBase = '2000-01-01';
+    const inicio = new Date(`${fechaBase}T${start}:00`);
+    let fin = new Date(`${fechaBase}T${end}:00`);
 
-  if (fin <= inicio) {
-    // Si fin es menor o igual, asumimos que es del día siguiente
-    fin.setDate(fin.getDate() + 1);
-  }
+    if (fin <= inicio) {
+        // Si fin es menor o igual, asumimos que es del día siguiente
+        fin.setDate(fin.getDate() + 1);
+    }
 
-  const diffMs = fin - inicio;
-  const diffHoras = diffMs / (1000 * 60 * 60);
-  return diffHoras;
+    const diffMs = fin - inicio;
+    const diffHoras = diffMs / (1000 * 60 * 60);
+    return diffHoras;
 }
-
 
 const ConsultaNocturnidad = () => {
-  const [desde, setDesde] = useState('');
-  const [hasta, setHasta] = useState('');
-  const [resultados, setResultados] = useState([]);
-  const [detallesExtra, setDetallesExtra] = useState({});
-  const [expandedRows, setExpandedRows] = useState({});
-  const [cargando, setCargando] = useState(false);
-  const [filtro, setFiltro] = useState('Todos');
+    const [desde, setDesde] = useState('');
+    const [hasta, setHasta] = useState('');
+    const [resultados, setResultados] = useState([]);
+    const [detallesExtra, setDetallesExtra] = useState({});
+    const [expandedRows, setExpandedRows] = useState({});
+    const [cargando, setCargando] = useState(false);
+    const [filtro, setFiltro] = useState('Todos');
 
-  const calcularNocturnidad = async () => {
-    if (!desde || !hasta) return;
-    setCargando(true);
-    setDetallesExtra({});
-    setExpandedRows({});
+    const calcularNocturnidad = async () => {
+        if (!desde || !hasta) return;
+        setCargando(true);
+        setDetallesExtra({});
+        setExpandedRows({});
 
-    try {
-      const db = getFirestore();
-      const [staffSnap, scheduleSnap, extraSnap] = await Promise.all([
-        getDocs(collection(db, 'staff_profiles')),
-        getDocs(collection(db, 'schedules')),
-        getDocs(collection(db, 'extra_hours'))
-      ]);
+        try {
+            const db = getFirestore();
+            const [staffSnap, scheduleSnap, extraSnap] = await Promise.all([
+                getDocs(collection(db, 'staff_profiles')),
+                getDocs(collection(db, 'schedules')),
+                getDocs(collection(db, 'extra_hours'))
+            ]);
 
-      const staffMap = {};
-      staffSnap.forEach(d => {
-        const data = d.data();
-        staffMap[d.id] = data;
-        if (data.uid) staffMap[data.uid] = data;
-      });
+            // CORRECCIÓN 1: Mejorar el mapeo del staff
+            const staffMap = {};
+            staffSnap.forEach(d => {
+                const data = d.data();
+                const staffInfo = {
+                    name: data.name || '',
+                    lastName: data.lastName || '',
+                    dni: data.dni || '',
+                    storeId: data.storeId || '',
+                    uid: data.uid || d.id,
+                    pendingHolidays: data.pendingHolidays || []
+                };
 
-      const fechaInicio = new Date(desde);
-      const fechaFin = new Date(hasta);
-      const usuariosMap = {};
-      const extraMap = {};
+                // Mapear tanto por document ID como por UID
+                staffMap[d.id] = staffInfo;
+                if (data.uid && data.uid !== d.id) {
+                    staffMap[data.uid] = staffInfo;
+                }
 
-      extraSnap.forEach(d => {
-        const data = d.data();
-        const f = new Date(data.fecha);
-        if (f >= fechaInicio && f <= fechaFin) {
-          const uid = data.uid;
-          if (!uid) return;
-          const duracion = calcularDuracionHoras(data.inicio, data.fin);
-          extraMap[uid] = (extraMap[uid] || 0) + duracion;
+                console.log(`Staff mapeado - ID: ${d.id}, UID: ${data.uid}, Nombre: ${staffInfo.name} ${staffInfo.lastName}`);
+            });
+
+            const fechaInicio = new Date(desde);
+            const fechaFin = new Date(hasta);
+            const usuariosMap = {};
+            const extraMap = {};
+
+            // Procesar horas extras
+            extraSnap.forEach(d => {
+                const data = d.data();
+                const f = new Date(data.fecha);
+                if (f >= fechaInicio && f <= fechaFin) {
+                    const uid = data.uid;
+                    if (!uid) return;
+                    const duracion = calcularDuracionHoras(data.inicio, data.fin);
+                    extraMap[uid] = (extraMap[uid] || 0) + duracion;
+                }
+            });
+
+            // CORRECCIÓN 2: Mejorar el procesamiento de schedules
+            scheduleSnap.forEach(d => {
+                const data = d.data();
+                const uid = data.uid || d.id;
+
+                console.log(`Procesando schedule - DocID: ${d.id}, UID: ${uid}, WeekKey: ${data.weekKey}`);
+
+                // CORRECCIÓN 3: Buscar staff info de manera más robusta
+                let staff = staffMap[uid] || staffMap[d.id] || {};
+
+                // Si no encontramos staff info, intentar buscar por otros campos
+                if (!staff.name && !staff.lastName) {
+                    // Buscar en todos los staff profiles
+                    for (const [key, value] of Object.entries(staffMap)) {
+                        if (key === uid || key === d.id || value.uid === uid || value.uid === d.id) {
+                            staff = value;
+                            console.log(`Staff encontrado por búsqueda extendida: ${staff.name} ${staff.lastName}`);
+                            break;
+                        }
+                    }
+                }
+
+                // Verificar que weekKey existe y es válido
+                if (!data.weekKey || typeof data.weekKey !== 'string') {
+                    console.warn(`Documento con ID ${d.id} no tiene weekKey válido:`, data.weekKey);
+                    return;
+                }
+
+                // CORRECCIÓN 4: Inicializar usuario con información completa del staff
+                if (!usuariosMap[uid]) {
+                    usuariosMap[uid] = {
+                        uid,
+                        name: staff.name || 'Sin nombre',
+                        lastName: staff.lastName || '',
+                        dni: staff.dni || '',
+                        sucursal: staff.storeId || '',
+                        horasNocturnas: 0,
+                        horasExtras: 0,
+                        feriadosPendientes: 0,
+                        scheduleRecords: []
+                    };
+
+                    console.log(`Usuario inicializado: ${usuariosMap[uid].name} ${usuariosMap[uid].lastName} (${uid})`);
+                }
+
+                // Verificar que el formato de weekKey sea correcto
+                let date;
+                try {
+                    if (data.weekKey.includes('_to_')) {
+                        const [startStr] = data.weekKey.split('_to_');
+                        date = new Date(startStr);
+                    } else {
+                        date = new Date(data.weekKey);
+                    }
+
+                    if (isNaN(date.getTime())) {
+                        console.warn(`Fecha inválida para weekKey ${data.weekKey} en documento ${d.id}`);
+                        return;
+                    }
+                } catch (error) {
+                    console.warn(`Error procesando weekKey ${data.weekKey} en documento ${d.id}:`, error);
+                    return;
+                }
+
+                // Procesar cada día de la semana
+                Object.entries(data).forEach(([dia, turno]) => {
+                    if (dia === 'weekKey' || dia === 'uid' || typeof turno !== 'object') return;
+                    if (!turno || !turno.start || !turno.end) return;
+
+                    const offsets = {
+                        monday: 0, tuesday: 1, wednesday: 2, thursday: 3,
+                        friday: 4, saturday: 5, sunday: 6
+                    };
+                    const offset = offsets[dia.toLowerCase()];
+                    if (offset === undefined) return;
+
+                    const fechaTurno = new Date(date);
+                    fechaTurno.setDate(date.getDate() + offset);
+
+                    if (fechaTurno < fechaInicio || fechaTurno > fechaFin) return;
+
+                    const noct = calcularHorasNocturnas(turno.start, turno.end);
+
+                    usuariosMap[uid].horasNocturnas += noct;
+                    usuariosMap[uid].scheduleRecords.push({
+                        fecha: fechaTurno.toISOString().split('T')[0],
+                        inicio: turno.start,
+                        fin: turno.end,
+                        noct
+                    });
+
+                    const fechaKey = fechaTurno.toISOString().split('T')[0];
+                    if (staff.pendingHolidays?.includes(fechaKey) && !turno.feriado) {
+                        usuariosMap[uid].feriadosPendientes++;
+                    }
+                });
+            });
+
+            // CORRECCIÓN 5: Agregar usuarios de horas extras que no estén en schedules
+            Object.entries(extraMap).forEach(([uid, horas]) => {
+                if (!usuariosMap[uid]) {
+                    const staff = staffMap[uid] || {};
+                    usuariosMap[uid] = {
+                        uid,
+                        name: staff.name || 'Sin nombre',
+                        lastName: staff.lastName || '',
+                        dni: staff.dni || '',
+                        sucursal: staff.storeId || '',
+                        horasNocturnas: 0,
+                        horasExtras: 0,
+                        feriadosPendientes: 0,
+                        scheduleRecords: []
+                    };
+
+                    console.log(`Usuario agregado desde horas extras: ${usuariosMap[uid].name} ${usuariosMap[uid].lastName} (${uid})`);
+                }
+                usuariosMap[uid].horasExtras = horas;
+            });
+
+            // Aplicar filtros
+            let resultadosFiltrados = Object.values(usuariosMap);
+            if (filtro === 'Nocturnas') {
+                resultadosFiltrados = resultadosFiltrados.filter(r => r.horasNocturnas > 0);
+            } else if (filtro === 'Extras') {
+                resultadosFiltrados = resultadosFiltrados.filter(r => r.horasExtras > 0);
+            } else if (filtro === 'Feriados') {
+                resultadosFiltrados = resultadosFiltrados.filter(r => r.feriadosPendientes > 0);
+            }
+
+            console.log('Resultados finales:', resultadosFiltrados);
+            setResultados(resultadosFiltrados);
+        } catch (error) {
+            console.error('Error al calcular horas:', error);
+            toast.error('Error al calcular horas');
+        } finally {
+            setCargando(false);
         }
-      });
-
-      scheduleSnap.forEach(d => {
-        const data = d.data();
-        const uid = data.uid || d.id;
-        const staff = staffMap[uid] || {};
-        if (!usuariosMap[uid] && staff) {
-          usuariosMap[uid] = {
-            uid,
-            name: staff.name || '',
-            lastName: staff.lastName || '',
-            dni: staff.dni || '',
-            sucursal: staff.storeId || '',
-            horasNocturnas: 0,
-            horasExtras: 0,
-            feriadosPendientes: 0,
-            scheduleRecords: []
-          };
-        }
-        Object.entries(data).forEach(([dia, turno]) => {
-          if (dia === 'weekKey' || typeof turno !== 'object') return;
-          if (!turno.start || !turno.end) return;
-          const date = new Date(data.weekKey.split('_to_')[0]);
-          const offsets = {
-            monday: 0, tuesday: 1, wednesday: 2, thursday: 3,
-            friday: 4, saturday: 5, sunday: 6
-          };
-          const offset = offsets[dia.toLowerCase()];
-          if (offset === undefined) return;
-          const fechaTurno = new Date(date);
-          fechaTurno.setDate(date.getDate() + offset);
-          if (fechaTurno < fechaInicio || fechaTurno > fechaFin) return;
-          const noct = calcularHorasNocturnas(turno.start, turno.end);
-          usuariosMap[uid].horasNocturnas += noct;
-          usuariosMap[uid].scheduleRecords.push({
-            fecha: fechaTurno.toISOString().split('T')[0],
-            inicio: turno.start,
-            fin: turno.end,
-            noct
-          });
-          const fechaKey = fechaTurno.toISOString().split('T')[0];
-          if (staff.pendingHolidays?.includes(fechaKey) && !turno.feriado) {
-            usuariosMap[uid].feriadosPendientes++;
-          }
-        });
-      });
-
-      Object.entries(extraMap).forEach(([uid, horas]) => {
-        if (!usuariosMap[uid]) {
-          const s = staffMap[uid] || {};
-          usuariosMap[uid] = {
-            uid,
-            name: s.name || '',
-            lastName: s.lastName || '',
-            dni: s.dni || '',
-            sucursal: s.storeId || '',
-            horasNocturnas: 0,
-            horasExtras: 0,
-            feriadosPendientes: 0,
-            scheduleRecords: []
-          };
-        }
-        usuariosMap[uid].horasExtras = horas;
-      });
-
-      let resultadosFiltrados = Object.values(usuariosMap);
-      if (filtro === 'Nocturnas') {
-        resultadosFiltrados = resultadosFiltrados.filter(r => r.horasNocturnas > 0);
-      } else if (filtro === 'Extras') {
-        resultadosFiltrados = resultadosFiltrados.filter(r => r.horasExtras > 0);
-      } else if (filtro === 'Feriados') {
-        resultadosFiltrados = resultadosFiltrados.filter(r => r.feriadosPendientes > 0);
-      }
-
-      setResultados(resultadosFiltrados);
-    } catch (error) {
-      console.error('Error al calcular horas:', error);
-      toast.error('Error al calcular horas');
-    } finally {
-      setCargando(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!desde || !hasta) return;
-    const db = getFirestore();
-    const unsub1 = onSnapshot(collection(db, 'schedules'), calcularNocturnidad);
-    const unsub2 = onSnapshot(collection(db, 'extra_hours'), calcularNocturnidad);
-    const unsub3 = onSnapshot(collection(db, 'staff_profiles'), calcularNocturnidad);
-    return () => {
-      unsub1();
-      unsub2();
-      unsub3();
     };
-  }, [desde, hasta, filtro]);
+
+    useEffect(() => {
+        if (!desde || !hasta) return;
+        const db = getFirestore();
+        const unsub1 = onSnapshot(collection(db, 'schedules'), calcularNocturnidad);
+        const unsub2 = onSnapshot(collection(db, 'extra_hours'), calcularNocturnidad);
+        const unsub3 = onSnapshot(collection(db, 'staff_profiles'), calcularNocturnidad);
+        return () => {
+            unsub1();
+            unsub2();
+            unsub3();
+        };
+    }, [desde, hasta, filtro]);
+
     const fetchDetalles = async (uid) => {
         try {
             const db = getFirestore();
@@ -292,33 +374,33 @@ const ConsultaNocturnidad = () => {
     };
 
     return (
-    <div className="p-6">
-      <h2 className="text-xl font-bold text-red-700 mb-4">Consulta de Horas Nocturnas y Extras</h2>
-      <div className="flex flex-wrap gap-4 mb-4 items-end">
-        <div className="flex flex-col">
-          <label>Desde</label>
-          <input type="date" value={desde} onChange={e => setDesde(e.target.value)} className="border p-2 rounded" />
-        </div>
-        <div className="flex flex-col">
-          <label>Hasta</label>
-          <input type="date" value={hasta} onChange={e => setHasta(e.target.value)} className="border p-2 rounded" />
-        </div>
-        <div className="flex flex-col">
-          <label>Filtro</label>
-          <select value={filtro} onChange={e => setFiltro(e.target.value)} className="border p-2 rounded">
-            <option value="Todos">Todos</option>
-            <option value="Nocturnas">Solo Nocturnas</option>
-            <option value="Extras">Solo Extras</option>
-            <option value="Feriados">Solo Feriados</option>
-          </select>
-        </div>
-        <button
-          onClick={calcularNocturnidad}
-          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-        >
-          {cargando ? 'Cargando...' : 'Consultar'}
-        </button>
-      </div>
+        <div className="p-6">
+            <h2 className="text-xl font-bold text-red-700 mb-4">Consulta de Horas Nocturnas y Extras</h2>
+            <div className="flex flex-wrap gap-4 mb-4 items-end">
+                <div className="flex flex-col">
+                    <label>Desde</label>
+                    <input type="date" value={desde} onChange={e => setDesde(e.target.value)} className="border p-2 rounded" />
+                </div>
+                <div className="flex flex-col">
+                    <label>Hasta</label>
+                    <input type="date" value={hasta} onChange={e => setHasta(e.target.value)} className="border p-2 rounded" />
+                </div>
+                <div className="flex flex-col">
+                    <label>Filtro</label>
+                    <select value={filtro} onChange={e => setFiltro(e.target.value)} className="border p-2 rounded">
+                        <option value="Todos">Todos</option>
+                        <option value="Nocturnas">Solo Nocturnas</option>
+                        <option value="Extras">Solo Extras</option>
+                        <option value="Feriados">Solo Feriados</option>
+                    </select>
+                </div>
+                <button
+                    onClick={calcularNocturnidad}
+                    className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                >
+                    {cargando ? 'Cargando...' : 'Consultar'}
+                </button>
+            </div>
 
             {resultados.length > 0 ? (
                 <div className="overflow-x-auto">
@@ -336,7 +418,15 @@ const ConsultaNocturnidad = () => {
                             {resultados.map(r => (
                                 <React.Fragment key={r.uid}>
                                     <tr className="hover:bg-gray-50 border-b">
-                                        <td className="p-2">{r.name} {r.lastName}</td>
+                                        <td className="p-2">
+                                            {r.name} {r.lastName}
+                                            {r.scheduleRecords && r.scheduleRecords.length > 0 && (
+                                                <span className="text-sm text-gray-500 ml-2">
+                                                    ({r.scheduleRecords.length} turno{r.scheduleRecords.length === 1 ? '' : 's'})
+                                                </span>
+                                            )}
+                                            <div className="text-xs text-gray-400">UID: {r.uid}</div>
+                                        </td>
                                         <td className="p-2">{r.horasNocturnas.toFixed(2)}</td>
                                         <td className="p-2">{(r.horasExtras || 0).toFixed(2)}</td>
                                         <td className="p-2">{r.feriadosPendientes}</td>
@@ -365,7 +455,6 @@ const ConsultaNocturnidad = () => {
                                                 </button>
                                             )}
                                         </td>
-
                                     </tr>
                                     {expandedRows[r.uid] && (
                                         <tr>
@@ -423,13 +512,13 @@ const ConsultaNocturnidad = () => {
                                                                         <td className="p-1">{d.inicio}</td>
                                                                         <td className="p-1">{d.fin}</td>
                                                                         <td className="p-1">
-  {(() => {
-    const duracion = calcularDuracionHoras(d.inicio, d.fin);
-    const h = Math.floor(duracion);
-    const m = Math.round((duracion % 1) * 60);
-    return `${h}h ${m}m`;
-  })()}
-</td>
+                                                                            {(() => {
+                                                                                const duracion = calcularDuracionHoras(d.inicio, d.fin);
+                                                                                const h = Math.floor(duracion);
+                                                                                const m = Math.round((duracion % 1) * 60);
+                                                                                return `${h}h ${m}m`;
+                                                                            })()}
+                                                                        </td>
                                                                         <td className="p-1">{d.actividad}</td>
                                                                         <td className="p-1">
                                                                             <button

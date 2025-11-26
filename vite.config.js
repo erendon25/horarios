@@ -20,5 +20,8 @@ export default defineConfig({
     hmr: {
       overlay: true
     }
+  },
+  build: {
+    outDir: 'build'  // ← AÑADE ESTA LÍNEA
   }
 });

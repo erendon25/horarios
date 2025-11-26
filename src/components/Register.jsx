@@ -1,9 +1,10 @@
-import React, { useRef, useState } from "react";
+import React, { useRef, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { getFirestore, doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import background from "../assets/background.png";
+
 
 function Register() {
   const emailRef = useRef();
@@ -13,29 +14,49 @@ function Register() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
 
+  useEffect(() => {
+  if (success) {
+    emailRef.current.value = "";
+    passwordRef.current.value = "";
+  }
+}, [success]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
     setSuccess(false);
 
     try {
-      await register(emailRef.current.value, passwordRef.current.value);
-      const auth = getAuth();
-      const user = auth.currentUser;
+    const userCredential = await register(emailRef.current.value, passwordRef.current.value);
+    const user = userCredential.user; // mejor así, register probablemente devuelve userCredential
 
-      await setDoc(doc(getFirestore(), "users", user.uid), {
-        email: emailRef.current.value,
-        role: "collaborator",
-        createdAt: serverTimestamp(),
-      });
+    await setDoc(doc(getFirestore(), "users", user.uid), {
+      email: emailRef.current.value,
+      role: "collaborator",
+      createdAt: serverTimestamp(),
+    });
 
-      setSuccess(true);
-      setTimeout(() => navigate("/login"), 2000);
-    } catch (err) {
-      console.error(err);
-      setError("No se pudo registrar.");
+    setSuccess(true);
+    setTimeout(() => navigate("/login"), 2000);
+  } catch (err) {
+    console.error(err);
+
+    if (err.code === "auth/email-already-in-use") {
+      setError("Este correo ya está registrado. Intenta iniciar sesión o usa otro correo.");
+    } else if (err.code === "auth/weak-password") {
+      setError("La contraseña debe tener al menos 6 caracteres.");
+    } else if (err.code === "auth/invalid-email") {
+      setError("Correo electrónico inválido.");
+    } else if (err.code === "permission-denied") {
+      setError("Error de permisos en la base de datos. Contacta al administrador.");
+    } else {
+      setError("No se pudo completar el registro. Intenta de nuevo.");
     }
-  };
+  }
+  // Añade esto para limpiar los campos después del éxito
+
+};
+
 
   return (
     <div

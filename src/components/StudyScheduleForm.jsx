@@ -1,4 +1,3 @@
-// StudyScheduleForm.jsx
 import React, { useEffect, useState } from 'react';
 import { getFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
@@ -26,9 +25,22 @@ export default function StudyScheduleForm() {
       try {
         const snap = await getDoc(doc(db, 'study_schedules', currentUser.uid));
         if (snap.exists()) {
-          setSchedule(snap.data());
+          const raw = snap.data();
+          const formatted = Object.fromEntries(
+            days.map(day => {
+              const val = raw[day];
+              return [
+                day,
+                {
+                  free: val?.free || false,
+                  blocks: Array.isArray(val?.blocks) ? val.blocks : []
+                }
+              ];
+            })
+          );
+          setSchedule(formatted);
         } else {
-          setSchedule({});
+          setSchedule(Object.fromEntries(days.map(d => [d, { free: false, blocks: [] }])));
         }
       } catch (err) {
         console.error('Error al cargar horario de estudio:', err);
@@ -41,33 +53,62 @@ export default function StudyScheduleForm() {
   }, [currentUser]);
 
   const handleChange = (day, index, field, value) => {
-    setSchedule(prev => {
-      const prevDay = prev[day] || [];
-      const updated = [...prevDay];
-      updated[index] = { ...updated[index], [field]: value };
-      return { ...prev, [day]: updated };
-    });
+    const blocks = [...(schedule[day]?.blocks || [])];
+    blocks[index] = { ...blocks[index], [field]: value };
+    setSchedule(prev => ({
+      ...prev,
+      [day]: {
+        ...prev[day],
+        blocks
+      }
+    }));
   };
 
   const addBlock = (day) => {
-    setSchedule(prev => {
-      const updated = [...(prev[day] || [])];
-      updated.push({ start: '', end: '' });
-      return { ...prev, [day]: updated };
-    });
+    setSchedule(prev => ({
+      ...prev,
+      [day]: {
+        ...prev[day],
+        blocks: [...(prev[day]?.blocks || []), { start: '', end: '' }]
+      }
+    }));
   };
 
   const removeBlock = (day, index) => {
-    setSchedule(prev => {
-      const updated = [...(prev[day] || [])];
-      updated.splice(index, 1);
-      return { ...prev, [day]: updated };
-    });
+    const blocks = [...(schedule[day]?.blocks || [])];
+    blocks.splice(index, 1);
+    setSchedule(prev => ({
+      ...prev,
+      [day]: {
+        ...prev[day],
+        blocks
+      }
+    }));
+  };
+
+  const handleToggleFree = (day, checked) => {
+    setSchedule(prev => ({
+      ...prev,
+      [day]: {
+        ...prev[day],
+        free: checked,
+        blocks: checked ? [] : (prev[day]?.blocks || [])
+      }
+    }));
   };
 
   const handleSave = async () => {
     try {
-      await setDoc(doc(db, 'study_schedules', currentUser.uid), schedule);
+      const payload = Object.fromEntries(
+        days.map(day => [
+          day,
+          {
+            free: schedule[day]?.free || false,
+            blocks: schedule[day]?.blocks || []
+          }
+        ])
+      );
+      await setDoc(doc(db, 'study_schedules', currentUser.uid), payload);
       alert('Horarios guardados correctamente.');
     } catch (err) {
       console.error('Error al guardar:', err);
@@ -82,8 +123,19 @@ export default function StudyScheduleForm() {
       <h1 className="text-3xl font-bold mb-4">Registrar Horarios de Estudio</h1>
       {days.map(day => (
         <div key={day} className="mb-4">
-          <h2 className="text-xl font-semibold mb-2">{labels[day]}</h2>
-          {(schedule[day] || []).map((block, idx) => (
+          <div className="flex items-center justify-between mb-1">
+            <h2 className="text-xl font-semibold">{labels[day]}</h2>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={schedule[day]?.free || false}
+                onChange={(e) => handleToggleFree(day, e.target.checked)}
+              />
+              Solicitar día libre
+            </label>
+          </div>
+
+          {schedule[day]?.blocks?.map((block, idx) => (
             <div key={idx} className="flex items-center gap-2 mb-2">
               <input
                 type="time"
@@ -103,9 +155,11 @@ export default function StudyScheduleForm() {
               >🗑️</button>
             </div>
           ))}
+
           <button
             onClick={() => addBlock(day)}
             className="bg-blue-600 text-white text-sm px-2 py-1 rounded"
+            disabled={schedule[day]?.free}
           >+ Agregar bloque</button>
         </div>
       ))}

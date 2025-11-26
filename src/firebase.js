@@ -17,4 +17,8 @@ const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const storage = getStorage(app);
+// 🔧 Aquí se expone a la consola del navegador
+if (typeof window !== "undefined") {
+  window._firestore = db;
+}
 export default app;

@@ -16,6 +16,7 @@ import { getAuth as getAuthMain, createUserWithEmailAndPassword } from 'firebase
 import { firebaseConfig } from '../firebase';
 import { toast } from 'react-toastify';
 
+
 function SuperAdminDashboard() {
   const [stores, setStores] = useState([]);
   const [newStore, setNewStore] = useState({ name: '', ciudad: '', direccion: '' });
@@ -27,6 +28,8 @@ function SuperAdminDashboard() {
   const [searchTerm, setSearchTerm] = useState('');
   const [storeFilter, setStoreFilter] = useState('');
   const [modalityFilter, setModalityFilter] = useState('');
+const weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
 
   const db = getFirestore();
 
@@ -131,6 +134,43 @@ function SuperAdminDashboard() {
       toast.error('No se pudo desvincular el correo');
     }
   };
+const handleMigrateStudySchedules = async () => {
+  const studySnap = await getDocs(collection(db, 'study_schedules'));
+
+  for (const docSnap of studySnap.docs) {
+    const data = docSnap.data();
+    const uid = docSnap.id;
+
+    // Verifica si ya tiene uid, para no reescribir innecesariamente
+    if (!data.uid) {
+      const updated = { uid };
+
+      weekdays.forEach((day) => {
+        const blocks = data[day];
+        if (Array.isArray(blocks)) {
+          updated[day] = {
+            free: blocks.length === 0,
+            blocks: blocks.map((b) => ({
+              start: b.start || b.startTime,
+              end: b.end || b.endTime
+            }))
+          };
+        }
+      });
+
+      await setDoc(doc(db, 'study_schedules', uid), {
+        ...data,
+        ...updated
+      });
+
+      console.log(`✅ Migrado y actualizado: ${uid}`);
+    } else {
+      console.log(`ℹ️ Ya tiene UID asignado: ${uid}`);
+    }
+  }
+
+  alert('Migración completada.');
+};
 
   const filteredStaff = staffProfiles.filter(profile => {
     const matchesName = profile.name?.toLowerCase().includes(searchTerm.toLowerCase());
@@ -141,6 +181,12 @@ function SuperAdminDashboard() {
   return (
     <div className="p-8">
       <h1 className="text-3xl font-bold mb-6">Panel de Superusuario</h1>
+ <button
+        onClick={handleMigrateStudySchedules}
+        className="mb-4 px-4 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+      >
+        Migrar horarios de estudio
+      </button>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
         <div>
