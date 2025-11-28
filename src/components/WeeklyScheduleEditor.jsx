@@ -796,7 +796,7 @@ const isValidDate = (() => {
         // Cálculo de rango correcto de horas según modalidad
         const esFullTime = p.modality?.toLowerCase() === 'full-time';
         const horasMin = esFullTime ? 48 * 60 : 24 * 60;  // 45h FT, 24h PT
-        const horasMax = esFullTime ? 48 * 60 : 30 * 60;  // Máximo razonable (evita abusos)
+        const horasMax = esFullTime ? 48 * 60 : 24 * 60;  // Máximo razonable (evita abusos)
         const horasEnRango = horas.total >= horasMin && horas.total <= horasMax;
         const { preCierres, cierres } = calcularCierres(schedules[p.id] || {});
 
