@@ -8,6 +8,7 @@ import {
 } from 'firebase/firestore';
 import { useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 
 export const hours = Array.from({ length: 81 }, (_, i) => {
     const totalMinutes = 360 + i * 15; // 06:00 = 360 minutos
@@ -52,7 +53,14 @@ export default function PositionRequirements() {
     const [loading, setLoading] = useState(true);
 
     const isDragging = useRef(false);
-    const dragMode = useRef('add');
+    const dragMode = useRef('add');// ←←← AÑADE ESTO AQUÍ ↓↓↓
+    const [staffCount, setStaffCount] = useState(null); // null = cargando, número = real
+    const [stats, setStats] = useState({
+        totalPersonHours: 0,
+        maxConcurrent: 0,
+        fullTimeNeeded: 0
+    });
+
     // === DRAG & DROP GLOBAL (soltar mouse) ===
     useEffect(() => {
         const stopDrag = () => {
@@ -61,6 +69,7 @@ export default function PositionRequirements() {
         document.addEventListener('mouseup', stopDrag);
         return () => document.removeEventListener('mouseup', stopDrag);
     }, []);
+
 
     // ==================== CARGA STORE ID ====================
     useEffect(() => {
@@ -214,6 +223,53 @@ export default function PositionRequirements() {
         setSelectedDays([]);
     };
 
+        // ==================== CARGA CONTEO DE EMPLEADOS REALES ====================
+    useEffect(() => {
+        if (!storeId) {
+            setStaffCount(0);
+            return;
+        }
+
+        const fetchStaffCount = async () => {
+            try {
+                const staffRef = collection(db, 'staff_profiles');
+                const q = query(
+    staffRef,
+    where('storeId', '==', storeId)
+);
+                const snap = await getDocs(q);
+                setStaffCount(snap.size);
+            } catch (err) {
+                console.error('Error cargando plantilla:', err);
+                setStaffCount(0);
+            }
+        };
+
+        fetchStaffCount();
+    }, [storeId]);
+
+    // ==================== CÁLCULO EN TIEMPO REAL DE ESTADÍSTICAS ====================
+    useEffect(() => {
+        if (!matrix || matrix.length === 0) {
+            setStats({ totalPersonHours: 0, maxConcurrent: 0, fullTimeNeeded: 0 });
+            return;
+        }
+
+        const totalPersonHours = matrix.reduce((dayTotal, row) =>
+            dayTotal + row.reduce((sum, cell) => sum + (cell || 0), 0), 0);
+
+        const maxConcurrent = Math.max(
+            ...Array.from({ length: hours.length }, (_, col) =>
+                matrix.reduce((sum, row) => sum + (row[col] || 0), 0)
+            ), 0
+        );
+
+        setStats({
+            totalPersonHours,
+            maxConcurrent,
+            fullTimeNeeded: Math.ceil(totalPersonHours / 8)
+        });
+    }, [matrix]);
     if (loading) return <div className="p-8 text-center">Cargando requerimientos...</div>;
 
     return (
@@ -332,6 +388,100 @@ export default function PositionRequirements() {
                     </tbody>
                 </table>
             </div>
+                                               {/* ====== CONTADOR REALISTA: ¿Puedes cubrirlo con tu plantilla actual? ====== */}
+            {positions.length > 0 && (() => {
+                // Cálculo de demanda
+                const totalPersonHours = matrix.reduce((dayTotal, row) =>
+                    dayTotal + row.reduce((sum, cell) => sum + (cell || 0), 0), 0);
+
+                const maxConcurrent = Math.max(
+                    ...Array.from({ length: hours.length }, (_, col) =>
+                        matrix.reduce((sum, row) => sum + (row[col] || 0), 0)
+                    ), 0
+                );
+
+                // Tu plantilla real
+                const availableStaff = staffCount || 0;
+
+                // ¿Cuántas personas MÍNIMAS necesitas trabajando ese día?
+                const minPeopleNeeded = maxConcurrent; // Nunca puedes bajar del pico
+
+                // ¿Puedes cubrirlo con turnos cruzados (mañana + tarde + noche)?
+                const canCoverWithShifts = availableStaff >= minPeopleNeeded;
+
+                // Estimación inteligente: cuántos empleados necesitas "activos" ese día
+                const estimatedActiveThatDay = Math.max(minPeopleNeeded, Math.ceil(totalPersonHours / 10)); // 10h promedio por persona con descansos
+
+                const coveragePercentage = availableStaff > 0 
+                    ? Math.min(100, Math.round((availableStaff / Math.max(minPeopleNeeded, 10)) * 100)) 
+                    : 0;
+
+                return (
+                    <div className="mt-8 p-6 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-200">
+                        <h3 className="text-2xl font-bold text-gray-800 mb-4">
+                            Cobertura real para {weekdayLabels[day]}
+                            {staffCount !== null && (
+                                <span className="text-lg font-normal text-gray-600 block mt-1">
+                                    Tienes {availableStaff} empleados en plantilla
+                                </span>
+                            )}
+                        </h3>
+
+                        {staffCount === null ? (
+                            <p className="text-center text-gray-500">Cargando plantilla...</p>
+                        ) : (
+                            <>
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-6 text-center mb-6">
+                                    <div className="bg-white rounded-lg p-5 shadow-sm">
+                                        <div className="text-4xl font-bold text-blue-600">{maxConcurrent}</div>
+                                        <div className="text-sm text-gray-600 mt-2">Pico simultáneo</div>
+                                    </div>
+
+                                    <div className="bg-white rounded-lg p-5 shadow-sm">
+                                        <div className="text-4xl font-bold text-purple-600">{minPeopleNeeded}</div>
+                                        <div className="text-sm text-gray-600 mt-2">Mínimo necesarios</div>
+                                    </div>
+
+                                    <div className="bg-white rounded-lg p-5 shadow-sm">
+                                        <div className={`text-4xl font-bold ${canCoverWithShifts ? 'text-green-600' : 'text-red-600'}`}>
+                                            {availableStaff}
+                                        </div>
+                                        <div className="text-sm text-gray-600 mt-2">
+                                            {canCoverWithShifts ? 'Puedes cubrirlo' : 'No alcanzas'}
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-white rounded-lg p-5 shadow-sm">
+                                        <div className="text-4xl font-bold text-orange-600">
+                                            {coveragePercentage}%
+                                        </div>
+                                        <div className="text-sm text-gray-600 mt-2">Cobertura real</div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-amber-50 p-5 rounded-lg border border-amber-300">
+                                    <p className="font-bold text-amber-900 mb-3 text-lg">Conclusión práctica:</p>
+                                    
+                                    {canCoverWithShifts ? (
+                                        <div className="text-green-700 space-y-2">
+                                            <p>¡Sí puedes cubrir este día con tu plantilla actual!</p>
+                                            <p>Te sobran <strong>{availableStaff - minPeopleNeeded} empleados</strong> → puedes dar descansos o reforzar limpieza.</p>
+                                            <p>Recomendación: usa <strong>2–3 turnos cruzados</strong> (6–14, 12–20, 14–22).</p>
+                                        </div>
+                                    ) : (
+                                        <div className="text-red-700 space-y-2">
+                                            <p>No alcanzas a cubrir el pico de {maxConcurrent} personas.</p>
+                                            <p>Te faltan <strong>{minPeopleNeeded - availableStaff} empleados</strong> en el momento más crítico.</p>
+                                            <p>Solución: contratar refuerzo o reducir requerimientos en horario pico.</p>
+                                        </div>
+                                    )}
+                                </div>
+
+                            </>
+                        )}
+                    </div>
+                );
+            })()}
         </div>
     );
 }
