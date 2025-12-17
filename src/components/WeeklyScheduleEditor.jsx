@@ -676,7 +676,7 @@ const isValidDate = (() => {
                 </div>
             </nav>
 
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center gap-4 mb-6">
     <label className="font-semibold text-lg">Semana (lunes):</label>
     <div className="flex items-center gap-6 mb-6">
     <div className="flex items-center gap-3">
