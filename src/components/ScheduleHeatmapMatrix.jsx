@@ -318,49 +318,59 @@ setRows(finalRows);
     }, [assigned, requirements]);
 
 return (
-    <div className="h-full flex flex-col bg-gray-50 rounded-lg overflow-hidden border border-gray-200">
-        {/* Header idéntico a tu imagen buena */}
-        <div className="flex-none bg-white border-b border-gray-300 px-5 py-3">
-            <div className="flex justify-between items-center">
-                <div className="flex items-center gap-6 text-sm font-medium text-gray-700">
-                    <span className="flex items-center gap-2">
-                        <div className="w-5 h-5 bg-yellow-400 rounded"></div> Faltante
-                    </span>
-                    <span className="flex items-center gap-2">
-                        <div className="w-5 h-5 bg-blue-500 rounded"></div> Asignado
-                    </span>
-                    <span className="flex items-center gap-2">
-                        <div className="w-5 h-5 bg-red-500 rounded"></div> Exceso
-                    </span>
-                </div>
-                <button onClick={() => setIsFullscreen(true)} className="p-2 bg-gray-200 hover:bg-gray-300 rounded transition">
-                    <Maximize2 size={18} />
+    <div className="h-full flex flex-col bg-white rounded-xl shadow-lg overflow-hidden border border-gray-200">
+        {/* Header compacto */}
+        <div className="flex-none bg-gradient-to-r from-gray-800 to-gray-900 border-b border-gray-700 px-3 py-2">
+            <div className="flex justify-between items-center mb-1.5">
+                <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
+                    <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse"></div>
+                    Mapa de Cobertura
+                </h3>
+                <button 
+                    onClick={() => setIsFullscreen(true)} 
+                    className="p-1.5 bg-white/10 hover:bg-white/20 text-white rounded transition-all duration-200 hover:scale-105"
+                    title="Maximizar"
+                >
+                    <Maximize2 size={14} />
                 </button>
             </div>
-            <div className="text-center text-xs text-gray-600 mt-2 italic">
-                ← Arrastra con el mouse (horizontal y vertical) →
+            <div className="flex items-center gap-3 text-xs font-medium text-gray-200">
+                <span className="flex items-center gap-1 px-2 py-0.5 bg-yellow-500/20 rounded border border-yellow-400/30">
+                    <div className="w-3 h-3 bg-yellow-400 rounded"></div> 
+                    <span className="text-yellow-200">Faltante</span>
+                </span>
+                <span className="flex items-center gap-1 px-2 py-0.5 bg-blue-500/20 rounded border border-blue-400/30">
+                    <div className="w-3 h-3 bg-blue-500 rounded"></div> 
+                    <span className="text-blue-200">Asignado</span>
+                </span>
+                <span className="flex items-center gap-1 px-2 py-0.5 bg-red-500/20 rounded border border-red-400/30">
+                    <div className="w-3 h-3 bg-red-500 rounded"></div> 
+                    <span className="text-red-200">Exceso</span>
+                </span>
+            </div>
+            <div className="text-center text-[10px] text-gray-400 mt-1.5 italic">
+                ← Arrastra para navegar →
             </div>
         </div>
 
          {/* Contenedor con scroll real + drag BIDIRECCIONAL PERFECTO */}
         <div
             ref={containerRef}
-            className="flex-1 overflow-auto cursor-grab select-none touch-none"
-            style={{ scrollBehavior: 'smooth', maxHeight: 'calc(100vh - 200px)' }}
+            className="flex-1 overflow-auto cursor-grab select-none touch-none bg-gray-50"
+            style={{ scrollBehavior: 'smooth' }}
         >
-            {/* Tabla con ancho fijo amplio para scroll horizontal garantizado */}
-            <table className="table-fixed border-collapse" style={{ minWidth: '3885' }}>
-                {/* Ancho mínimo: 220px + (81 × 65px) = ~5485px para garantizar scroll horizontal siempre */}
+            {/* Tabla compacta */}
+            <table className="table-fixed border-collapse bg-white shadow-inner" style={{ minWidth: '2592px' }}>
                 <colgroup>
-                    <col style={{ width: '140px' }} />
+                    <col style={{ width: '120px' }} />
                     {HOURS.map((_, i) => (
-                        <col key={i} style={{ width: '32px' }} />   
+                        <col key={i} style={{ width: '24px' }} />   
                     ))}
                 </colgroup>
 
                 <thead>
-                    <tr className="bg-gray-100 border-b-2 border-gray-0">
-                        <th className="sticky top-0 left-0 z-10 bg-white border-r-1 border-gray-400 px-2 py-1 text-left font-bold text-gray-800">
+                    <tr className="bg-gradient-to-r from-gray-700 to-gray-800 border-b border-gray-600">
+                        <th className="sticky top-0 left-0 z-20 bg-gradient-to-r from-gray-700 to-gray-800 border-r border-gray-500 px-2 py-1.5 text-left font-bold text-white text-xs shadow-lg">
                             Posición
                         </th>
                         {HOURS.map((hour, i) => {
@@ -368,7 +378,7 @@ return (
                             return (
                                 <th
                                     key={i}
-                                    className="sticky top-0 bg-gray-100 border border-gray-300 h-4 px-1 py-3 text-xs font-semibold text-gray-700 text-center"
+                                    className="sticky top-0 bg-gradient-to-r from-gray-700 to-gray-800 border border-gray-500 px-0.5 py-1 text-[10px] font-bold text-white text-center shadow-md"
                                     title={hour}
                                 >
                                     {display}
@@ -381,29 +391,48 @@ return (
                 <tbody className="bg-white">
                     {rows.length === 0 ? (
                         <tr>
-                            <td colSpan={HOURS.length + 1} className="text-center py-32 text-gray-500 text-lg font-medium">
-                                No hay requerimientos para este día
+                            <td colSpan={HOURS.length + 1} className="text-center py-12 text-gray-500">
+                                <div className="flex flex-col items-center gap-2">
+                                    <div className="w-12 h-12 bg-gray-200 rounded-full flex items-center justify-center">
+                                        <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                                        </svg>
+                                    </div>
+                                    <p className="text-sm font-semibold text-gray-600">No hay requerimientos</p>
+                                    <p className="text-xs text-gray-500">Configura los requerimientos de posicionamiento</p>
+                                </div>
                             </td>
                         </tr>
                     ) : (
                         rows.map((row, i) => (
                             <tr
                                 key={i}
-                                className="border-b border-gray-200 hover:bg-gray-50 transition"
+                                className="border-b border-gray-200 hover:bg-blue-50/30 transition-colors duration-150"
                                 style={{ minHeight: '20px' }}
                             >
                                 <td
-                                    className={`sticky left-0 z-30 bg-white px-6 py-1 font-semibold text-sm border-r-4 border-gray-400 whitespace-nowrap ${
-                                        row.isExcess ? 'text-red-600 bg-red-30 font-bold' : 'text-gray-800'
+                                    className={`sticky left-0 z-30 bg-white px-2 py-1 font-semibold text-xs border-r border-gray-300 whitespace-nowrap shadow-sm ${
+                                        row.isExcess 
+                                            ? 'text-red-600 bg-red-50 font-bold border-red-200' 
+                                            : 'text-gray-800 hover:bg-blue-50'
                                     }`}
                                 >
-                                    {row.name}
-                                    {row.isExcess && ' (exceso)'}
+                                    <div className="flex items-center gap-1">
+                                        {row.isExcess && (
+                                            <span className="w-1.5 h-1.5 bg-red-500 rounded-full"></span>
+                                        )}
+                                        <span className="truncate max-w-[90px]">{row.name}</span>
+                                        {row.isExcess && (
+                                            <span className="text-[10px] font-normal text-red-500">(exc)</span>
+                                        )}
+                                    </div>
                                 </td>
                                 {row.cells.map((cell, j) => (
                                     <td
                                         key={j}
-                                        className={`border border-gray-200 ${cell.color}`}
+                                        className={`border border-gray-200 ${cell.color} hover:opacity-80 transition-opacity duration-150`}
+                                        style={{ height: '20px', width: '24px' }}
+                                        title={`${HOURS[j]}: ${cell.color.includes('yellow') ? 'Faltante' : cell.color.includes('blue') ? 'Asignado' : cell.color.includes('red') ? 'Exceso' : 'Sin requerimiento'}`}
                                     />
                                 ))}
                             </tr>
@@ -413,37 +442,127 @@ return (
             </table>
         </div>
 
-        {/* Fullscreen sigue igual – perfecto */}
+        {/* Modal maximizado mejorado */}
         {isFullscreen && (
-            <div className="fixed inset-0 bg-black bg-opacity-80 z-50 flex items-center justify-center" onClick={() => setIsFullscreen(false)}>
-                <div className="bg-white rounded-xl shadow-2xl flex flex-col" style={{ width: '98vw', height: '96vh' }} onClick={e => e.stopPropagation()}>
-                    <div className="flex justify-between items-center p-6 bg-gray-100 border-b-2">
-                        <h2 className="text-2xl font-bold text-gray-800">Heatmap de Cobertura</h2>
-                        <button onClick={() => setIsFullscreen(false)} className="p-3 bg-red-600 hover:bg-red-700 text-white rounded-lg transition">
-                            <Minimize2 size={28} />
-                        </button>
+            <div 
+                className="fixed inset-0 bg-black/90 backdrop-blur-sm z-[100] flex items-center justify-center p-4" 
+                onClick={() => setIsFullscreen(false)}
+            >
+                <div 
+                    className="bg-white rounded-2xl shadow-2xl flex flex-col max-w-[96vw] max-h-[92vh] w-full border-2 border-gray-300" 
+                    onClick={e => e.stopPropagation()}
+                >
+                    {/* Header compacto */}
+                    <div className="flex-none bg-gradient-to-r from-gray-800 to-gray-900 border-b border-gray-700 px-4 py-2.5">
+                        <div className="flex justify-between items-center mb-2">
+                            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                                <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse"></div>
+                                Heatmap de Cobertura - Vista Completa
+                            </h2>
+                            <button 
+                                onClick={() => setIsFullscreen(false)} 
+                                className="p-2 bg-red-600 hover:bg-red-700 text-white rounded transition-all duration-200 hover:scale-105"
+                                title="Minimizar"
+                            >
+                                <Minimize2 size={16} />
+                            </button>
+                        </div>
+                        <div className="flex items-center gap-4 text-xs font-medium">
+                            <span className="flex items-center gap-1.5 px-2 py-1 bg-yellow-500/20 rounded border border-yellow-400/30">
+                                <div className="w-3 h-3 bg-yellow-400 rounded"></div> 
+                                <span className="text-yellow-200">Faltante</span>
+                            </span>
+                            <span className="flex items-center gap-1.5 px-2 py-1 bg-blue-500/20 rounded border border-blue-400/30">
+                                <div className="w-3 h-3 bg-blue-500 rounded"></div> 
+                                <span className="text-blue-200">Asignado</span>
+                            </span>
+                            <span className="flex items-center gap-1.5 px-2 py-1 bg-red-500/20 rounded border border-red-400/30">
+                                <div className="w-3 h-3 bg-red-500 rounded"></div> 
+                                <span className="text-red-200">Exceso</span>
+                            </span>
+                        </div>
+                        <div className="text-center text-[10px] text-gray-400 mt-1.5 italic">
+                            ← Arrastra para navegar →
+                        </div>
                     </div>
-                    <div className="flex-1 overflow-auto p-8">
-                        <table className="table-auto border-collapse w-full text-base">
-                            <thead className="sticky top-0 bg-white z-20 border-b-4 border-gray-500">
-                                <tr>
-                                    <th className="sticky left-0 bg-white z-30 px-10 py-6 font-bold border-r-4 border-gray-500">Posición</th>
-                                    {HOURS.map(h => (
-                                        <th key={h} className="px-8 py-6 font-semibold border border-gray-400">{h}</th>
-                                    ))}
+                    {/* Contenedor con scroll compacto */}
+                    <div className="flex-1 overflow-auto p-2 bg-gray-50">
+                        <table className="table-fixed border-collapse bg-white shadow-inner rounded overflow-hidden" style={{ minWidth: '2592px' }}>
+                            <colgroup>
+                                <col style={{ width: '120px' }} />
+                                {HOURS.map((_, i) => (
+                                    <col key={i} style={{ width: '24px' }} />   
+                                ))}
+                            </colgroup>
+                            <thead>
+                                <tr className="bg-gradient-to-r from-gray-700 to-gray-800 border-b border-gray-600">
+                                    <th className="sticky top-0 left-0 z-20 bg-gradient-to-r from-gray-700 to-gray-800 border-r border-gray-500 px-2 py-1.5 text-left font-bold text-white text-xs shadow-lg">
+                                        Posición
+                                    </th>
+                                    {HOURS.map((hour, i) => {
+                                        const display = hour.replace(/^0/, '');
+                                        return (
+                                            <th
+                                                key={i}
+                                                className="sticky top-0 bg-gradient-to-r from-gray-700 to-gray-800 border border-gray-500 px-0.5 py-1 text-[10px] font-bold text-white text-center shadow-md"
+                                                title={hour}
+                                            >
+                                                {display}
+                                            </th>
+                                        );
+                                    })}
                                 </tr>
                             </thead>
-                            <tbody>
-                                {rows.map((row, i) => (
-                                    <tr key={i} className="hover:bg-gray-100">
-                                        <td className={`sticky left-0 bg-white z-20 px-10 py-6 font-bold text-lg border-r-4 border-gray-500 ${row.isExcess ? 'text-red-600 bg-red-50' : ''}`}>
-                                            {row.name} {row.isExcess && '(exceso)'}
+                            <tbody className="bg-white">
+                                {rows.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={HOURS.length + 1} className="text-center py-12 text-gray-500">
+                                            <div className="flex flex-col items-center gap-2">
+                                                <div className="w-12 h-12 bg-gray-200 rounded-full flex items-center justify-center">
+                                                    <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                                                    </svg>
+                                                </div>
+                                                <p className="text-sm font-semibold text-gray-600">No hay requerimientos</p>
+                                                <p className="text-xs text-gray-500">Configura los requerimientos de posicionamiento</p>
+                                            </div>
                                         </td>
-                                        {row.cells.map((c, j) => (
-                                            <td key={j} className={`border border-gray-400 ${c.color} h-20`} />
-                                        ))}
                                     </tr>
-                                ))}
+                                ) : (
+                                    rows.map((row, i) => (
+                                        <tr
+                                            key={i}
+                                            className="border-b border-gray-200 hover:bg-blue-50/30 transition-colors duration-150"
+                                            style={{ minHeight: '20px' }}
+                                        >
+                                            <td
+                                                className={`sticky left-0 z-30 bg-white px-2 py-1 font-semibold text-xs border-r border-gray-300 whitespace-nowrap shadow-sm ${
+                                                    row.isExcess 
+                                                        ? 'text-red-600 bg-red-50 font-bold border-red-200' 
+                                                        : 'text-gray-800 hover:bg-blue-50'
+                                                }`}
+                                            >
+                                                <div className="flex items-center gap-1">
+                                                    {row.isExcess && (
+                                                        <span className="w-1.5 h-1.5 bg-red-500 rounded-full"></span>
+                                                    )}
+                                                    <span className="truncate max-w-[90px]">{row.name}</span>
+                                                    {row.isExcess && (
+                                                        <span className="text-[10px] font-normal text-red-500">(exc)</span>
+                                                    )}
+                                                </div>
+                                            </td>
+                                            {row.cells.map((cell, j) => (
+                                                <td
+                                                    key={j}
+                                                    className={`border border-gray-200 ${cell.color} hover:opacity-80 transition-opacity duration-150`}
+                                                    style={{ height: '20px', width: '24px' }}
+                                                    title={`${HOURS[j]}: ${cell.color.includes('yellow') ? 'Faltante' : cell.color.includes('blue') ? 'Asignado' : cell.color.includes('red') ? 'Exceso' : 'Sin requerimiento'}`}
+                                                />
+                                            ))}
+                                        </tr>
+                                    ))
+                                )}
                             </tbody>
                         </table>
                     </div>

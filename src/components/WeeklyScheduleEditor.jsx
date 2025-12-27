@@ -8,6 +8,23 @@ import { exportSchedulePDF, exportGroupedPositionsPDF } from './PDFExport';
 import GeoVictoriaUpload from './GeoVictoriaUpload';
 import { exportGeoVictoriaExcel } from "../services/GeoVictoriaExport";
 import { FaInfoCircle, FaExclamationTriangle, FaExclamationCircle} from 'react-icons/fa';
+import { 
+    Calendar, 
+    Save, 
+    FileText, 
+    Download, 
+    Upload, 
+    Settings, 
+    Filter,
+    Clock,
+    Users,
+    AlertCircle,
+    CheckCircle,
+    X,
+    Home,
+    ChevronLeft,
+    ChevronRight
+} from 'lucide-react';
 import { HOURS } from './ScheduleHeatmapMatrix';
 import ModalSelectorDePosiciones from './ModalSelectorDePosiciones'
 
@@ -58,6 +75,7 @@ export default function WeeklyScheduleEditor() {
     const [positionFilter, setPositionFilter] = useState('Todas');
     const [turnoMap, setTurnoMap] = useState({});
     const [tooltipOpen, setTooltipOpen] = useState(null);
+    const [tooltipPosition, setTooltipPosition] = useState({ top: 0, left: 0 });
     const [showTurnoModal, setShowTurnoModal] = useState(false);
     const [turnoPDF, setTurnoPDF] = useState('mañana');
     const [conflictAlerts, setConflictAlerts] = useState({});
@@ -67,6 +85,7 @@ export default function WeeklyScheduleEditor() {
     const [loading, setLoading] = useState(true);
 
     const tooltipRef = useRef(null);
+    const iconRefs = useRef({});
     const db = getFirestore();
     const navigate = useNavigate();
     const { currentUser, userRole } = useAuth();
@@ -648,7 +667,16 @@ useEffect(() => {
         .filter(x => x.position && x.start && x.end);
 
     const safeRequirements = requirements[selectedDay] || { positions: [], matrix: {} };
-    if (loading) return <p className="text-center py-8">Cargando...</p>;
+    if (loading) {
+        return (
+            <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center">
+                <div className="text-center">
+                    <div className="inline-block animate-spin rounded-full h-16 w-16 border-b-4 border-blue-600 mb-4"></div>
+                    <p className="text-gray-600 font-medium text-lg">Cargando horarios...</p>
+                </div>
+            </div>
+        );
+    }
     // Validación de fecha (evita "Fecha inválida")
 const isValidDate = (() => {
     if (!weekStartDate) return false;
@@ -666,125 +694,230 @@ const isValidDate = (() => {
 
 
     return (
-        <div className="min-h-screen bg-gray-100 p-8">
-            <nav className="bg-white shadow mb-6 rounded px-4 py-3 flex justify-between items-center">
-                <h1 className="text-xl font-bold text-red-600">Panel de Navegación</h1>
-                <div className="space-x-4">
-                    <Link to="/admin" className="text-sm bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700">Inicio</Link>
-                    <Link to="/horarios" className="text-sm bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700">Horarios</Link>
-                    <Link to="/posiciones" className="text-sm bg-purple-600 text-white px-3 py-1 rounded hover:bg-purple-700">Posiciones</Link>
+        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+            {/* Header Moderno */}
+            <div className="bg-white shadow-md border-b border-gray-200 sticky top-0 z-40">
+                <div className="max-w-full mx-auto px-4 sm:px-6 lg:px-8 py-4">
+                    <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+                        <div>
+                            <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                                Editor de Horarios Semanales
+                            </h1>
+                            {isValidDate && wk && (
+                                <p className="text-sm text-gray-600 mt-1">
+                                    Semana: {new Date(weekStartDate).toLocaleDateString('es-ES', { 
+                                        day: 'numeric', 
+                                        month: 'long', 
+                                        year: 'numeric' 
+                                    })}
+                                </p>
+                            )}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            <Link 
+                                to="/admin" 
+                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium text-sm"
+                            >
+                                <Home className="w-4 h-4" />
+                                Inicio
+                            </Link>
+                            <Link 
+                                to="/horarios" 
+                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium text-sm"
+                            >
+                                <Calendar className="w-4 h-4" />
+                                Horarios
+                            </Link>
+                            <Link 
+                                to="/posiciones" 
+                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium text-sm"
+                            >
+                                <Settings className="w-4 h-4" />
+                                Posiciones
+                            </Link>
+                        </div>
+                    </div>
                 </div>
-            </nav>
-
-            <div className="flex items-center gap-4">
-    <label className="font-semibold text-lg">Semana (lunes):</label>
-    <div className="flex items-center gap-6 mb-6">
-    <div className="flex items-center gap-3">
-        <label className="font-bold text-lg">Semana comenzando el:</label>
-        <input
-        
-  type="date"
-  value={weekStartDate}
-  onChange={(e) => {
-    const val = e.target.value;
-    if (!val) {
-        setWeekStartDate('');
-        return;
-    }
-
-    // Construimos la fecha en LOCAL, sin UTC ni shifts
-    const [year, month, day] = val.split('-').map(Number);
-    const date = new Date(year, month - 1, day);
-
-    const dayOfWeek = date.getDay();      // 1 = lunes
-    const diff = (dayOfWeek + 6) % 7;     // lunes = 0, domingo = 6
-
-    date.setDate(date.getDate() - diff);
-
-    // Formato seguro yyyy-mm-dd
-    const monday = [
-        date.getFullYear(),
-        String(date.getMonth() + 1).padStart(2, '0'),
-        String(date.getDate()).padStart(2, '0'),
-    ].join('-');
-
-    setWeekStartDate(monday);
-}}
-  className="border-2 border-gray-400 rounded-lg px-4 py-2 text-lg font-medium"
-/>
-    </div>
-
-    {/* Texto que muestra la semana completa (bonito y claro) */}
-    
-</div>
-
-
-                <select value={selectedDay} onChange={e => setSelectedDay(e.target.value)} className="p-2 border rounded">
-                    {weekdays.map(d => <option key={d} value={d}>{weekdayLabels[d]}</option>)}
-                </select>
-                <select value={modalityFilter} onChange={e => setModalityFilter(e.target.value)} className="p-2 border rounded">
-                    <option>Todos</option>
-                    <option>Full-Time</option>
-                    <option>Part-Time</option>
-                </select>
-                <select value={positionFilter} onChange={e => setPositionFilter(e.target.value)} className="p-2 border rounded">
-                    <option>Todas</option>
-                    {positions.map(pos => <option key={pos}>{pos}</option>)}
-                </select>
-                <button onClick={saveSchedules} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-                    {saveStatus === 'saving' ? 'Guardando...' : 'Guardar'}
-                </button>
-                
-                <button 
-    onClick={() => exportSchedulePDF(staff, schedules, wk)} 
-    className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
->
-    Exportar PDF
-</button>
-                <button onClick={() => setShowTurnoModal(true)} className="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700">
-                    Exportar PDF por Posiciones
-                </button>
-                <button
-    onClick={() => {
-        if (!wk || Object.keys(turnoMap).length === 0) {
-            alert('Primero sube el archivo de turnos de GeoVictoria');
-            return;
-        }
-        exportGeoVictoriaExcel(staff, schedules, wk, turnoMap);
-    }}
-    className="bg-teal-600 text-white px-6 py-3 rounded hover:bg-teal-700"
->
-    Exportar Excel GeoVictoria
-</button>
-              <div className="bg-gray-50 p-4 rounded border">
-        <GeoVictoriaUpload onTurnosLoaded={setTurnoMap} />
-        {Object.keys(turnoMap).length > 0 ? (
-            <p className="text-green-600 text-sm mt-2">✓ Archivo de turnos cargado ({Object.keys(turnoMap).length} turnos detectados)</p>
-        ) : (
-            <p className="text-gray-500 text-sm mt-2">Sube el archivo de turnos para poder exportar a GeoVictoria</p>
-        )}
-    </div>
             </div>
 
-            <div className="flex flex-col lg:flex-row gap-6">
-                <div className="w-full lg:w-2/3 overflow-auto">
-                    <table className="w-full text-sm bg-white border">
-                        <thead className="bg-gray-800 text-white">
-    <tr>
-        <th className="p-3">Nombre</th>
-        <th className="p-3">Modalidad</th>
-        <th className="p-3">Entrada</th>
-        <th className="p-3">Salida</th>
-        <th className="p-3">Horas Día</th>
-        <th className="p-3">Horas Semana</th>
-        <th className="p-3">Posición</th>
-        <th className="p-3">Pre-cierres</th>   {/* NUEVO */}
-        <th className="p-3">Cierres</th>       {/* NUEVO */}
-        <th className="p-3">Libre</th>
-        <th className="p-3">Feriado</th>
-    </tr>
-</thead>
-<tbody>
+            <div className="max-w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+
+                {/* Controles Principales */}
+                <div className="bg-white rounded-xl shadow-md p-6 mb-6">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {/* Filtros y Selección */}
+                        <div className="space-y-4">
+                            <div className="flex items-center gap-3">
+                                <Calendar className="w-5 h-5 text-gray-500" />
+                                <label className="font-semibold text-gray-700">Semana comenzando el:</label>
+                                <input
+                                    type="date"
+                                    value={weekStartDate}
+                                    onChange={(e) => {
+                                        const val = e.target.value;
+                                        if (!val) {
+                                            setWeekStartDate('');
+                                            return;
+                                        }
+                                        const [year, month, day] = val.split('-').map(Number);
+                                        const date = new Date(year, month - 1, day);
+                                        const dayOfWeek = date.getDay();
+                                        const diff = (dayOfWeek + 6) % 7;
+                                        date.setDate(date.getDate() - diff);
+                                        const monday = [
+                                            date.getFullYear(),
+                                            String(date.getMonth() + 1).padStart(2, '0'),
+                                            String(date.getDate()).padStart(2, '0'),
+                                        ].join('-');
+                                        setWeekStartDate(monday);
+                                    }}
+                                    className="border-2 border-gray-300 rounded-lg px-4 py-2 text-base font-medium focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                                />
+                            </div>
+                            
+                            <div className="flex flex-wrap gap-3">
+                                <div className="flex items-center gap-2">
+                                    <Filter className="w-4 h-4 text-gray-500" />
+                                    <select 
+                                        value={selectedDay} 
+                                        onChange={e => setSelectedDay(e.target.value)} 
+                                        className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white font-medium"
+                                    >
+                                        {weekdays.map(d => <option key={d} value={d}>{weekdayLabels[d]}</option>)}
+                                    </select>
+                                </div>
+                                
+                                <select 
+                                    value={modalityFilter} 
+                                    onChange={e => setModalityFilter(e.target.value)} 
+                                    className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white font-medium"
+                                >
+                                    <option>Todos</option>
+                                    <option>Full-Time</option>
+                                    <option>Part-Time</option>
+                                </select>
+                                
+                                <select 
+                                    value={positionFilter} 
+                                    onChange={e => setPositionFilter(e.target.value)} 
+                                    className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white font-medium"
+                                >
+                                    <option>Todas</option>
+                                    {positions.map(pos => <option key={pos}>{pos}</option>)}
+                                </select>
+                            </div>
+                        </div>
+
+                        {/* Botones de Acción */}
+                        <div className="flex flex-wrap gap-3 items-start">
+                            <button 
+                                onClick={saveSchedules} 
+                                disabled={saveStatus === 'saving'}
+                                className={`flex items-center gap-2 px-5 py-2.5 rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium ${
+                                    saveStatus === 'saving' 
+                                        ? 'bg-gray-400 cursor-not-allowed' 
+                                        : saveStatus === 'success'
+                                        ? 'bg-green-500 hover:bg-green-600'
+                                        : 'bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700'
+                                } text-white`}
+                            >
+                                {saveStatus === 'saving' ? (
+                                    <>
+                                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                        Guardando...
+                                    </>
+                                ) : saveStatus === 'success' ? (
+                                    <>
+                                        <CheckCircle className="w-5 h-5" />
+                                        Guardado
+                                    </>
+                                ) : (
+                                    <>
+                                        <Save className="w-5 h-5" />
+                                        Guardar
+                                    </>
+                                )}
+                            </button>
+                            
+                            <button 
+                                onClick={() => exportSchedulePDF(staff, schedules, wk)} 
+                                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <FileText className="w-5 h-5" />
+                                PDF
+                            </button>
+                            
+                            <button 
+                                onClick={() => setShowTurnoModal(true)} 
+                                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <Download className="w-5 h-5" />
+                                PDF Posiciones
+                            </button>
+                            
+                            <button
+                                onClick={() => {
+                                    if (!wk || Object.keys(turnoMap).length === 0) {
+                                        alert('Primero sube el archivo de turnos de GeoVictoria');
+                                        return;
+                                    }
+                                    exportGeoVictoriaExcel(staff, schedules, wk, turnoMap);
+                                }}
+                                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-teal-500 to-teal-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <Download className="w-5 h-5" />
+                                Excel GeoVictoria
+                            </button>
+                            
+                            <button
+                                onClick={generateIdealSchedule}
+                                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-indigo-500 to-indigo-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <Users className="w-5 h-5" />
+                                Generar Horario
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* GeoVictoria Upload */}
+                    <div className="mt-4 bg-gray-50 p-4 rounded-lg border border-gray-200">
+                        <div className="flex items-center gap-2 mb-2">
+                            <Upload className="w-4 h-4 text-gray-500" />
+                            <span className="font-medium text-gray-700">Cargar Turnos GeoVictoria</span>
+                        </div>
+                        <GeoVictoriaUpload onTurnosLoaded={setTurnoMap} />
+                        {Object.keys(turnoMap).length > 0 ? (
+                            <p className="text-green-600 text-sm mt-2 flex items-center gap-1">
+                                <CheckCircle className="w-4 h-4" />
+                                Archivo cargado ({Object.keys(turnoMap).length} turnos detectados)
+                            </p>
+                        ) : (
+                            <p className="text-gray-500 text-sm mt-2">Sube el archivo de turnos para poder exportar a GeoVictoria</p>
+                        )}
+                    </div>
+                </div>
+
+                <div className="flex flex-col lg:flex-row gap-6">
+                    <div className="w-full lg:w-2/3">
+                        <div className="bg-white rounded-xl shadow-md">
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                    <thead className="bg-gradient-to-r from-gray-700 to-gray-800 text-white">
+                                        <tr>
+                                            <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider sticky left-0 z-10 bg-gradient-to-r from-gray-700 to-gray-800" style={{ minWidth: '280px', maxWidth: '280px' }}>Nombre</th>
+                                            <th className="px-6 py-4 text-center text-xs font-semibold uppercase tracking-wider sticky left-[280px] z-10 bg-gradient-to-r from-gray-700 to-gray-800" style={{ minWidth: '140px', maxWidth: '140px' }}>Modalidad</th>
+                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Entrada</th>
+                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Salida</th>
+                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Horas Día</th>
+                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Horas Semana</th>
+                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Posición</th>
+                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Pre-cierres</th>
+                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Cierres</th>
+                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Libre</th>
+                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Feriado</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="bg-white divide-y divide-gray-200">
     {filteredStaff.map(p => {
         const d = schedules[p.id]?.[selectedDay] || {};
         const hasConflict = detectScheduleConflict(p, selectedDay, d);
@@ -801,137 +934,133 @@ const isValidDate = (() => {
         const { preCierres, cierres } = calcularCierres(schedules[p.id] || {});
 
         return (
-            <tr key={p.id} className="border-b">
-                <td className="p-3 relative">
-                    <div className="flex items-center justify-between">
-                        <span className="font-medium">
-                            {p.name} {p.lastName}
-                        </span>
+            <tr key={p.id} className="hover:bg-blue-50 transition-colors duration-150 group">
+                <td className="px-6 py-4 relative sticky left-0 z-10 bg-white group-hover:bg-blue-50" style={{ minWidth: '280px', maxWidth: '280px' }}>
+                    <div className="flex items-start gap-2">
+                        <div className="flex-1 min-w-0 pr-2">
+                            <div 
+                                className="font-medium text-sm text-gray-900 leading-tight"
+                                style={{ 
+                                    wordBreak: 'break-word',
+                                    overflowWrap: 'break-word',
+                                    lineHeight: '1.4'
+                                }}
+                            >
+                                {p.name} {p.lastName}
+                            </div>
+                        </div>
 
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5 flex-shrink-0 relative">
                             {/* Ícono de información (tooltip estudio) */}
-                            <FaInfoCircle
-                                className="text-blue-600 cursor-pointer hover:text-blue-800 transition"
-                                size={16}
-                                onMouseEnter={() => setTooltipOpen(p.id)}
-                                onMouseLeave={() => setTooltipOpen(null)}
-                            />
+                            <div className="relative">
+                                <FaInfoCircle
+                                    ref={el => iconRefs.current[p.id] = el}
+                                    className="text-blue-600 cursor-pointer hover:text-blue-800 transition flex-shrink-0"
+                                    size={16}
+                                    onMouseEnter={(e) => {
+                                        const rect = e.currentTarget.getBoundingClientRect();
+                                        const tooltipHeight = 350; // altura aproximada del tooltip
+                                        const tooltipWidth = 300;
+                                        const viewportHeight = window.innerHeight;
+                                        const viewportWidth = window.innerWidth;
+                                        
+                                        // Calcular posición vertical: si no hay espacio abajo, mostrar arriba
+                                        let top = rect.bottom + 8;
+                                        if (rect.bottom + tooltipHeight + 8 > viewportHeight) {
+                                            top = rect.top - tooltipHeight - 8;
+                                        }
+                                        
+                                        // Calcular posición horizontal: centrar pero ajustar si está cerca de los bordes
+                                        let left = rect.left + (rect.width / 2);
+                                        if (left - (tooltipWidth / 2) < 10) {
+                                            left = tooltipWidth / 2 + 10;
+                                        } else if (left + (tooltipWidth / 2) > viewportWidth - 10) {
+                                            left = viewportWidth - (tooltipWidth / 2) - 10;
+                                        }
+                                        
+                                        setTooltipPosition({ top, left });
+                                        setTooltipOpen(p.id);
+                                    }}
+                                    onMouseLeave={() => {
+                                        // Pequeño delay para permitir mover el mouse al tooltip
+                                        setTimeout(() => {
+                                            if (tooltipRef.current && !tooltipRef.current.matches(':hover')) {
+                                                setTooltipOpen(null);
+                                            }
+                                        }, 200);
+                                    }}
+                                />
+                            </div>
 
-                            {/* NUEVO: Ícono si NO tiene día libre */}
+                            {/* Ícono si NO tiene día libre */}
                             {!tieneDiaLibre && (
                                 <FaExclamationCircle
                                     title="No tiene día libre asignado esta semana"
-                                    className="text-red-600 ml-2"
+                                    className="text-red-600 flex-shrink-0"
                                     size={16}
                                 />
                             )}
                         </div>
                     </div>
 
-    {/* Tooltip que aparece debajo */}
-    {tooltipOpen === p.id && (
-        <div 
-            className="absolute left-1/2 -translate-x-1/2 top-full mt-2 z-50 w-80 bg-white border border-gray-300 rounded-lg shadow-xl p-4"
-            style={{ pointerEvents: 'none' }} // permite hover dentro sin que se cierre
-        >
-            {/* Flechita hacia arriba */}
-            <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-full">
-                <div className="w-0 h-0 border-l-8 border-r-8 border-b-8 border-transparent border-b-white"></div>
-            </div>
-
-            <strong className="block mb-2 text-sm font-bold text-gray-800 border-b pb-1">
-                📚 Horarios de Estudio
-            </strong>
-
-            {weekdays.map(day => {
-                const daySchedule = p.study_schedule?.[day];
-                const isFree = daySchedule?.free === true;
-                const hasBlocks = daySchedule?.blocks && daySchedule.blocks.length > 0;
-
-                return (
-                    <div key={day} className="mb-1.5 text-xs">
-                        <div className="flex items-start gap-2">
-                            <span className="font-semibold text-gray-700 min-w-12">
-                                {weekdayLabels[day].slice(0, 3)}:
-                            </span>
-                            <div className="flex-1">
-                                {isFree ? (
-                                    <span className="text-green-600 font-bold">
-                                        ✅ Día Libre
-                                    </span>
-                                ) : hasBlocks ? (
-                                    <div className="space-y-0.5">
-                                        {daySchedule.blocks.map((block, i) => (
-                                            <div key={i} className="text-orange-700">
-                                                🕐 {block.start} - {block.end}
-                                            </div>
-                                        ))}
-                                    </div>
-                                ) : (
-                                    <span className="text-black-400 italic">Sin clases</span>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-                );
-            })}
-
-            {/* Resumen rápido */}
-            <div className="mt-4 pt-3 border-t text-sm font-medium">
-                    <div className="flex justify-between text-gray-700">
-                        <span className="text-green-600">
-                            Días libres: {weekdays.filter(d => p.study_schedule?.[d]?.free).length}
-                        </span>
-                        <span className="text-orange-600">
-                            Con clases: {weekdays.filter(d => p.study_schedule?.[d]?.blocks?.length > 0).length}
-                        </span>
-                </div>
-            </div>
-        </div>
-    )}
-
     {/* Mensaje de conflicto debajo del nombre */}
     {hasConflict && (
-        <div className="text-xs text-orange-700 bg-orange-100 px-2 py-1 rounded mt-1 flex items-center gap-1">
-            <FaExclamationTriangle className="text-orange-600" size={12} />
-            {formatConflictMessage(hasConflict)}
+        <div className="text-xs text-orange-800 bg-orange-50 border border-orange-200 px-2 py-1 rounded mt-2 flex items-center gap-1.5 shadow-sm">
+            <AlertCircle className="w-3.5 h-3.5 text-orange-600 flex-shrink-0" />
+            <span className="font-medium text-xs">{formatConflictMessage(hasConflict)}</span>
         </div>
     )}
 </td>
-                <td className="p-1 text-center">{p.modality}</td>
-                <td className="p-1 text-center">
+                <td className="px-6 py-4 text-center sticky left-[280px] z-10 bg-white group-hover:bg-blue-50" style={{ minWidth: '140px', maxWidth: '140px' }}>
+                    <span className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap inline-block ${
+                        p.modality === "Full-Time" 
+                            ? "bg-gradient-to-r from-green-500 to-green-600 text-white shadow-sm" 
+                            : "bg-gradient-to-r from-purple-500 to-purple-600 text-white shadow-sm"
+                    }`}>
+                        {p.modality}
+                    </span>
+                </td>
+                <td className="px-4 py-4 text-center">
                     <input
                         type="time"
                         value={d.start || ''}
                         onChange={e => handleChange(p.id, 'start', e.target.value)}
                         disabled={d.feriado || d.off}
-                        className={hasConflict ? 'border-orange-500 bg-orange-50' : ''}
+                        className={`w-full px-2 py-2 border rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${
+                            hasConflict ? 'border-orange-500 bg-orange-50' : 'border-gray-300'
+                        } disabled:bg-gray-100 disabled:cursor-not-allowed`}
                     />
                 </td>
-                <td className="p-1 text-center">
+                <td className="px-4 py-4 text-center">
                     <input
                         type="time"
                         value={d.end || ''}
                         onChange={e => handleChange(p.id, 'end', e.target.value)}
                         disabled={d.feriado || d.off}
-                        className={hasConflict ? 'border-orange-500 bg-orange-50' : ''}
+                        className={`w-full px-2 py-2 border rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${
+                            hasConflict ? 'border-orange-500 bg-orange-50' : 'border-gray-300'
+                        } disabled:bg-gray-100 disabled:cursor-not-allowed`}
                     />
                 </td>
-                <td className="p-1 text-center">
+                <td className="px-4 py-4 text-center font-medium text-gray-700 text-sm">
                     {calculateDailyHours(d.start, d.end)}
                 </td>
-                {/* HORAS SEMANA - AHORA CON COLOR CORRECTO */}
-                <td className={`p-1 text-center font-semibold ${!horasEnRango ? 'text-red-600' : 'text-green-700'
-                    }`}>
-                    {horas.formatted}
-                    {hasConflict && <span className="text-orange-600 ml-1">⚠️</span>}
+                <td className={`px-4 py-4 text-center font-semibold text-sm ${
+                    !horasEnRango ? 'text-red-600' : 'text-green-700'
+                }`}>
+                    <div className="flex items-center justify-center gap-1">
+                        <Clock className="w-4 h-4" />
+                        {horas.formatted}
+                        {hasConflict && <AlertCircle className="w-4 h-4 text-orange-600" />}
+                    </div>
                 </td>
                 
-                <td className="p-1 text-center">
+                <td className="px-4 py-4 text-center">
                     <select
                         value={d.position || ''}
                         onChange={e => handleChange(p.id, 'position', e.target.value)}
                         disabled={d.feriado || d.off}
+                        className="w-full px-2 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
                     >
                         <option value="">--</option>
                         {positions.map(pos => (
@@ -939,95 +1068,199 @@ const isValidDate = (() => {
                         ))}
                     </select>
                 </td>
-                <td className="p-1 text-center font-bold text-orange-600">
+                <td className="px-4 py-4 text-center font-bold text-orange-600 text-sm">
                     {preCierres}/4
                 </td>
-                <td className="p-1 text-center font-bold text-red-600">
+                <td className="px-4 py-4 text-center font-bold text-red-600 text-sm">
                     {cierres}/4
                 </td>
-                <td className="p-1 text-center">
+                <td className="px-4 py-4 text-center">
                     <input
                         type="checkbox"
                         checked={d.off || false}
                         onChange={e => handleChange(p.id, 'off', e.target.checked)}
                         disabled={d.feriado}
+                        className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                     />
                 </td>
-                <td className="p-1 text-center">
+                <td className="px-4 py-4 text-center">
                     <input
                         type="checkbox"
                         checked={d.feriado || false}
                         onChange={e => handleChange(p.id, 'feriado', e.target.checked)}
+                        className="w-5 h-5 text-purple-600 border-gray-300 rounded focus:ring-2 focus:ring-purple-500 cursor-pointer"
                     />
                 </td>
             </tr>
         );
-    })}
-</tbody>
-                    </table>
-                </div>
+                                    })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
 
-              
-{/* Heatmap */}
-<div className="w-full lg:w-5/12 bg-gray-100 z-20">
-  <div className="h-screen sticky top-0 flex flex-col">
-    <ScheduleHeatmapMatrix
-      key={selectedDay}
-      assigned={assignedArray}
-      requirements={requirements[selectedDay] || { positions: [], matrix: {} }}
-    />
-  </div>
-</div>
-            </div>
-            
-
-            {/* Modal para selección de turno */}
-            {showTurnoModal && (
-                
-                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-                    <div className="bg-white rounded shadow-lg p-6 w-80">
-                        <h3 className="font-semibold mb-4 text-center">Elegir Turno</h3>
-
-                        <label className="flex items-center gap-2 mb-2">
-                            <input
-                                type="radio"
-                                value="mañana"
-                                checked={turnoPDF === 'mañana'}
-                                onChange={() => setTurnoPDF('mañana')}
-                            />
-                            Mañana
-                        </label>
-
-                        <label className="flex items-center gap-2 mb-4">
-                            <input
-                                type="radio"
-                                value="tarde"
-                                checked={turnoPDF === 'tarde'}
-                                onChange={() => setTurnoPDF('tarde')}
-                            />
-                            Tarde
-                        </label>
-
-                        <div className="flex justify-end gap-3">
-                            <button
-                                className="px-3 py-1 rounded bg-gray-300"
-                                onClick={() => setShowTurnoModal(false)}
-                            >
-                                Cancelar
-                            </button>
-                            <button
-                                className="px-3 py-1 rounded bg-purple-700 text-white"
-                                onClick={() => {
-                                    exportGroupedPositionsPDF(staff, schedules, selectedDay, turnoPDF);
-                                    setShowTurnoModal(false);
-                                }}
-                            >
-                                Descargar
-                            </button>
+                    {/* Heatmap */}
+                    <div className="w-full lg:w-5/12">
+                        <div className="bg-white rounded-xl shadow-md p-3 sticky top-24">
+                            <h3 className="text-base font-bold text-gray-800 mb-2 flex items-center gap-2">
+                                <Clock className="w-4 h-4" />
+                                Mapa de Calor - {weekdayLabels[selectedDay]}
+                            </h3>
+                            <div className="h-[calc(100vh-280px)] overflow-auto">
+                                <ScheduleHeatmapMatrix
+                                    key={selectedDay}
+                                    assigned={assignedArray}
+                                    requirements={requirements[selectedDay] || { positions: [], matrix: {} }}
+                                />
+                            </div>
                         </div>
                     </div>
                 </div>
-            )}
+
+                {/* Tooltip global para horarios de estudio */}
+                {tooltipOpen && (
+                    <div 
+                        ref={tooltipRef}
+                        className="fixed z-[9999] bg-white border-2 border-blue-200 rounded-lg shadow-xl p-3"
+                        style={{ 
+                            pointerEvents: 'auto',
+                            width: '300px',
+                            maxHeight: '350px',
+                            overflowY: 'auto',
+                            top: `${tooltipPosition.top}px`,
+                            left: `${tooltipPosition.left}px`,
+                            transform: 'translateX(-50%)'
+                        }}
+                        onMouseEnter={() => {
+                            // Mantener el tooltip abierto cuando el mouse está sobre él
+                        }}
+                        onMouseLeave={() => {
+                            setTooltipOpen(null);
+                        }}
+                    >
+                        {(() => {
+                            const person = filteredStaff.find(p => p.id === tooltipOpen);
+                            if (!person) return null;
+                            
+                            return (
+                                <>
+                                    <strong className="block mb-2 text-xs font-bold text-gray-800 border-b border-gray-200 pb-1.5 flex items-center gap-1.5">
+                                        <Clock className="w-3.5 h-3.5 text-blue-600" />
+                                        Horarios de Estudio - {person.name} {person.lastName}
+                                    </strong>
+
+                                    <div className="space-y-1 text-xs">
+                                        {weekdays.map(day => {
+                                            const daySchedule = person.study_schedule?.[day];
+                                            const isFree = daySchedule?.free === true;
+                                            const hasBlocks = daySchedule?.blocks && daySchedule.blocks.length > 0;
+
+                                            return (
+                                                <div key={day} className="flex items-start gap-2 py-0.5">
+                                                    <span className="font-semibold text-gray-700 min-w-[55px] text-xs">
+                                                        {weekdayLabels[day].slice(0, 3)}:
+                                                    </span>
+                                                    <div className="flex-1">
+                                                        {isFree ? (
+                                                            <span className="text-green-700 font-semibold text-xs">
+                                                                ✓ Libre
+                                                            </span>
+                                                        ) : hasBlocks ? (
+                                                            <div className="space-y-0.5">
+                                                                {daySchedule.blocks.map((block, i) => (
+                                                                    <div key={i} className="text-orange-700 font-medium text-xs">
+                                                                        {block.start || block.startTime} - {block.end || block.endTime}
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        ) : (
+                                                            <span className="text-gray-500 italic text-xs">Sin clases</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+
+                                    {/* Resumen compacto */}
+                                    <div className="mt-2 pt-1.5 border-t border-gray-200 flex justify-between text-xs font-semibold">
+                                        <span className="text-green-700">
+                                            Libres: {weekdays.filter(d => person.study_schedule?.[d]?.free).length}
+                                        </span>
+                                        <span className="text-orange-700">
+                                            Clases: {weekdays.filter(d => person.study_schedule?.[d]?.blocks?.length > 0).length}
+                                        </span>
+                                    </div>
+                                </>
+                            );
+                        })()}
+                    </div>
+                )}
+
+                {/* Modal para selección de turno */}
+                {showTurnoModal && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                        <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
+                            <div className="flex justify-between items-center mb-6">
+                                <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                                    <Download className="w-5 h-5" />
+                                    Elegir Turno para PDF
+                                </h3>
+                                <button
+                                    onClick={() => setShowTurnoModal(false)}
+                                    className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                                >
+                                    <X className="w-5 h-5 text-gray-600" />
+                                </button>
+                            </div>
+
+                            <div className="space-y-4 mb-6">
+                                <label className="flex items-center gap-3 p-4 border-2 border-gray-200 rounded-lg cursor-pointer hover:border-purple-300 hover:bg-purple-50 transition-all">
+                                    <input
+                                        type="radio"
+                                        value="mañana"
+                                        checked={turnoPDF === 'mañana'}
+                                        onChange={() => setTurnoPDF('mañana')}
+                                        className="w-5 h-5 text-purple-600 focus:ring-2 focus:ring-purple-500"
+                                    />
+                                    <span className="font-medium text-gray-700">Turno Mañana</span>
+                                </label>
+
+                                <label className="flex items-center gap-3 p-4 border-2 border-gray-200 rounded-lg cursor-pointer hover:border-purple-300 hover:bg-purple-50 transition-all">
+                                    <input
+                                        type="radio"
+                                        value="tarde"
+                                        checked={turnoPDF === 'tarde'}
+                                        onChange={() => setTurnoPDF('tarde')}
+                                        className="w-5 h-5 text-purple-600 focus:ring-2 focus:ring-purple-500"
+                                    />
+                                    <span className="font-medium text-gray-700">Turno Tarde</span>
+                                </label>
+                            </div>
+
+                            <div className="flex justify-end gap-3">
+                                <button
+                                    className="px-5 py-2.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium transition-colors"
+                                    onClick={() => setShowTurnoModal(false)}
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    className="px-5 py-2.5 rounded-lg bg-gradient-to-r from-purple-500 to-purple-600 text-white font-medium shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 flex items-center gap-2"
+                                    onClick={() => {
+                                        exportGroupedPositionsPDF(staff, schedules, selectedDay, turnoPDF);
+                                        setShowTurnoModal(false);
+                                    }}
+                                >
+                                    <Download className="w-4 h-4" />
+                                    Descargar
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
         </div>
     );
 }

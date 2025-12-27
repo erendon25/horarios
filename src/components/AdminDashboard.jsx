@@ -6,7 +6,22 @@ import {
     getWorkedHolidaysByUid,
     getNightHoursByUid,
 } from "../services/scheduleService";
-import { FaCheck, FaTimes, FaCalendarAlt, FaFilePdf } from "react-icons/fa";
+import { FaCheck, FaTimes, FaCalendarAlt, FaFilePdf, FaEdit, FaTrash, FaUnlink } from "react-icons/fa";
+import {
+    Users,
+    Clock,
+    Settings,
+    FileText,
+    Calendar,
+    Search,
+    Plus,
+    RefreshCw,
+    LogOut,
+    Building2,
+    UserCheck,
+    AlertCircle,
+    X
+} from "lucide-react";
 import {
     doc,
     updateDoc,
@@ -153,8 +168,8 @@ const handleUnlinkEmail = async (staffId) => {
         try {
             if (colab.uid) {
                 feriados = await getWorkedHolidaysByUid(colab.uid);
-
                 
+                const staffDoc = await getDoc(doc(db, 'staff_profiles', colab.id));
                 if (staffDoc.exists()) {
                     const profileData = staffDoc.data();
                     const pending = profileData.pendingHolidays || [];
@@ -327,142 +342,283 @@ const handleUnlinkEmail = async (staffId) => {
         const matchesSearch = fullName.includes(searchTerm.toLowerCase());
         return matchesModality && matchesSearch;
     });
+    
     return (
-        <div className="p-4">
-            <div className="flex justify-between items-center mb-4">
-                <h1 className="text-2xl font-bold text-red-700">Panel de administración</h1>
-                <div className="flex gap-2">
-                    <button onClick={() => navigate("/admin/requirements/lunes")} className="bg-green-600 text-white px-4 py-2 rounded">Requerimientos</button>
-                    <button onClick={() => navigate("/admin/generate-schedules")} className="bg-blue-600 text-white px-4 py-2 rounded">Visualizar Horarios</button>
-                    <button onClick={() => navigate("/admin/nocturnidad")} className="bg-purple-600 text-white px-4 py-2 rounded">Consultas</button>
-                    <button onClick={exportCarnetExpiringPDF} className="bg-red-600 text-white px-4 py-2 rounded flex items-center gap-1">
-                        <FaFilePdf /> Carnets por vencer
-                    </button>
-                    <button onClick={handleLogout} className="bg-gray-800 text-white px-4 py-2 rounded">Cerrar sesión</button>
-                </div>
-            </div>
-
-            {userData?.storeId && (
-                <div className="mb-4 text-sm">
-                    <p>Tienda actual: <strong>{storeName}</strong></p>
-                </div>
-            )}
-
-            {error && (
-                <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-                    <p>{error}</p>
-                </div>
-            )}
-
-            <div className="flex justify-between items-center mb-2">
-                <div className="text-sm text-gray-700">
-                    <p>Total Full-Time: <strong>{fullTimeCount}</strong></p>
-                    <p>Total Part-Time: <strong>{partTimeCount}</strong></p>
-                </div>
-                <div className="flex gap-2 items-center">
-                    <input
-                        type="text"
-                        placeholder="Buscar colaborador..."
-                        className="border px-2 py-1 rounded"
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                    />
-                    <select
-                        className="border px-2 py-1 rounded"
-                        value={modalityFilter}
-                        onChange={(e) => setModalityFilter(e.target.value)}
-                    >
-                        <option value="Todos">Todos</option>
-                        <option value="Full-Time">Full-Time</option>
-                        <option value="Part-Time">Part-Time</option>
-                    </select>
-                    <button onClick={handleAddStaff} className="bg-blue-500 text-white px-4 py-1 rounded">Agregar Personal</button>
-                    <button onClick={fetchAllStaffProfiles} className="bg-gray-500 text-white px-4 py-1 rounded">Actualizar</button>
-                </div>
-            </div>
-
-            {loading ? (
-                <div className="py-8 text-center">
-                    <p>Cargando personal...</p>
-                </div>
-            ) : (
-                filteredStaff.length > 0 ? (
-                    <table className="table-auto w-full border">
-                        <thead>
-                            <tr className="bg-gray-200 text-left">
-                                <th className="px-2 py-1">Nombre</th>
-                                <th className="px-2 py-1">Modalidad</th>
-                                <th className="px-2 py-1">Rol</th>
-                                <th className="px-2 py-1">Vinculado</th>
-                                <th className="px-2 py-1">Acciones</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {filteredStaff.map((colab, idx) => (
-                                <tr key={idx} className="border hover:bg-gray-50 group">
-                                    <td className="px-2 py-1 relative">
-                                        <span onClick={() => handleViewHolidays(colab)} className="text-blue-600 hover:underline cursor-pointer">
-                                            {`${colab.name} ${colab.lastName}`}
-                                        </span>
-                                        {/* Tooltip mejorado */}
-    <div className="hidden group-hover:block absolute top-full left-0 bg-white shadow-lg p-2 text-xs border z-10 w-64">
-        <div className="space-y-1">
-            <p><strong>ID:</strong> {colab.id}</p>
-            <p><strong>Correo:</strong> {colab.email || "No vinculado"}</p>
-            <p><strong>Feriados:</strong> {colab.feriados}</p>
-            <p><strong>DNI:</strong> {colab.dni || "No registrado"}</p>
-            <p><strong>StoreId:</strong> {colab.storeId || "No asignado"}</p>
-            {colab.uid && <p><strong>UID:</strong> {colab.uid}</p>}
-        </div>
-    </div>
-</td>
-                                    <td className="px-2 py-1">{colab.modality}</td>
-                                    <td className="px-2 py-1 text-center">{colab.position || 'colaborador'}</td>
-                                    <td className="px-2 py-1 text-center">
-                                        {colab.email ? <FaCheck className="text-green-600 inline" /> : <FaTimes className="text-red-500 inline" />}
-                                        <div>
-                                            <button onClick={() => openPositionModal(colab)} className="text-sm text-indigo-600 hover:underline">Asignar posiciones</button>
-                                        </div>
-                                    </td>
-                                    <td className="px-2 py-1 space-y-1">
-                                        <button onClick={() => handleUnlinkEmail(colab.id)} className="text-sm text-red-600 hover:underline" disabled={!colab.email}>Desvincular correo</button>
-                                        <div className="space-x-2">
-                                            <button
-                                                onClick={async () => {
-                                                    if (!colab.uid) {
-                                                        const generatedUid = generateUid();
-                                                        try {
-                                                            await setDoc(doc(db, 'staff_profiles', colab.id), { uid: generatedUid }, { merge: true });
-                                                            await setDoc(doc(db, 'study_schedules', generatedUid), {});
-                                                            colab.uid = generatedUid;
-                                                        } catch (err) {
-                                                            console.error("Error generando UID:", err);
-                                                            alert("No se pudo generar el UID automáticamente para este colaborador.");
-                                                            return;
-                                                        }
-                                                    }
-                                                    setSelectedStaff(colab);
-                                                    setShowScheduleEditor(true);
-                                                }}
-                                                className="text-purple-600 hover:text-purple-800"
-                                                title="Ver horarios"
-                                            >
-                                                <FaCalendarAlt className="inline" />
-                                            </button>
-                                            <button onClick={() => setEditModal({ ...colab, isNew: false })} className="text-sm text-blue-600 hover:underline">Editar</button>
-                                            <button onClick={() => handleDelete(colab.uid, colab.id)} className="text-sm text-red-600 hover:underline">Eliminar</button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                ) : (
-                    <div className="text-center py-8 border bg-gray-50">
-                        <p>No se encontraron registros de personal para esta tienda</p>
+        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+            {/* Header */}
+            <div className="bg-white shadow-md border-b border-gray-200">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                        <div>
+                            <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                                Panel de Administración
+                            </h1>
+                            {userData?.storeId && (
+                                <div className="flex items-center gap-2 mt-2 text-sm text-gray-600">
+                                    <Building2 className="w-4 h-4" />
+                                    <span className="font-medium">{storeName}</span>
+                                </div>
+                            )}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            <button 
+                                onClick={() => navigate("/admin/requirements/lunes")} 
+                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <Settings className="w-4 h-4" />
+                                Requerimientos
+                            </button>
+                            <button 
+                                onClick={() => navigate("/admin/generate-schedules")} 
+                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <Calendar className="w-4 h-4" />
+                                Horarios
+                            </button>
+                            <button 
+                                onClick={() => navigate("/admin/nocturnidad")} 
+                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <FileText className="w-4 h-4" />
+                                Consultas
+                            </button>
+                            <button 
+                                onClick={exportCarnetExpiringPDF} 
+                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <FaFilePdf className="w-4 h-4" />
+                                Carnets PDF
+                            </button>
+                            <button 
+                                onClick={handleLogout} 
+                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-gray-700 to-gray-800 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <LogOut className="w-4 h-4" />
+                                Salir
+                            </button>
+                        </div>
                     </div>
-                )
-            )}
+                </div>
+            </div>
+
+            {/* Main Content */}
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                {/* Error Message */}
+                {error && (
+                    <div className="mb-6 p-4 bg-red-50 border-l-4 border-red-500 rounded-r-lg shadow-md flex items-start gap-3">
+                        <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                        <p className="text-red-700 font-medium">{error}</p>
+                    </div>
+                )}
+
+                {/* Stats Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                    <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl shadow-lg p-6 text-white transform hover:scale-105 transition-all duration-200">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <p className="text-blue-100 text-sm font-medium mb-1">Total Personal</p>
+                                <p className="text-3xl font-bold">{staff.length}</p>
+                            </div>
+                            <Users className="w-12 h-12 text-blue-200" />
+                        </div>
+                    </div>
+                    <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-xl shadow-lg p-6 text-white transform hover:scale-105 transition-all duration-200">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <p className="text-green-100 text-sm font-medium mb-1">Full-Time</p>
+                                <p className="text-3xl font-bold">{fullTimeCount}</p>
+                            </div>
+                            <UserCheck className="w-12 h-12 text-green-200" />
+                        </div>
+                    </div>
+                    <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl shadow-lg p-6 text-white transform hover:scale-105 transition-all duration-200">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <p className="text-purple-100 text-sm font-medium mb-1">Part-Time</p>
+                                <p className="text-3xl font-bold">{partTimeCount}</p>
+                            </div>
+                            <Clock className="w-12 h-12 text-purple-200" />
+                        </div>
+                    </div>
+                </div>
+
+                {/* Filters and Actions */}
+                <div className="bg-white rounded-xl shadow-md p-6 mb-6">
+                    <div className="flex flex-col lg:flex-row gap-4 items-center">
+                        <div className="flex-1 w-full lg:w-auto">
+                            <div className="relative">
+                                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+                                <input
+                                    type="text"
+                                    placeholder="Buscar colaborador..."
+                                    className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                />
+                            </div>
+                        </div>
+                        <select
+                            className="px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white"
+                            value={modalityFilter}
+                            onChange={(e) => setModalityFilter(e.target.value)}
+                        >
+                            <option value="Todos">Todos</option>
+                            <option value="Full-Time">Full-Time</option>
+                            <option value="Part-Time">Part-Time</option>
+                        </select>
+                        <button 
+                            onClick={handleAddStaff} 
+                            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium whitespace-nowrap"
+                        >
+                            <Plus className="w-5 h-5" />
+                            Agregar Personal
+                        </button>
+                        <button 
+                            onClick={fetchAllStaffProfiles} 
+                            className="flex items-center gap-2 px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg shadow-sm hover:shadow-md transform hover:scale-105 transition-all duration-200 font-medium whitespace-nowrap"
+                        >
+                            <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+                            Actualizar
+                        </button>
+                    </div>
+                </div>
+
+                {/* Staff Table */}
+                {loading ? (
+                    <div className="bg-white rounded-xl shadow-md p-12 text-center">
+                        <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
+                        <p className="text-gray-600 font-medium">Cargando personal...</p>
+                    </div>
+                ) : filteredStaff.length > 0 ? (
+                    <div className="bg-white rounded-xl shadow-md overflow-hidden">
+                        <div className="overflow-x-auto">
+                            <table className="w-full">
+                                <thead className="bg-gradient-to-r from-gray-50 to-gray-100 border-b border-gray-200">
+                                    <tr>
+                                        <th className="px-8 py-5 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider min-w-[200px]">Nombre</th>
+                                        <th className="px-8 py-5 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider min-w-[140px]">Modalidad</th>
+                                        <th className="px-6 py-5 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Rol</th>
+                                        <th className="px-6 py-5 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Vinculado</th>
+                                        <th className="px-6 py-5 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Acciones</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {filteredStaff.map((colab, idx) => (
+                                        <tr 
+                                            key={idx} 
+                                            className="hover:bg-blue-50 transition-colors duration-150 group"
+                                        >
+                                            <td className="px-8 py-5 relative">
+                                                <div className="flex flex-col gap-1">
+                                                    <span 
+                                                        onClick={() => handleViewHolidays(colab)} 
+                                                        className="text-blue-600 hover:text-blue-800 font-medium cursor-pointer hover:underline transition-colors text-base leading-relaxed"
+                                                    >
+                                                        {`${colab.name} ${colab.lastName}`}
+                                                    </span>
+                                                </div>
+                                                <div className="hidden group-hover:block absolute top-full left-0 mt-2 bg-gray-900 text-white text-xs rounded-lg shadow-xl p-3 z-20 w-72">
+                                                    <div className="space-y-1.5">
+                                                        <p><strong>ID:</strong> {colab.id}</p>
+                                                        <p><strong>Correo:</strong> {colab.email || "No vinculado"}</p>
+                                                        <p><strong>Feriados:</strong> {colab.feriados}</p>
+                                                        <p><strong>DNI:</strong> {colab.dni || "No registrado"}</p>
+                                                        <p><strong>StoreId:</strong> {colab.storeId || "No asignado"}</p>
+                                                        {colab.uid && <p><strong>UID:</strong> {colab.uid}</p>}
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td className="px-8 py-5">
+                                                <div className="flex items-center">
+                                                    <span className={`px-4 py-2 rounded-full text-sm font-semibold inline-block ${
+                                                        colab.modality === "Full-Time" 
+                                                            ? "bg-green-100 text-green-800" 
+                                                            : "bg-purple-100 text-purple-800"
+                                                    }`}>
+                                                        {colab.modality}
+                                                    </span>
+                                                </div>
+                                            </td>
+                                            <td className="px-6 py-5 text-gray-700">
+                                                <span className="text-base">{colab.position || 'colaborador'}</span>
+                                            </td>
+                                            <td className="px-6 py-5 text-center">
+                                                <div className="flex flex-col items-center gap-3">
+                                                    {colab.email ? (
+                                                        <FaCheck className="text-green-500 text-xl" />
+                                                    ) : (
+                                                        <FaTimes className="text-red-500 text-xl" />
+                                                    )}
+                                                    <button 
+                                                        onClick={() => openPositionModal(colab)} 
+                                                        className="text-xs text-indigo-600 hover:text-indigo-800 hover:underline font-medium whitespace-nowrap"
+                                                    >
+                                                        Asignar posiciones
+                                                    </button>
+                                                </div>
+                                            </td>
+                                            <td className="px-6 py-5">
+                                                <div className="flex flex-col gap-2">
+                                                    <button 
+                                                        onClick={() => handleUnlinkEmail(colab.id)} 
+                                                        className="text-xs text-red-600 hover:text-red-800 hover:underline font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1" 
+                                                        disabled={!colab.email}
+                                                    >
+                                                        <FaUnlink className="inline" />
+                                                        Desvincular
+                                                    </button>
+                                                    <div className="flex items-center justify-center gap-3">
+                                                        <button
+                                                            onClick={async () => {
+                                                                if (!colab.uid) {
+                                                                    const generatedUid = generateUid();
+                                                                    try {
+                                                                        await setDoc(doc(db, 'staff_profiles', colab.id), { uid: generatedUid }, { merge: true });
+                                                                        await setDoc(doc(db, 'study_schedules', generatedUid), {});
+                                                                        colab.uid = generatedUid;
+                                                                    } catch (err) {
+                                                                        console.error("Error generando UID:", err);
+                                                                        alert("No se pudo generar el UID automáticamente para este colaborador.");
+                                                                        return;
+                                                                    }
+                                                                }
+                                                                setSelectedStaff(colab);
+                                                                setShowScheduleEditor(true);
+                                                            }}
+                                                            className="p-2 text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded-lg transition-colors"
+                                                            title="Ver horarios"
+                                                        >
+                                                            <FaCalendarAlt className="w-4 h-4" />
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => setEditModal({ ...colab, isNew: false })} 
+                                                            className="p-2 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors"
+                                                            title="Editar"
+                                                        >
+                                                            <FaEdit className="w-4 h-4" />
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => handleDelete(colab.uid, colab.id)} 
+                                                            className="p-2 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-lg transition-colors"
+                                                            title="Eliminar"
+                                                        >
+                                                            <FaTrash className="w-4 h-4" />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="bg-white rounded-xl shadow-md p-12 text-center">
+                        <Users className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                        <p className="text-gray-600 font-medium text-lg">No se encontraron registros de personal para esta tienda</p>
+                    </div>
+                )}
 
             {/* MODALES */}
             {editModal && (
@@ -478,49 +634,45 @@ const handleUnlinkEmail = async (staffId) => {
             )}
 
             {showScheduleEditor && selectedStaff && (
-                <div style={{
-                    position: 'fixed',
-                    top: 0,
-                    left: 0,
-                    width: '100vw',
-                    height: '100vh',
-                    backgroundColor: 'rgba(0,0,0,0.5)',
-                    zIndex: 1000,
-                    display: 'flex',
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                }}>
-                    <div style={{
-                        background: 'white',
-                        padding: '1.5rem',
-                        borderRadius: '8px',
-                        maxHeight: '90vh',
-                        overflowY: 'auto'
-                    }}>
-                        <StudyScheduleEditor
-                            uid={selectedStaff.uid}
-                            onClose={() => {
-                                setShowScheduleEditor(false);
-                                setSelectedStaff(null);
-                            }}
-                            onSaved={fetchAllStaffProfiles} // 👈 Actualizar datos después de guardar
-                        />
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+                        <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center rounded-t-2xl">
+                            <h3 className="text-xl font-bold text-gray-800">Editor de Horarios</h3>
+                            <button 
+                                onClick={() => {
+                                    setShowScheduleEditor(false);
+                                    setSelectedStaff(null);
+                                }}
+                                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                            >
+                                <X className="w-5 h-5 text-gray-600" />
+                            </button>
+                        </div>
+                        <div className="p-6">
+                            <StudyScheduleEditor
+                                uid={selectedStaff.uid}
+                                onClose={() => {
+                                    setShowScheduleEditor(false);
+                                    setSelectedStaff(null);
+                                }}
+                                onSaved={fetchAllStaffProfiles}
+                            />
+                        </div>
                     </div>
                 </div>
             )}
 
             {positionModalOpen && (
                 <ModalSelectorDePosiciones
-                    docId={positionTarget?.id} // ✅ Asegúrate que sea `.id`, no `.uid`
+                    docId={positionTarget?.id}
                     onClose={() => setPositionModalOpen(false)}
                 />
             )}
-
-
+            </div>
         </div>
     );
-
 }
+
 export default AdminDashboard;
 
 
