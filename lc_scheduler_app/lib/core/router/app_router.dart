@@ -14,6 +14,8 @@ import '../../features/admin/presentation/screens/positioning_screen.dart';
 import '../../features/admin/presentation/screens/swap_requests_screen.dart';
 import '../../features/admin/presentation/screens/skills_monitor_screen.dart';
 import '../../features/admin/presentation/screens/requirements_screen.dart';
+import '../../features/admin/presentation/screens/skills_management_screen.dart';
+import '../../features/admin/presentation/screens/requirements_editor_screen.dart';
 import '../../features/notifications/presentation/screens/notifications_screen.dart';
 import '../../features/auth/data/providers/auth_provider.dart';
 
@@ -23,22 +25,31 @@ final appRouterProvider = Provider<GoRouter>((ref) {
   return GoRouter(
     initialLocation: '/splash',
     redirect: (context, state) {
-      final isLoggedIn = authState.valueOrNull != null;
+      final isLoggedIn = authState.maybeWhen(
+        data: (user) => user != null,
+        orElse: () => false,
+      );
       final isLoading = authState.isLoading;
+      final hasError = authState.hasError;
       final isSplash = state.matchedLocation == '/splash';
       final isLogin = state.matchedLocation == '/login';
       
       // Si está cargando, mostrar splash
       if (isLoading && !isSplash) return '/splash';
       
-      // Si no está logueado y no está en login, ir a login
-      if (!isLoggedIn && !isLogin && !isSplash) return '/login';
-      
-      // Si está logueado y está en login, ir a home
-      if (isLoggedIn && (isLogin || isSplash)) {
-        // Redirigir según el rol (el rol se obtiene del userDataProvider)
-        return '/home';
+      // Si terminó de cargar (ya no está loading)
+      if (!isLoading) {
+        // Si no está logueado y no está en login, ir a login
+        if (!isLoggedIn && !isLogin) return '/login';
+        
+        // Si está logueado y está en login o splash, ir a home
+        if (isLoggedIn && (isLogin || isSplash)) {
+          return '/home';
+        }
       }
+      
+      // Si hay error, ir a login
+      if (hasError && !isLogin) return '/login';
       
       return null;
     },
@@ -87,6 +98,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: 'requirements',
             builder: (context, state) => const RequirementsScreen(),
+          ),
+          GoRoute(
+            path: 'skills-management',
+            builder: (context, state) => const SkillsManagementScreen(),
+          ),
+          GoRoute(
+            path: 'requirements-editor',
+            builder: (context, state) => const RequirementsEditorScreen(),
           ),
         ],
       ),

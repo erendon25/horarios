@@ -19,6 +19,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _passwordController = TextEditingController();
   bool _isLoading = false;
   bool _obscurePassword = true;
+  bool _rememberMe = true;
   String? _errorMessage;
 
   @override
@@ -286,7 +287,40 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             },
                           ),
 
-                          const SizedBox(height: 28),
+                          const SizedBox(height: 16),
+
+                          // Remember me checkbox
+                          Row(
+                            children: [
+                              SizedBox(
+                                height: 24,
+                                width: 24,
+                                child: Checkbox(
+                                  value: _rememberMe,
+                                  onChanged: (value) {
+                                    setState(() => _rememberMe = value ?? true);
+                                  },
+                                  activeColor: AppTheme.primaryColor,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              GestureDetector(
+                                onTap: () => setState(() => _rememberMe = !_rememberMe),
+                                child: const Text(
+                                  'Recordar mi sesión',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.grey,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+
+                          const SizedBox(height: 24),
 
                           // Login button
                           SizedBox(

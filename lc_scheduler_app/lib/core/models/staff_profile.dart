@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 /// Modelo de perfil de personal con skills y horarios
 class StaffProfile {
   final String id;
@@ -11,6 +13,7 @@ class StaffProfile {
   final List<String> skills; // Áreas que sabe hacer bien
   final List<String> positionAbilities; // Posiciones habilitadas
   final DateTime? carnetExpiration;
+  final DateTime? sanitaryCardDate; // Fecha de vencimiento del carnet de sanidad
   final bool isActive;
   
   const StaffProfile({
@@ -25,10 +28,29 @@ class StaffProfile {
     this.skills = const [],
     this.positionAbilities = const [],
     this.carnetExpiration,
+    this.sanitaryCardDate,
     this.isActive = true,
   });
   
   factory StaffProfile.fromMap(Map<String, dynamic> map, String id) {
+    // Parse sanitaryCardDate from various formats
+    DateTime? parseSanitaryCard() {
+      final value = map['sanitaryCardDate'];
+      if (value == null) return null;
+      if (value is Timestamp) return value.toDate();
+      if (value is String && value.isNotEmpty) return DateTime.tryParse(value);
+      return null;
+    }
+    
+    // Parse carnetExpiration from various formats
+    DateTime? parseCarnetExpiration() {
+      final value = map['carnetExpiration'];
+      if (value == null) return null;
+      if (value is Timestamp) return value.toDate();
+      if (value is String && value.isNotEmpty) return DateTime.tryParse(value);
+      return null;
+    }
+    
     return StaffProfile(
       id: id,
       uid: map['uid'] ?? '',
@@ -40,9 +62,8 @@ class StaffProfile {
       modality: map['modality'] ?? 'fulltime',
       skills: List<String>.from(map['skills'] ?? []),
       positionAbilities: List<String>.from(map['positionAbilities'] ?? []),
-      carnetExpiration: map['carnetExpiration'] != null 
-          ? DateTime.tryParse(map['carnetExpiration']) 
-          : null,
+      carnetExpiration: parseCarnetExpiration(),
+      sanitaryCardDate: parseSanitaryCard(),
       isActive: map['isActive'] ?? true,
     );
   }
@@ -59,14 +80,33 @@ class StaffProfile {
       'skills': skills,
       'positionAbilities': positionAbilities,
       'carnetExpiration': carnetExpiration?.toIso8601String(),
+      'sanitaryCardDate': sanitaryCardDate?.toIso8601String(),
       'isActive': isActive,
     };
   }
   
   String get fullName => '${name} ${lastName ?? ''}'.trim();
   
-  bool get isFullTime => modality.toLowerCase() == 'fulltime';
-  bool get isPartTime => modality.toLowerCase() == 'parttime';
+  bool get isFullTime => modality.toLowerCase().contains('full');
+  bool get isPartTime => modality.toLowerCase().contains('part');
+  
+  /// Fecha efectiva del carnet (usa sanitaryCardDate o carnetExpiration)
+  DateTime? get effectiveCarnetDate => sanitaryCardDate ?? carnetExpiration;
+  
+  /// Verifica si el carnet está vencido
+  bool get isCarnetExpired {
+    final date = effectiveCarnetDate;
+    if (date == null) return false;
+    return date.isBefore(DateTime.now());
+  }
+  
+  /// Verifica si el carnet está por vencer (próximos 30 días)
+  bool get isCarnetExpiringSoon {
+    final date = effectiveCarnetDate;
+    if (date == null) return false;
+    final thirtyDaysFromNow = DateTime.now().add(const Duration(days: 30));
+    return date.isAfter(DateTime.now()) && date.isBefore(thirtyDaysFromNow);
+  }
   
   /// Verifica si tiene un skill específico
   bool hasSkill(String skill) => skills.contains(skill);
@@ -89,6 +129,7 @@ class StaffProfile {
     List<String>? skills,
     List<String>? positionAbilities,
     DateTime? carnetExpiration,
+    DateTime? sanitaryCardDate,
     bool? isActive,
   }) {
     return StaffProfile(
@@ -103,6 +144,7 @@ class StaffProfile {
       skills: skills ?? this.skills,
       positionAbilities: positionAbilities ?? this.positionAbilities,
       carnetExpiration: carnetExpiration ?? this.carnetExpiration,
+      sanitaryCardDate: sanitaryCardDate ?? this.sanitaryCardDate,
       isActive: isActive ?? this.isActive,
     );
   }

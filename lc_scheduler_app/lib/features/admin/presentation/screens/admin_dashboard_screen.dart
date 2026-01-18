@@ -64,7 +64,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
                   
                   const SizedBox(height: 16),
 
-                  // Cards de acceso rápido
+                  // Cards de acceso rápido - Fila 1
                   Row(
                     children: [
                       // Monitor de Skills
@@ -72,11 +72,11 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
                         child: _QuickActionCard(
                           icon: LucideIcons.award,
                           title: 'Skills',
-                          subtitle: 'Monitor de progreso',
+                          subtitle: 'Gestionar skills',
                           gradient: const LinearGradient(
                             colors: [Color(0xFF10B981), Color(0xFF059669)],
                           ),
-                          onTap: () => context.push('/admin/skills-monitor'),
+                          onTap: () => context.push('/admin/skills-management'),
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -95,7 +95,41 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen> {
                     ],
                   ).animate().fadeIn(delay: 150.ms),
                   
+                  const SizedBox(height: 12),
+
+                  // Cards de acceso rápido - Fila 2
+                  Row(
+                    children: [
+                      // Editar Requerimientos
+                      Expanded(
+                        child: _QuickActionCard(
+                          icon: LucideIcons.edit3,
+                          title: 'Editar Req.',
+                          subtitle: 'Modificar posiciones',
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFFEC4899), Color(0xFFDB2777)],
+                          ),
+                          onTap: () => context.push('/admin/requirements-editor'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      // Skills Monitor
+                      Expanded(
+                        child: _QuickActionCard(
+                          icon: LucideIcons.barChart3,
+                          title: 'Monitor',
+                          subtitle: 'Ver progreso',
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFF8B5CF6), Color(0xFF7C3AED)],
+                          ),
+                          onTap: () => context.push('/admin/skills-monitor'),
+                        ),
+                      ),
+                    ],
+                  ).animate().fadeIn(delay: 180.ms),
+                  
                   const SizedBox(height: 24),
+
                   
                   // Título posicionamiento
                   Row(

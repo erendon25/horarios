@@ -38,13 +38,13 @@ class DefaultFirebaseOptions {
     measurementId: 'G-VKGFTSCSMS',
   );
 
-  // Para Android - deberás registrar la app en Firebase Console
+  // Para Android - Configuración extraída de google-services.json
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyDumwsFqGDE4esA-kB_51yrhTl38DeqDTs',
-    appId: '1:1054512970764:android:YOUR_ANDROID_APP_ID', // Actualizar después de registrar
+    apiKey: 'AIzaSyBDwIho0sEZYrgTO70LhipW7_gn-qohKIU',
+    appId: '1:1054512970764:android:6cd0851628968f6663c229',
     messagingSenderId: '1054512970764',
     projectId: 'lc-scheduler',
-    storageBucket: 'lc-scheduler.appspot.com',
+    storageBucket: 'lc-scheduler.firebasestorage.app',
   );
 
   // Para iOS - deberás registrar la app en Firebase Console

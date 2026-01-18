@@ -1,0 +1,91 @@
+﻿Resolving dependencies...
+Downloading packages...
+  _fe_analyzer_shared 91.0.0 (93.0.0 available)
+  analyzer 8.4.1 (10.0.1 available)
+  characters 1.4.0 (1.4.1 available)
+  flutter_riverpod 3.1.0 (3.2.0 available)
+  matcher 0.12.17 (0.12.18 available)
+  material_color_utilities 0.11.1 (0.13.0 available)
+  meta 1.17.0 (1.18.0 available)
+  riverpod 3.1.0 (3.2.0 available)
+  test 1.26.3 (1.29.0 available)
+  test_api 0.7.7 (0.7.9 available)
+  test_core 0.6.12 (0.6.15 available)
+  timezone 0.10.1 (0.11.0 available)
+Got dependencies!
+12 packages have newer versions incompatible with dependency constraints.
+Try `flutter pub outdated` for more information.
+Running Gradle task 'assembleRelease'...                        
+flutter : lib/core/router/app
+_router.dart:26:36: Error: 
+The getter 'valueOrNull' 
+isn't defined for the type 
+'AsyncValue<User?>'.
+En línea: 1 Carácter: 1
++ flutter build apk > 
+build_log.txt 2>&1
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~
+    + CategoryInfo           
+   : NotSpecified: (lib/cor  
+  e/router...cValue<User?>   
+ '.:String) [], RemoteExc    
+eption
+    + FullyQualifiedErrorId  
+   : NativeCommandError
+ 
+ - 'AsyncValue' is from 'pack
+age:riverpod/src/framework.da
+rt' ('../../../../AppData/Loc
+al/Pub/Cache/hosted/pub.dev/r
+iverpod-3.1.0/lib/src/framewo
+rk.dart').
+ - 'User' is from 'package:fi
+rebase_auth/firebase_auth.dar
+t' ('../../../../AppData/Loca
+l/Pub/Cache/hosted/pub.dev/fi
+rebase_auth-6.1.3/lib/firebas
+e_auth.dart').
+Try correcting the name to 
+the name of an existing 
+getter, or defining a getter 
+or field named 'valueOrNull'.
+      final isLoggedIn = 
+authState.valueOrNull != 
+null;
+                             
+      ^^^^^^^^^^^
+Target 
+kernel_snapshot_program 
+failed: Exception
+
+
+FAILURE: Build failed with 
+an exception.
+
+* What went wrong:
+Execution failed for task ':a
+pp:compileFlutterBuildRelease
+'.
+> Process 'command 'C:\Users\
+jenni\Downloads\flutter_windo
+ws_3.38.5-stable\flutter\bin\
+flutter.bat'' finished with 
+non-zero exit value 1
+
+* Try:
+> Run with --stacktrace 
+option to get the stack 
+trace.
+> Run with --info or --debug 
+option to get more log 
+output.
+> Run with --scan to get 
+full insights.
+> Get more help at 
+https://help.gradle.org.
+
+BUILD FAILED in 19s
+Running Gradle task 'assembleRelease'...                           20,4s
+Gradle task assembleRelease 
+failed with exit code 1
