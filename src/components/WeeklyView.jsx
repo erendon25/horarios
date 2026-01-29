@@ -195,6 +195,17 @@ export default function WeeklyView({ perfilId }) {
                                 const extraHrs = (info?.extraHours && !isNaN(info.extraHours) && Number(info.extraHours) > 0)
                                     ? Number(info.extraHours)
                                     : 0;
+
+                                // Calcular hora fin real sumando extras
+                                let displayEnd = info?.end;
+                                if (hasShift && extraHrs > 0) {
+                                    const [h, m] = info.end.split(':').map(Number);
+                                    const minutesToAdd = extraHrs * 60;
+                                    const totalMinutes = h * 60 + m + minutesToAdd;
+                                    const newH = Math.floor(totalMinutes / 60) % 24;
+                                    const newM = Math.floor(totalMinutes % 60);
+                                    displayEnd = `${newH.toString().padStart(2, '0')}:${newM.toString().padStart(2, '0')}`;
+                                }
                                 // ... existing logic ...
                                 return (
                                     <tr key={day} className="hover:bg-blue-50/50 transition-colors">
@@ -205,7 +216,7 @@ export default function WeeklyView({ perfilId }) {
                                             {hasShift && !isOff && !isFeriado ? (
                                                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 text-blue-700 font-semibold border border-blue-100">
                                                     <Clock className="w-3.5 h-3.5" />
-                                                    {info.start} - {info.end}
+                                                    {info.start} - {displayEnd}
                                                 </span>
                                             ) : (
                                                 <span className="text-gray-400">
