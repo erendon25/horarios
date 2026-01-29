@@ -52,6 +52,7 @@ function HolidayForm() {
         <label className="block mb-1">Selecciona una fecha</label>
         <input
           type="date"
+          max={new Date().toISOString().split("T")[0]}
           value={selectedDate}
           onChange={e => setSelectedDate(e.target.value)}
           className="w-full border p-2 rounded"

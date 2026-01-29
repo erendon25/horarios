@@ -26,7 +26,8 @@ import {
     ChevronRight
 } from 'lucide-react';
 import { HOURS } from './ScheduleHeatmapMatrix';
-import ModalSelectorDePosiciones from './ModalSelectorDePosiciones'
+import ModalSelectorDePosiciones from './ModalSelectorDePosiciones';
+import { HOLIDAYS_2026 } from '../constants/holidays';
 
 const weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const weekdayLabels = {
@@ -152,11 +153,49 @@ export default function WeeklyScheduleEditor() {
     const saveSchedules = async () => {
         setSaveStatus('saving');
         try {
+            // 1. Guardar Horarios (Batch principal)
             const batch = writeBatch(db);
             for (const staffId in schedules) {
                 const schedule = schedules[staffId];
                 const ref = doc(db, 'schedules', `${staffId}_${wk}`);
                 batch.set(ref, schedule);
+            }
+            // 2. Detectar y Guardar Feriados Trabajados
+            if (weekStartDate) {
+                const [y, m, d] = weekStartDate.split('-').map(Number);
+                const start = new Date(y, m - 1, d);
+
+                for (const staffId in schedules) {
+                    const personSchedule = schedules[staffId];
+                    if (!personSchedule) continue;
+
+                    weekdays.forEach((dayName, idx) => {
+                        const shift = personSchedule[dayName];
+                        // Si trabaja (no off, no feriado declarado, tiene entrada/salida)
+                        if (shift && !shift.off && !shift.feriado && shift.start && shift.end) {
+                            const currentDay = new Date(start);
+                            currentDay.setDate(start.getDate() + idx);
+                            const dateStr = [
+                                currentDay.getFullYear(),
+                                String(currentDay.getMonth() + 1).padStart(2, '0'),
+                                String(currentDay.getDate()).padStart(2, '0')
+                            ].join('-');
+
+                            const holiday = HOLIDAYS_2026.find(h => h.date === dateStr);
+                            if (holiday) {
+                                // Usar setDoc con ID determinista para evitar duplicados
+                                const holidayRef = doc(db, 'feriados_trabajados', `${staffId}_${dateStr}`);
+                                batch.set(holidayRef, {
+                                    uid: staff.find(s => s.id === staffId)?.uid || '', // intentar buscar uid
+                                    staffId: staffId,
+                                    date: dateStr,
+                                    name: holiday.name,
+                                    createdAt: new Date().toISOString()
+                                });
+                            }
+                        }
+                    });
+                }
             }
             await batch.commit();
             setSaveStatus('success');

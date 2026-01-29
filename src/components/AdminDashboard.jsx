@@ -94,59 +94,59 @@ function AdminDashboard() {
     };
 
     const fetchAllPositions = async () => {
-  const snapshot = await getDocs(collection(db, "positioning_requirements"));
-  const positions = new Set();
-  snapshot.forEach(doc => {
-    const posList = doc.data().positions || [];
-    posList.forEach(pos => positions.add(pos));
-  });
-  setPositionList(Array.from(positions));
-};
+        const snapshot = await getDocs(collection(db, "positioning_requirements"));
+        const positions = new Set();
+        snapshot.forEach(doc => {
+            const posList = doc.data().positions || [];
+            posList.forEach(pos => positions.add(pos));
+        });
+        setPositionList(Array.from(positions));
+    };
 
 
-const exportCarnetExpiringPDF = () => {
-  const doc = new jsPDF();
-  doc.text("Colaboradores con carnet de sanidad próximo a vencer", 14, 14);
+    const exportCarnetExpiringPDF = () => {
+        const doc = new jsPDF();
+        doc.text("Colaboradores con carnet de sanidad próximo a vencer", 14, 14);
 
-  const filtered = staff.filter(s => isCardExpiringSoon(s.sanitaryCardDate));
-  if (filtered.length === 0) {
-    doc.text("No hay colaboradores con carnet próximo a vencer.", 14, 30);
-  } else {
-    const rows = filtered.map(s => [
-      s.name + " " + s.lastName,
-      (() => {
-        const [y, m, d] = s.sanitaryCardDate.split("-");
-        return `${d}/${m}/${y}`;
-      })()
-    ]);
+        const filtered = staff.filter(s => isCardExpiringSoon(s.sanitaryCardDate));
+        if (filtered.length === 0) {
+            doc.text("No hay colaboradores con carnet próximo a vencer.", 14, 30);
+        } else {
+            const rows = filtered.map(s => [
+                s.name + " " + s.lastName,
+                (() => {
+                    const [y, m, d] = s.sanitaryCardDate.split("-");
+                    return `${d}/${m}/${y}`;
+                })()
+            ]);
 
-    autoTable(doc, {
-      head: [["Nombre", "Fecha de Vencimiento"]],
-      body: rows,
-      startY: 20
-    });
-  }
+            autoTable(doc, {
+                head: [["Nombre", "Fecha de Vencimiento"]],
+                body: rows,
+                startY: 20
+            });
+        }
 
-  doc.save("carnets_por_vencer.pdf");
-};
+        doc.save("carnets_por_vencer.pdf");
+    };
 
 
     const generateUid = () => {
         return Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
     };
-const handleUnlinkEmail = async (staffId) => {
-  try {
-    await updateDoc(doc(db, 'staff_profiles', staffId), {
-      email: '',
-      uid: '' // ❗ Quitamos también el UID
-    });
-    alert('Correo y UID desvinculados exitosamente.');
-    await fetchAllStaffProfiles();
-  } catch (err) {
-    console.error("Error desvinculando correo:", err);
-    alert("No se pudo desvincular el correo.");
-  }
-};
+    const handleUnlinkEmail = async (staffId) => {
+        try {
+            await updateDoc(doc(db, 'staff_profiles', staffId), {
+                email: '',
+                uid: '' // ❗ Quitamos también el UID
+            });
+            alert('Correo y UID desvinculados exitosamente.');
+            await fetchAllStaffProfiles();
+        } catch (err) {
+            console.error("Error desvinculando correo:", err);
+            alert("No se pudo desvincular el correo.");
+        }
+    };
     const fetchStoreName = async () => {
         if (!userData?.storeId) return;
         try {
@@ -168,7 +168,7 @@ const handleUnlinkEmail = async (staffId) => {
         try {
             if (colab.uid) {
                 feriados = await getWorkedHolidaysByUid(colab.uid);
-                
+
                 const staffDoc = await getDoc(doc(db, 'staff_profiles', colab.id));
                 if (staffDoc.exists()) {
                     const profileData = staffDoc.data();
@@ -237,7 +237,7 @@ const handleUnlinkEmail = async (staffId) => {
             fetchAllStaffProfiles(); // Usamos la función alternativa
         }
     }, [userData]);
-    
+
 
 
 
@@ -292,38 +292,38 @@ const handleUnlinkEmail = async (staffId) => {
         );
     };
 
- const handleEditSave = async () => {
-    try {
-      if (!editModal.name || !editModal.lastName) {
-        alert("Nombre y apellido son obligatorios.");
-        return;
-      }
-      const payload = {
-        name: editModal.name,
-        lastName: editModal.lastName,
-        modality: editModal.modality,
-        dni: editModal.dni || "",
-        position: editModal.position || "colaborador",
-        email: editModal.email || "",
-        storeId: userData?.storeId || "",
-        storeName: storeName || "",
-        study_schedule: editModal.study_schedule || {},
-        sanitaryCardDate: editModal.sanitaryCardDate || "",
-      };
+    const handleEditSave = async () => {
+        try {
+            if (!editModal.name || !editModal.lastName) {
+                alert("Nombre y apellido son obligatorios.");
+                return;
+            }
+            const payload = {
+                name: editModal.name,
+                lastName: editModal.lastName,
+                modality: editModal.modality,
+                dni: editModal.dni || "",
+                position: editModal.position || "colaborador",
+                email: editModal.email || "",
+                storeId: userData?.storeId || "",
+                storeName: storeName || "",
+                study_schedule: editModal.study_schedule || {},
+                sanitaryCardDate: editModal.sanitaryCardDate || "",
+            };
 
-      if (editModal.isNew) {
-        await addDoc(collection(db, "staff_profiles"), payload);
-      } else {
-        await updateDoc(doc(db, "staff_profiles", editModal.id), payload);
-      }
+            if (editModal.isNew) {
+                await addDoc(collection(db, "staff_profiles"), payload);
+            } else {
+                await updateDoc(doc(db, "staff_profiles", editModal.id), payload);
+            }
 
-      setEditModal(null);
-      await fetchAllStaffProfiles();
-    } catch (err) {
-      console.error("Error al guardar usuario:", err);
-      alert(`Error al guardar: ${err.message}`);
-    }
-  };    const handleDelete = async (uid, id) => {
+            setEditModal(null);
+            await fetchAllStaffProfiles();
+        } catch (err) {
+            console.error("Error al guardar usuario:", err);
+            alert(`Error al guardar: ${err.message}`);
+        }
+    }; const handleDelete = async (uid, id) => {
         const confirm = window.confirm("¿Estás seguro de que deseas eliminar este usuario?");
         if (!confirm) return;
         try {
@@ -342,7 +342,7 @@ const handleUnlinkEmail = async (staffId) => {
         const matchesSearch = fullName.includes(searchTerm.toLowerCase());
         return matchesModality && matchesSearch;
     });
-    
+
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
             {/* Header */}
@@ -361,36 +361,36 @@ const handleUnlinkEmail = async (staffId) => {
                             )}
                         </div>
                         <div className="flex flex-wrap gap-2">
-                            <button 
-                                onClick={() => navigate("/admin/requirements/lunes")} 
+                            <button
+                                onClick={() => navigate("/admin/requirements/lunes")}
                                 className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
                                 <Settings className="w-4 h-4" />
                                 Requerimientos
                             </button>
-                            <button 
-                                onClick={() => navigate("/admin/generate-schedules")} 
+                            <button
+                                onClick={() => navigate("/admin/generate-schedules")}
                                 className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
                                 <Calendar className="w-4 h-4" />
                                 Horarios
                             </button>
-                            <button 
-                                onClick={() => navigate("/admin/nocturnidad")} 
+                            <button
+                                onClick={() => navigate("/admin/nocturnidad")}
                                 className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
                                 <FileText className="w-4 h-4" />
                                 Consultas
                             </button>
-                            <button 
-                                onClick={exportCarnetExpiringPDF} 
+                            <button
+                                onClick={exportCarnetExpiringPDF}
                                 className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
                                 <FaFilePdf className="w-4 h-4" />
                                 Carnets PDF
                             </button>
-                            <button 
-                                onClick={handleLogout} 
+                            <button
+                                onClick={handleLogout}
                                 className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-gray-700 to-gray-800 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
                                 <LogOut className="w-4 h-4" />
@@ -466,15 +466,15 @@ const handleUnlinkEmail = async (staffId) => {
                             <option value="Full-Time">Full-Time</option>
                             <option value="Part-Time">Part-Time</option>
                         </select>
-                        <button 
-                            onClick={handleAddStaff} 
+                        <button
+                            onClick={handleAddStaff}
                             className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium whitespace-nowrap"
                         >
                             <Plus className="w-5 h-5" />
                             Agregar Personal
                         </button>
-                        <button 
-                            onClick={fetchAllStaffProfiles} 
+                        <button
+                            onClick={fetchAllStaffProfiles}
                             className="flex items-center gap-2 px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg shadow-sm hover:shadow-md transform hover:scale-105 transition-all duration-200 font-medium whitespace-nowrap"
                         >
                             <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
@@ -504,14 +504,14 @@ const handleUnlinkEmail = async (staffId) => {
                                 </thead>
                                 <tbody className="bg-white divide-y divide-gray-200">
                                     {filteredStaff.map((colab, idx) => (
-                                        <tr 
-                                            key={idx} 
+                                        <tr
+                                            key={idx}
                                             className="hover:bg-blue-50 transition-colors duration-150 group"
                                         >
                                             <td className="px-8 py-5 relative">
                                                 <div className="flex flex-col gap-1">
-                                                    <span 
-                                                        onClick={() => handleViewHolidays(colab)} 
+                                                    <span
+                                                        onClick={() => handleViewHolidays(colab)}
                                                         className="text-blue-600 hover:text-blue-800 font-medium cursor-pointer hover:underline transition-colors text-base leading-relaxed"
                                                     >
                                                         {`${colab.name} ${colab.lastName}`}
@@ -530,11 +530,10 @@ const handleUnlinkEmail = async (staffId) => {
                                             </td>
                                             <td className="px-8 py-5">
                                                 <div className="flex items-center">
-                                                    <span className={`px-4 py-2 rounded-full text-sm font-semibold inline-block ${
-                                                        colab.modality === "Full-Time" 
-                                                            ? "bg-green-100 text-green-800" 
+                                                    <span className={`px-4 py-2 rounded-full text-sm font-semibold inline-block ${colab.modality === "Full-Time"
+                                                            ? "bg-green-100 text-green-800"
                                                             : "bg-purple-100 text-purple-800"
-                                                    }`}>
+                                                        }`}>
                                                         {colab.modality}
                                                     </span>
                                                 </div>
@@ -544,13 +543,13 @@ const handleUnlinkEmail = async (staffId) => {
                                             </td>
                                             <td className="px-6 py-5 text-center">
                                                 <div className="flex flex-col items-center gap-3">
-                                                    {colab.email ? (
+                                                    {colab.uid ? (
                                                         <FaCheck className="text-green-500 text-xl" />
                                                     ) : (
                                                         <FaTimes className="text-red-500 text-xl" />
                                                     )}
-                                                    <button 
-                                                        onClick={() => openPositionModal(colab)} 
+                                                    <button
+                                                        onClick={() => openPositionModal(colab)}
                                                         className="text-xs text-indigo-600 hover:text-indigo-800 hover:underline font-medium whitespace-nowrap"
                                                     >
                                                         Asignar posiciones
@@ -559,10 +558,10 @@ const handleUnlinkEmail = async (staffId) => {
                                             </td>
                                             <td className="px-6 py-5">
                                                 <div className="flex flex-col gap-2">
-                                                    <button 
-                                                        onClick={() => handleUnlinkEmail(colab.id)} 
-                                                        className="text-xs text-red-600 hover:text-red-800 hover:underline font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1" 
-                                                        disabled={!colab.email}
+                                                    <button
+                                                        onClick={() => handleUnlinkEmail(colab.id)}
+                                                        className="text-xs text-red-600 hover:text-red-800 hover:underline font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                                                        disabled={!colab.uid}
                                                     >
                                                         <FaUnlink className="inline" />
                                                         Desvincular
@@ -590,15 +589,15 @@ const handleUnlinkEmail = async (staffId) => {
                                                         >
                                                             <FaCalendarAlt className="w-4 h-4" />
                                                         </button>
-                                                        <button 
-                                                            onClick={() => setEditModal({ ...colab, isNew: false })} 
+                                                        <button
+                                                            onClick={() => setEditModal({ ...colab, isNew: false })}
                                                             className="p-2 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors"
                                                             title="Editar"
                                                         >
                                                             <FaEdit className="w-4 h-4" />
                                                         </button>
-                                                        <button 
-                                                            onClick={() => handleDelete(colab.uid, colab.id)} 
+                                                        <button
+                                                            onClick={() => handleDelete(colab.uid, colab.id)}
                                                             className="p-2 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-lg transition-colors"
                                                             title="Eliminar"
                                                         >
@@ -620,54 +619,54 @@ const handleUnlinkEmail = async (staffId) => {
                     </div>
                 )}
 
-            {/* MODALES */}
-            {editModal && (
-                <StaffModal
-                    staff={editModal.isNew ? null : editModal}
-                    userData={userData}
-                    onClose={() => setEditModal(null)}
-                    onSaved={async () => {
-                        setEditModal(null);
-                        await fetchAllStaffProfiles();
-                    }}
-                />
-            )}
+                {/* MODALES */}
+                {editModal && (
+                    <StaffModal
+                        staff={editModal.isNew ? null : editModal}
+                        userData={userData}
+                        onClose={() => setEditModal(null)}
+                        onSaved={async () => {
+                            setEditModal(null);
+                            await fetchAllStaffProfiles();
+                        }}
+                    />
+                )}
 
-            {showScheduleEditor && selectedStaff && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-                        <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center rounded-t-2xl">
-                            <h3 className="text-xl font-bold text-gray-800">Editor de Horarios</h3>
-                            <button 
-                                onClick={() => {
-                                    setShowScheduleEditor(false);
-                                    setSelectedStaff(null);
-                                }}
-                                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                            >
-                                <X className="w-5 h-5 text-gray-600" />
-                            </button>
-                        </div>
-                        <div className="p-6">
-                            <StudyScheduleEditor
-                                uid={selectedStaff.uid}
-                                onClose={() => {
-                                    setShowScheduleEditor(false);
-                                    setSelectedStaff(null);
-                                }}
-                                onSaved={fetchAllStaffProfiles}
-                            />
+                {showScheduleEditor && selectedStaff && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                        <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+                            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center rounded-t-2xl">
+                                <h3 className="text-xl font-bold text-gray-800">Editor de Horarios</h3>
+                                <button
+                                    onClick={() => {
+                                        setShowScheduleEditor(false);
+                                        setSelectedStaff(null);
+                                    }}
+                                    className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                                >
+                                    <X className="w-5 h-5 text-gray-600" />
+                                </button>
+                            </div>
+                            <div className="p-6">
+                                <StudyScheduleEditor
+                                    uid={selectedStaff.uid}
+                                    onClose={() => {
+                                        setShowScheduleEditor(false);
+                                        setSelectedStaff(null);
+                                    }}
+                                    onSaved={fetchAllStaffProfiles}
+                                />
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )}
 
-            {positionModalOpen && (
-                <ModalSelectorDePosiciones
-                    docId={positionTarget?.id}
-                    onClose={() => setPositionModalOpen(false)}
-                />
-            )}
+                {positionModalOpen && (
+                    <ModalSelectorDePosiciones
+                        docId={positionTarget?.id}
+                        onClose={() => setPositionModalOpen(false)}
+                    />
+                )}
             </div>
         </div>
     );

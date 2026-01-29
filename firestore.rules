@@ -78,9 +78,14 @@ service cloud.firestore {
       allow get: if true;
       allow list: if request.auth != null;
       allow create: if isAdmin() || isSuperAdmin();
-      allow update: if isAdmin() || isSuperAdmin() ||
+      allow update: if
+        // 1. Admins logic
+        isAdmin() || isSuperAdmin() ||
+        // 2. Linking logic for regular users
         (request.auth != null &&
-         (resource == null || !("uid" in resource.data) || resource.data.uid == null || resource.data.uid == "") &&
+         // Ensure the doc is NOT already linked
+         (!("uid" in resource.data) || resource.data.uid == null || resource.data.uid == "") &&
+         // Ensure they are claiming it for themselves
          request.resource.data.uid == request.auth.uid);
       allow delete: if isAdmin() || isSuperAdmin();
     }

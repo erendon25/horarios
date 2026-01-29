@@ -74,7 +74,7 @@ const CollaboratorDashboard = () => {
       const libres = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
         // 👇 sin correo ⇒ candidato a vincular
-        .filter(p => !p.email || p.email.trim() === "");
+        .filter(p => !p.uid);
 
       // ordenar alfabéticamente para mayor comodidad
       libres.sort((a, b) => a.name.localeCompare(b.name, "es"));
