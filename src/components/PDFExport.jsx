@@ -20,7 +20,7 @@ const hrs = (s, e) => {
 export const exportSchedulePDF = (staff, schedules, weekKey) => {
     // Extraer la fecha de inicio del weekKey (formato: "2024-01-15_to_2024-01-21")
     const dateStr = weekKey.split('_to_')[0];
-    
+
     if (!dateStr) {
         alert('Formato de semana inválido');
         return;
@@ -48,10 +48,33 @@ export const exportSchedulePDF = (staff, schedules, weekKey) => {
         const row = [nombre, p.modality || '--'];
         DAYS.forEach(d => {
             const e = schedules[p.id]?.[d];
-            row.push(turnoTxt(e));
-            if (e?.start && e?.end && !e.off && !e.feriado) tot += hrs(e.start, e.end);
+
+            // Lógica para mostrar horario extendido si hay horas extras
+            let displayTxt = 'S/A';
+            if (e?.off) displayTxt = 'DESCANSO';
+            else if (e?.feriado) displayTxt = 'FERIADO';
+            else if (e?.start && e?.end) {
+                let finalEnd = e.end;
+                let extraToAdd = 0;
+
+                if (e.extraHours && !isNaN(e.extraHours) && Number(e.extraHours) > 0) {
+                    extraToAdd = Number(e.extraHours);
+                    const [eh, em] = e.end.split(':').map(Number);
+                    const totalMins = eh * 60 + em + (extraToAdd * 60);
+                    const newH = Math.floor(totalMins / 60) % 24;
+                    const newM = totalMins % 60;
+                    finalEnd = `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
+                }
+
+                displayTxt = `${e.start}-${finalEnd}`;
+
+                // Sumar al total
+                tot += hrs(e.start, e.end) + extraToAdd;
+            }
+
+            row.push(displayTxt);
         });
-        if (p.modality === 'Full-Time') tot -= 4.5;
+        if (p.modality === 'Full-Time') tot -= 4.5; // Ajuste FT (si aplica)
         row.push(tot.toFixed(2));
         return row;
     });
@@ -69,21 +92,49 @@ export const exportSchedulePDF = (staff, schedules, weekKey) => {
     pdf.save(`horarios_${fmt(start)}_${fmt(end)}.pdf`);
 };
 
-export const exportGroupedPositionsPDF = (
+const getBase64ImageFromURL = (url) => {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.crossOrigin = 'Anonymous';
+        img.src = url;
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            resolve(canvas.toDataURL('image/png'));
+        };
+        img.onerror = () => resolve(null);
+    });
+};
+
+export const exportGroupedPositionsPDF = async (
     staff,
     schedules,
     selectedDay,
+    dateText = '',
     turno = 'ambos',
-    logoB64 = null,
-    siteName = ''
+    orderedPositions = []
 ) => {
     const pdf = new jsPDF('p', 'pt', 'a4');
-    const corte = 14 * 60;
-    const minTarde = 12 * 60;
-    const pageW = pdf.internal.pageSize.getWidth();
-    const colW = (pageW - 60) / 2;
-    const maxY = pdf.internal.pageSize.getHeight() - 40;
+    const logoB64 = await getBase64ImageFromURL('/images/logo.png');
 
+    // Configuración general
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const margin = 30;
+    const colWidth = (pageWidth - (margin * 3)) / 2; // Dos columnas con margen central
+
+    // Colores corporativos (ajusta según la marca)
+    const primaryColor = [41, 128, 185]; // Azul
+    const secondaryColor = [52, 73, 94]; // Gris oscuro
+    const accentColor = [236, 240, 241]; // Gris muy claro
+
+    const corte = 14 * 60; // 14:00
+    const minTarde = 12 * 60; // 12:00
+
+    // Agrupar datos
     const grupos = { mañana: {}, tarde: {} };
 
     staff.forEach(({ id, name, modality }) => {
@@ -91,90 +142,304 @@ export const exportGroupedPositionsPDF = (
         const info = schedules[id]?.[selectedDay];
         if (!info?.position || !info.start || !info.end) return;
 
-        const [sh, sm] = info.start.split(':').map(Number);
+        let [sh, sm] = info.start.split(':').map(Number);
         const startMin = sh * 60 + sm;
-        const [eh, em] = info.end.split(':').map(Number);
-        let endMin = eh * 60 + em;
+        let [eh, em] = info.end.split(':').map(Number);
+
+        // --- LOGICA DE SUMA DE HORAS EXTRAS (VISUAL) ---
+        let finalEndH = eh;
+        let finalEndM = em;
+
+        let extraVal = 0;
+        if (info.extraHours) {
+            // Asegurar que convertimos a número correctamente
+            extraVal = parseFloat(String(info.extraHours));
+        }
+
+        if (!isNaN(extraVal) && extraVal > 0) {
+            const extraMins = extraVal * 60;
+            const originalEndMins = eh * 60 + em;
+            const newEndMins = originalEndMins + extraMins;
+
+            finalEndH = Math.floor(newEndMins / 60) % 24;
+            finalEndM = newMins % 60;
+        }
+        // -----------------------------------------------
+
+        let endMin = finalEndH * 60 + finalEndM;
         if (endMin <= startMin) endMin += 1440;
-        if (info.end === '00:00') endMin = startMin + 1440;
+
+        // Formatear nueva salida
+        const finalEndStr = `${String(finalEndH).padStart(2, '0')}:${String(finalEndM).padStart(2, '0')}`;
 
         const displayName = name ? name.toUpperCase() : 'SIN NOMBRE';
 
-        if ((turno === 'mañana' || turno === 'ambos') && startMin < corte) {
-            (grupos.mañana[info.position] = grupos.mañana[info.position] || [])
-                .push({ n: displayName, mod: modality, h: `${info.start}-${info.end}` });
+        // DEBUG: Agregar marca si hay horas extras
+        let label = displayName;
+        if (extraVal > 0) {
+            label += ` (+${extraVal}h)`;
+            // console.log(`DEBUG ACTIVE: ${label}`); 
         }
+
+        // Usar finalEndStr para el horario mostrado
+        const entry = { n: label, mod: modality, h: `${info.start} - ${finalEndStr}` };
+
+        // Lógica de turno (usando la hora base para categorizar, o la extendida? 
+        // Usualmente mañna/tarde se define por el INICIO o bloqe principal.
+        // Mantendremos lógica actual basada en startMin)
+        if ((turno === 'mañana' || turno === 'ambos') && startMin < corte) {
+            if (!grupos.mañana[info.position]) grupos.mañana[info.position] = [];
+            grupos.mañana[info.position].push(entry);
+        }
+
         const enTarde = startMin >= minTarde || startMin >= corte || endMin > corte;
         if (enTarde && (turno === 'tarde' || turno === 'ambos')) {
-            (grupos.tarde[info.position] = grupos.tarde[info.position] || [])
-                .push({ n: displayName, mod: modality, h: `${info.start}-${info.end}` });
+            if (!grupos.tarde[info.position]) grupos.tarde[info.position] = [];
+            grupos.tarde[info.position].push(entry);
         }
     });
 
-    const addHeaderFooter = () => {
-        if (logoB64) pdf.addImage(logoB64, 'PNG', 20, 12, 60, 25);
-        if (siteName) {
-            pdf.setFontSize(9);
-            pdf.text(siteName, 20, pdf.internal.pageSize.getHeight() - 15);
+    // Función Header
+    const addHeader = (titleSuffix) => {
+        // Fondo del header
+        pdf.setFillColor(250, 250, 250);
+        pdf.rect(0, 0, pageWidth, 80, 'F');
+
+        // Logo
+        if (logoB64) {
+            pdf.addImage(logoB64, 'PNG', margin, 15, 100, 50, undefined, 'FAST');
         }
+
+        // Título
+        pdf.setFontSize(18);
+        pdf.setTextColor(...secondaryColor);
+        pdf.setFont('helvetica', 'bold');
+        const title = `POSICIONAMIENTO DIARIO`;
+        const titleW = pdf.getTextWidth(title);
+        pdf.text(title, pageWidth - margin - titleW, 35);
+
+        // Subtítulo (Fecha y turno)
+        pdf.setFontSize(12);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(100);
+        const subtitle = `${dateText || selectedDay.toUpperCase()} | ${titleSuffix.toUpperCase()}`;
+        const subW = pdf.getTextWidth(subtitle);
+        pdf.text(subtitle, pageWidth - margin - subW, 55);
+
+        // Línea separadora
+        pdf.setDrawColor(...primaryColor);
+        pdf.setLineWidth(1.5);
+        pdf.line(margin, 80, pageWidth - margin, 80);
     };
-    const drawTitle = t => {
-        const str = `Posicionamiento de turno (${t})`;
-        pdf.setFontSize(15);
-        pdf.text(str,
-            (pdf.internal.pageSize.getWidth() - pdf.getTextWidth(str)) / 2,
-            40
-        );
+
+    // Función Footer
+    const addFooter = (pageNumber) => {
+        pdf.setFontSize(8);
+        pdf.setTextColor(150);
+        const text = `Página ${pageNumber} - Generado el ${new Date().toLocaleDateString()}`;
+        pdf.text(text, pageWidth / 2, pageHeight - 15, { align: 'center' });
     };
 
-    const addTable = (x, y, pos, rows, width) => {
-        autoTable(pdf, {
-            startY: y,
-            margin: { left: x, right: 20 },
-            tableWidth: width,
-            theme: 'grid',
-            styles: { fontSize: 9, cellPadding: 1.4 },
-            headStyles: { fillColor: [44, 130, 201], textColor: 255, fontStyle: 'bold' },
-            head: [[pos]],
-            body: rows.map(r => [`• ${r.n} (${r.mod}): ${r.h}`])
-        });
-        return pdf.lastAutoTable.finalY + 10;
-    };
+    // Renderizar tablas
+    const turnosToRender = ['mañana', 'tarde'].filter(t => turno === 'ambos' || turno === t);
 
-    ['mañana', 'tarde']
-        .filter(t => turno === 'ambos' || turno === t)
-        .forEach((t, idx) => {
-            const posiciones = Object.entries(grupos[t]);
-            if (!posiciones.length) return;
+    for (let i = 0; i < turnosToRender.length; i++) {
+        const t = turnosToRender[i];
 
-            if (idx) pdf.addPage();
-            addHeaderFooter();
-            drawTitle(t);
+        // Obtener entradas
+        let entradas = Object.entries(grupos[t]);
 
-            let yL = 70, yR = 70;
-            posiciones.forEach(([pos, rows], i) => {
-                const isLeft = i % 2 === 0;
-                const x = isLeft ? 20 : 20 + colW + 20;
-                const newY = addTable(x, isLeft ? yL : yR, pos, rows, colW);
+        // Ordenar según orderedPositions si existe
+        if (orderedPositions && orderedPositions.length > 0) {
+            entradas.sort((a, b) => {
+                const idxA = orderedPositions.indexOf(a[0]);
+                const idxB = orderedPositions.indexOf(b[0]);
+                // Si ambos están en la lista, comparar índices
+                if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+                // Si uno está y el otro no, el que está va primero
+                if (idxA !== -1) return -1;
+                if (idxB !== -1) return 1;
+                // Si ninguno está, alfabético
+                return a[0].localeCompare(b[0]);
+            });
+        }
 
-                if (isLeft) yL = newY; else yR = newY;
+        if (entradas.length === 0 && turnosToRender.length === 1) {
+            // Caso borde vacío
+            addHeader(t);
+            pdf.setFontSize(12);
+            pdf.text("No hay asignaciones para este turno.", margin, 100);
+            continue;
+        }
+        if (entradas.length === 0) continue;
 
-                if ((isLeft ? yL : yR) > maxY) {
-                    pdf.addPage();
-                    addHeaderFooter();
-                    drawTitle(t);
-                    yL = yR = 70;
+        if (i > 0) pdf.addPage();
+        addHeader(t);
+
+        let yLeft = 100;
+        let yRight = 100;
+
+        // Distribuir en dos columnas
+        entradas.forEach(([pos, rows], idx) => {
+            const isLeft = idx % 2 === 0;
+            const currentY = isLeft ? yLeft : yRight;
+            const xPos = isLeft ? margin : margin + colWidth + margin;
+
+            // Verificar espacio
+            if (currentY > pageHeight - 60) {
+                pdf.addPage();
+                addHeader(t);
+                yLeft = 100;
+                yRight = 100;
+                // Recalcular Y
+            }
+
+            // Título de la posición
+            /*
+            pdf.setFontSize(11);
+            pdf.setFont('helvetica', 'bold');
+            pdf.setTextColor(...primaryColor);
+            pdf.text(pos.toUpperCase(), xPos, (isLeft ? yLeft : yRight) - 5);
+            */
+
+            autoTable(pdf, {
+                startY: currentY,
+                margin: { left: xPos },
+                tableWidth: colWidth,
+                theme: 'grid',
+                head: [[pos.toUpperCase()]],
+                body: rows.map(r => [`${r.n}\n${r.mod} • ${r.h}`]),
+                styles: {
+                    fontSize: 9,
+                    cellPadding: 4,
+                    overflow: 'linebreak',
+                    valign: 'middle'
+                },
+                headStyles: {
+                    fillColor: primaryColor,
+                    textColor: 255,
+                    fontStyle: 'bold',
+                    fontSize: 10,
+                    halign: 'center'
+                },
+                columnStyles: {
+                    0: { cellWidth: 'auto' }
+                },
+                alternateRowStyles: {
+                    fillColor: accentColor
+                },
+                didDrawPage: (data) => {
+                    // Solo dibujar header/footer en la primera llamada de página automática si no es la inicial nuestra
+                    // Pero como manejamos addPage manual, mejor desactivar el header hook estándar y usar el nuestro
                 }
             });
 
-            if (posiciones.length === 1) {
-                pdf.deletePage(pdf.getNumberOfPages());
-                pdf.addPage();
-                addHeaderFooter();
-                drawTitle(t);
-                addTable(20, 70, posiciones[0][0], posiciones[0][1], pageW - 40);
-            }
+            const finalY = pdf.lastAutoTable.finalY + 15;
+            if (isLeft) yLeft = finalY;
+            else yRight = finalY;
         });
 
-    pdf.save(`posicionamiento_${selectedDay}_${turno}.pdf`);
+        addFooter(pdf.internal.getNumberOfPages());
+    }
+
+    pdf.save(`posicionamiento_${selectedDay}_${turno}_v${Date.now()}.pdf`);
+};
+
+export const exportExtraHoursReport = async (staff, schedules, weekKey) => {
+    const pdf = new jsPDF('p', 'pt', 'a4');
+    const logoB64 = await getBase64ImageFromURL('/images/logo.png');
+
+    const margin = 30;
+    const pageWidth = pdf.internal.pageSize.getWidth();
+
+    // Header
+    const addHeader = (page) => {
+        pdf.setFillColor(250, 250, 250);
+        pdf.rect(0, 0, pageWidth, 80, 'F');
+        if (logoB64) pdf.addImage(logoB64, 'PNG', margin, 15, 100, 50, undefined, 'FAST');
+
+        pdf.setFontSize(16);
+        pdf.setTextColor(41, 128, 185);
+        pdf.setFont('helvetica', 'bold');
+        pdf.text("REPORTE DE HORAS EXTRAS", pageWidth - margin, 40, { align: 'right' });
+
+        pdf.setFontSize(10);
+        pdf.setTextColor(100);
+        pdf.setFont('helvetica', 'normal');
+        pdf.text(`Semana: ${weekKey}`, pageWidth - margin, 55, { align: 'right' });
+
+        pdf.setDrawColor(41, 128, 185);
+        pdf.setLineWidth(1);
+        pdf.line(margin, 80, pageWidth - margin, 80);
+    };
+
+    // Recopilar datos
+    const reportData = [];
+    const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    const dayNames = { monday: 'Lunes', tuesday: 'Martes', wednesday: 'Miércoles', thursday: 'Jueves', friday: 'Viernes', saturday: 'Sábado', sunday: 'Domingo' };
+
+    staff.forEach(p => {
+        const schedule = schedules[p.id] || {};
+        days.forEach(day => {
+            const info = schedule[day];
+            if (info && info.extraHours && !isNaN(info.extraHours) && Number(info.extraHours) > 0) {
+                // Calcular turno extendido para mostrar
+                let endStr = info.end;
+                const extraVal = Number(info.extraHours);
+                if (info.end && info.start) {
+                    const [eh, em] = info.end.split(':').map(Number);
+                    const totalMins = eh * 60 + em + (extraVal * 60);
+                    const finalH = Math.floor(totalMins / 60) % 24;
+                    const finalM = totalMins % 60;
+                    endStr = `${String(finalH).padStart(2, '0')}:${String(finalM).padStart(2, '0')}`;
+                }
+
+                reportData.push({
+                    name: `${p.name} ${p.lastName}`,
+                    modality: p.modality,
+                    day: dayNames[day], // O la fecha exacta si la tuviéramos calculada fácil
+                    shift: `${info.start} - ${endStr}`,
+                    extra: extraVal
+                });
+            }
+        });
+    });
+
+    if (reportData.length === 0) {
+        addHeader(1);
+        pdf.setFontSize(12);
+        pdf.setTextColor(0);
+        pdf.text("No se encontraron horas extras registradas esta semana.", margin, 100);
+        pdf.save(`Horas_Extras_${weekKey}.pdf`);
+        return;
+    }
+
+    autoTable(pdf, {
+        startY: 100,
+        head: [['Colaborador', 'Modalidad', 'Día', 'Turno (+HE)', 'Horas Extras']],
+        body: reportData.map(d => [
+            d.name.toUpperCase(),
+            d.modality,
+            d.day,
+            d.shift,
+            d.extra + ' hrs'
+        ]),
+        theme: 'grid',
+        styles: { fontSize: 10, cellPadding: 5 },
+        headStyles: { fillColor: [41, 128, 185], textColor: 255, fontStyle: 'bold' },
+        didDrawPage: (data) => {
+            addHeader(data.pageNumber);
+        }
+    });
+
+    // Total General
+    const totalExtras = reportData.reduce((acc, curr) => acc + curr.extra, 0);
+    const finalY = pdf.lastAutoTable.finalY + 20;
+
+    pdf.setFontSize(12);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setTextColor(0);
+    pdf.text(`TOTAL HORAS EXTRAS SEMANA: ${totalExtras} hrs`, margin, finalY);
+
+    pdf.save(`Reporte_Extras_${weekKey}_v${Date.now()}.pdf`);
 };

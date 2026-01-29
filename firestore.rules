@@ -1,0 +1,172 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ========================
+    // FUNCIONES DE APOYO
+    // ========================
+    function isAdmin() {
+      let userDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
+      return userDoc != null && userDoc.data.role == "admin";
+    }
+
+    function isSuperAdmin() {
+      let userDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
+      return userDoc != null && userDoc.data.role == "superadmin";
+    }
+
+    function getUserStoreId() {
+      let userDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
+      return userDoc != null ? userDoc.data.storeId : null;
+    }
+
+    function isSameStore(storeId) {
+      return getUserStoreId() == storeId;
+    }
+
+    function userExists() {
+      return request.auth != null && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    // ========================
+    // USUARIOS
+    // ========================
+    match /users/{userId} {
+      allow read: if request.auth != null && (
+        request.auth.uid == userId ||
+        isAdmin() ||
+        isSuperAdmin()
+      );
+
+      allow create: if 
+        (request.auth != null 
+         && request.auth.uid == userId
+         && request.resource.data.role == "collaborator"
+         && request.resource.data.email is string
+         && request.resource.data.createdAt is timestamp)
+        || isAdmin() 
+        || isSuperAdmin();
+
+      allow update: if request.auth != null && (
+        request.auth.uid == userId ||
+        isAdmin() ||
+        isSuperAdmin()
+      );
+
+      allow delete: if isAdmin() || isSuperAdmin();
+    }
+    
+    // ========================
+    // TIENDAS
+    // ========================
+    match /stores/{storeId} {
+      allow read: if request.auth != null;
+      allow create: if isSuperAdmin();
+      allow update: if (isAdmin() || isSuperAdmin())
+        && request.resource.data.keys().hasOnly(['name', 'ciudad', 'direccion', 'active'])
+        && request.resource.data.name is string
+        && request.resource.data.ciudad is string
+        && request.resource.data.direccion is string;
+      allow delete: if isSuperAdmin();
+    }
+
+    // ========================
+    // AQUI ESTABA EL ERROR DE LECTURA DE COLABORADORES
+    // STAFF_PROFILES
+    // ========================
+    match /staff_profiles/{profileId} {
+      allow get: if true;
+      allow list: if request.auth != null;
+      allow create: if isAdmin() || isSuperAdmin();
+      allow update: if isAdmin() || isSuperAdmin() ||
+        (request.auth != null &&
+         (resource == null || !("uid" in resource.data) || resource.data.uid == null || resource.data.uid == "") &&
+         request.resource.data.uid == request.auth.uid);
+      allow delete: if isAdmin() || isSuperAdmin();
+    }
+
+    // ========================
+    // HORARIOS DE ESTUDIO
+    // ========================
+    match /study_schedules/{uid} {
+      allow read: if request.auth != null && (
+        request.auth.uid == uid || 
+        isAdmin() || 
+        isSuperAdmin()
+      );
+      allow write: if request.auth != null && (
+        request.auth.uid == uid || 
+        isAdmin() || 
+        isSuperAdmin()
+      );
+    }
+
+    // ========================
+    // REQUERIMIENTOS DE POSICIONAMIENTO
+    // ========================
+    match /stores/{storeId}/positioning_requirements/{docId} {
+      allow read: if isSameStore(storeId);
+      allow write: if (isAdmin() || isSuperAdmin());
+    }
+
+    // ========================
+    // HORARIOS GENERADOS (CORREGIDO)
+    // ========================
+    match /schedules/{docId} {
+      // CORRECCIÓN: Permitir leer a cualquier autenticado (ej: colaboradores)
+      allow read: if request.auth != null;
+      // Escritura sigue restringida
+      allow write: if (isAdmin() || isSuperAdmin());
+    }
+
+    // ========================
+    // HORAS EXTRAS
+    // ========================
+    match /extra_hours/{docId} {
+      allow get: if request.auth != null;
+      allow list: if (isAdmin() || request.auth.uid == resource.data.uid);
+      allow create: if request.resource.data.uid == request.auth.uid;
+      allow update: if (isAdmin() || request.auth.uid == resource.data.uid);
+      allow delete: if (isAdmin() || request.auth.uid == resource.data.uid);
+    }
+
+    // ========================
+    // FERIADOS TRABAJADOS
+    // ========================
+    match /worked_holidays/{docId} {
+      allow read: if request.auth != null && (
+        isAdmin() || 
+        isSuperAdmin() || 
+        resource.data.uid == request.auth.uid
+      );
+      allow create, update, delete: if (isAdmin() || isSuperAdmin());
+    }
+
+    // ========================
+    // HORAS NOCTURNAS
+    // ========================
+    match /night_hours/{docId} {
+      allow read: if request.auth != null && (
+        isAdmin() || 
+        isSuperAdmin() || 
+        resource.data.uid == request.auth.uid
+      );
+      allow create, update, delete: if (isAdmin() || isSuperAdmin());
+    }
+
+    // ========================
+    // COLECCIÓN DE POSICIONES
+    // ========================
+    match /positioning_requirements/{docId} {
+      allow read: if request.auth != null && userExists();
+      allow write: if (isAdmin() || isSuperAdmin());
+    }
+
+    // ========================
+    // REGLA POR DEFECTO
+    // ========================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

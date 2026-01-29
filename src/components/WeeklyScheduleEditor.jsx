@@ -4,17 +4,17 @@ import { getFirestore, writeBatch, doc, getDoc, setDoc, collection, query, where
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import ScheduleHeatmapMatrix from './ScheduleHeatmapMatrix';
-import { exportSchedulePDF, exportGroupedPositionsPDF } from './PDFExport';
+import { exportSchedulePDF, exportGroupedPositionsPDF, exportExtraHoursReport } from './PDFExport';
 import GeoVictoriaUpload from './GeoVictoriaUpload';
 import { exportGeoVictoriaExcel } from "../services/GeoVictoriaExport";
-import { FaInfoCircle, FaExclamationTriangle, FaExclamationCircle} from 'react-icons/fa';
-import { 
-    Calendar, 
-    Save, 
-    FileText, 
-    Download, 
-    Upload, 
-    Settings, 
+import { FaInfoCircle, FaExclamationTriangle, FaExclamationCircle } from 'react-icons/fa';
+import {
+    Calendar,
+    Save,
+    FileText,
+    Download,
+    Upload,
+    Settings,
     Filter,
     Clock,
     Users,
@@ -116,38 +116,38 @@ export default function WeeklyScheduleEditor() {
     // === VALIDACIÓN TEMPRANA ===
     if (!currentUser) return <p className="text-center py-8">Inicia sesión</p>;
     // Posiciones del día seleccionado (para el selector y el filtro)
-useEffect(() => {
-    setPositions(requirements[selectedDay]?.positions || []);
-}, [requirements, selectedDay]);
+    useEffect(() => {
+        setPositions(requirements[selectedDay]?.positions || []);
+    }, [requirements, selectedDay]);
 
     // ==================== CARGA TODOS LOS REQUERIMIENTOS (una sola vez) ====================
-useEffect(() => {
-    if (!storeId) return;
+    useEffect(() => {
+        if (!storeId) return;
 
-    const loadAllRequirements = async () => {
-        const newReq = {};
+        const loadAllRequirements = async () => {
+            const newReq = {};
 
-        for (const day of weekdays) {
-            let docRef = doc(db, 'stores', storeId, 'positioning_requirements', day);
-            let snap = await getDoc(docRef);
+            for (const day of weekdays) {
+                let docRef = doc(db, 'stores', storeId, 'positioning_requirements', day);
+                let snap = await getDoc(docRef);
 
-            if (!snap.exists()) {
-                docRef = doc(db, 'positioning_requirements', day);
-                snap = await getDoc(docRef);
+                if (!snap.exists()) {
+                    docRef = doc(db, 'positioning_requirements', day);
+                    snap = await getDoc(docRef);
+                }
+
+                const data = snap.exists() ? snap.data() : { positions: [], matrix: {} };
+                newReq[day] = {
+                    positions: data.positions || [],
+                    matrix: data.matrix || {}
+                };
             }
 
-            const data = snap.exists() ? snap.data() : { positions: [], matrix: {} };
-            newReq[day] = {
-                positions: data.positions || [],
-                matrix: data.matrix || {}
-            };
-        }
+            setRequirements(newReq);
+        };
 
-        setRequirements(newReq);
-    };
-
-    loadAllRequirements();
-}, [storeId]);
+        loadAllRequirements();
+    }, [storeId]);
 
     const saveSchedules = async () => {
         setSaveStatus('saving');
@@ -168,41 +168,41 @@ useEffect(() => {
     };
 
     const detectScheduleConflict = (staff, day, shift) => {
-    // Si no hay turno asignado (sin entrada, salida o posición), NO mostrar conflicto
-    if (!shift || !shift.start || !shift.end || !shift.position) {
-        return null;
-    }
-    // 🛑 No validar conflictos en feriados
-    const isFeriado = schedules[staff.id]?.[day]?.feriado;
-    if (isFeriado) return null;
-
-    const studyBlocks = staff.study_schedule?.[day]?.blocks || [];
-
-    // ✅ Si el día está marcado como libre en estudio, no asignar
-    if (staff.study_schedule?.[day]?.free === true) {
-        return 'estudia'; // día libre → no asignable
-    }
-
-    const requiredSkill = shift.position;
-    const hasSkill = staff.skills?.includes(requiredSkill);
-    if (!hasSkill) {
-        return 'incompatible'; // sin habilidad → no apto
-    }
-
-    // Detectar conflictos de horario
-    for (const block of studyBlocks) {
-        const blockStart = timeToMinutes(block.start);
-        const blockEnd = timeToMinutes(block.end);
-        const shiftStart = timeToMinutes(shift.start);
-        const shiftEnd = timeToMinutes(shift.end);
-
-        if (shiftStart < blockEnd && shiftEnd > blockStart) {
-            return 'conflicto';
+        // Si no hay turno asignado (sin entrada, salida o posición), NO mostrar conflicto
+        if (!shift || !shift.start || !shift.end || !shift.position) {
+            return null;
         }
-    }
+        // 🛑 No validar conflictos en feriados
+        const isFeriado = schedules[staff.id]?.[day]?.feriado;
+        if (isFeriado) return null;
 
-    return null;
-};
+        const studyBlocks = staff.study_schedule?.[day]?.blocks || [];
+
+        // ✅ Si el día está marcado como libre en estudio, no asignar
+        if (staff.study_schedule?.[day]?.free === true) {
+            return 'estudia'; // día libre → no asignable
+        }
+
+        const requiredSkill = shift.position;
+        const hasSkill = staff.skills?.includes(requiredSkill);
+        if (!hasSkill) {
+            return 'incompatible'; // sin habilidad → no apto
+        }
+
+        // Detectar conflictos de horario
+        for (const block of studyBlocks) {
+            const blockStart = timeToMinutes(block.start);
+            const blockEnd = timeToMinutes(block.end);
+            const shiftStart = timeToMinutes(shift.start);
+            const shiftEnd = timeToMinutes(shift.end);
+
+            if (shiftStart < blockEnd && shiftEnd > blockStart) {
+                return 'conflicto';
+            }
+        }
+
+        return null;
+    };
 
 
     // Función para manejar cambios en los inputs
@@ -212,11 +212,17 @@ useEffect(() => {
         const current = schedules[staffId]?.[selectedDay] || {};
         const modality = staff.find(p => p.id === staffId)?.modality || '';
 
-        let updates = { [field]: value };
+        // Convertir a número si es horas extras
+        let finalValue = value;
+        if (field === 'extraHours') {
+            finalValue = value === '' ? '' : parseFloat(value);
+        }
+
+        let updates = { [field]: finalValue };
 
         // 🔒 Si se marca "off", borrar datos relacionados
         if (field === 'off' && value === true) {
-            updates = { off: true, start: '', end: '', position: '', feriado: false };
+            updates = { off: true, start: '', end: '', position: '', feriado: false, extraHours: '' };
         }
 
         // 🔒 Si se marca "feriado", setear horarios fijos según modalidad
@@ -227,7 +233,8 @@ useEffect(() => {
                 off: false,
                 start: '08:00',
                 end: isFull ? '16:45' : '12:00',
-                position: ''
+                position: '',
+                extraHours: ''
             };
         }
 
@@ -255,10 +262,10 @@ useEffect(() => {
             }
         }));
     };
-   
+
 
     // Función para calcular horas diarias
-    const calculateDailyHours = (start, end) => {
+    const calculateDailyHours = (start, end, extraHours = 0) => {
         if (!start || !end) return '--';
 
         const startMinutes = timeToMinutes(start);
@@ -269,7 +276,13 @@ useEffect(() => {
             endMinutes += 24 * 60;
         }
 
-        const diff = endMinutes - startMinutes;
+        let diff = endMinutes - startMinutes;
+
+        // Sumar horas extras
+        if (extraHours && !isNaN(extraHours)) {
+            diff += Number(extraHours) * 60;
+        }
+
         return formatMinutesToHours(diff);
     };
 
@@ -475,7 +488,7 @@ useEffect(() => {
                         for (let k = start; k < end; k++) {
                             availableBlocks[k].slots[posIndex].assigned++;
                         }
-                       assigned = true;
+                        assigned = true;
                         break;
                     }
 
@@ -499,60 +512,71 @@ useEffect(() => {
             [wk]: newSchedules
         }));
     }
-// Reemplaza SOLO la parte que carga study_schedules dentro del useEffect que carga staff
-// En el useEffect que carga staff, modifica esta parte:
-useEffect(() => {
-    if (!storeId) return;
-    const loadStaff = async () => {
-        setLoading(true);
-        try {
-            const q = query(collection(db, 'staff_profiles'), where('storeId', '==', storeId));
-            const snap = await getDocs(q);
-            const staffList = await Promise.all(
-                snap.docs.map(async (docSnap) => {
-                    const staffData = { id: docSnap.id, ...docSnap.data() };
-                    
-                    // 🔥 Cargar study_schedule usando el UID del staff
-                    try {
-                        // Si el staff_profile tiene un campo 'uid', usarlo para study_schedules
-                        const studyScheduleId = staffData.uid || docSnap.id;                      
-                        const studyRef = doc(db, 'study_schedules', studyScheduleId);
-                        const studySnap = await getDoc(studyRef);
-                        
-                        if (studySnap.exists()) {
-                            const studyData = studySnap.data();
-                            
-                            // Normalizar estructura
-                            staffData.study_schedule = {};
-                            const dayMappings = {
-                                'monday': 'monday', 'tuesday': 'tuesday', 'wednesday': 'wednesday', 
-                                'thursday': 'thursday', 'friday': 'friday', 'saturday': 'saturday', 'sunday': 'sunday',
-                                'Monday': 'monday', 'Tuesday': 'tuesday', 'Wednesday': 'wednesday',
-                                'Thursday': 'thursday', 'Friday': 'friday', 'Saturday': 'saturday', 'Sunday': 'sunday',
-                            };
-                            
-                            Object.keys(studyData).forEach(fieldName => {
-                                const normalizedDay = dayMappings[fieldName];
-                                if (normalizedDay && studyData[fieldName]) {
-                                    const dayData = studyData[fieldName];
-                                    staffData.study_schedule[normalizedDay] = {
-                                        free: dayData.free || false,
-                                        blocks: Array.isArray(dayData.blocks) ? dayData.blocks : []
-                                    };
-                                }
-                            });
-                            
-                            // Asegurar que todos los días existan
-                            const allDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-                            allDays.forEach(day => {
-                                if (!staffData.study_schedule[day]) {
-                                    staffData.study_schedule[day] = { free: false, blocks: [] };
-                                }
-                            });
-                            
-                        } else {
-                            
-                            // Estructura vacía
+    // Reemplaza SOLO la parte que carga study_schedules dentro del useEffect que carga staff
+    // En el useEffect que carga staff, modifica esta parte:
+    useEffect(() => {
+        if (!storeId) return;
+        const loadStaff = async () => {
+            setLoading(true);
+            try {
+                const q = query(collection(db, 'staff_profiles'), where('storeId', '==', storeId));
+                const snap = await getDocs(q);
+                const staffList = await Promise.all(
+                    snap.docs.map(async (docSnap) => {
+                        const staffData = { id: docSnap.id, ...docSnap.data() };
+
+                        // 🔥 Cargar study_schedule usando el UID del staff
+                        try {
+                            // Si el staff_profile tiene un campo 'uid', usarlo para study_schedules
+                            const studyScheduleId = staffData.uid || docSnap.id;
+                            const studyRef = doc(db, 'study_schedules', studyScheduleId);
+                            const studySnap = await getDoc(studyRef);
+
+                            if (studySnap.exists()) {
+                                const studyData = studySnap.data();
+
+                                // Normalizar estructura
+                                staffData.study_schedule = {};
+                                const dayMappings = {
+                                    'monday': 'monday', 'tuesday': 'tuesday', 'wednesday': 'wednesday',
+                                    'thursday': 'thursday', 'friday': 'friday', 'saturday': 'saturday', 'sunday': 'sunday',
+                                    'Monday': 'monday', 'Tuesday': 'tuesday', 'Wednesday': 'wednesday',
+                                    'Thursday': 'thursday', 'Friday': 'friday', 'Saturday': 'saturday', 'Sunday': 'sunday',
+                                };
+
+                                Object.keys(studyData).forEach(fieldName => {
+                                    const normalizedDay = dayMappings[fieldName];
+                                    if (normalizedDay && studyData[fieldName]) {
+                                        const dayData = studyData[fieldName];
+                                        staffData.study_schedule[normalizedDay] = {
+                                            free: dayData.free || false,
+                                            blocks: Array.isArray(dayData.blocks) ? dayData.blocks : []
+                                        };
+                                    }
+                                });
+
+                                // Asegurar que todos los días existan
+                                const allDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+                                allDays.forEach(day => {
+                                    if (!staffData.study_schedule[day]) {
+                                        staffData.study_schedule[day] = { free: false, blocks: [] };
+                                    }
+                                });
+
+                            } else {
+
+                                // Estructura vacía
+                                staffData.study_schedule = {
+                                    monday: { free: false, blocks: [] },
+                                    tuesday: { free: false, blocks: [] },
+                                    wednesday: { free: false, blocks: [] },
+                                    thursday: { free: false, blocks: [] },
+                                    friday: { free: false, blocks: [] },
+                                    saturday: { free: false, blocks: [] },
+                                    sunday: { free: false, blocks: [] }
+                                };
+                            }
+                        } catch (err) {
                             staffData.study_schedule = {
                                 monday: { free: false, blocks: [] },
                                 tuesday: { free: false, blocks: [] },
@@ -563,34 +587,23 @@ useEffect(() => {
                                 sunday: { free: false, blocks: [] }
                             };
                         }
-                    } catch (err) {
-                        staffData.study_schedule = {
-                            monday: { free: false, blocks: [] },
-                            tuesday: { free: false, blocks: [] },
-                            wednesday: { free: false, blocks: [] },
-                            thursday: { free: false, blocks: [] },
-                            friday: { free: false, blocks: [] },
-                            saturday: { free: false, blocks: [] },
-                            sunday: { free: false, blocks: [] }
-                        };
-                    }
-                    
-                    return staffData;
-                })
-            );
-            
-            setStaff(staffList);
-            
-            const posSet = new Set();
-            staffList.forEach(s => s.positionAbilities?.forEach(p => posSet.add(p)));
-            setPositions(Array.from(posSet));
-        } catch (err) {
-        } finally {
-            setLoading(false);
-        }
-    };
-    loadStaff();
-}, [storeId, db]);
+
+                        return staffData;
+                    })
+                );
+
+                setStaff(staffList);
+
+                const posSet = new Set();
+                staffList.forEach(s => s.positionAbilities?.forEach(p => posSet.add(p)));
+                setPositions(Array.from(posSet));
+            } catch (err) {
+            } finally {
+                setLoading(false);
+            }
+        };
+        loadStaff();
+    }, [storeId, db]);
 
 
     // Cargar horarios en tiempo real
@@ -637,32 +650,48 @@ useEffect(() => {
         return assigned;
     };
     const calcularCierres = (personSchedule) => {
-    let preCierres = 0;
-    let cierres = 0;
+        let preCierres = 0;
+        let cierres = 0;
 
-    Object.values(personSchedule).forEach(dayData => {
-        if (dayData?.off || dayData?.feriado || !dayData?.end) return;
+        Object.values(personSchedule).forEach(dayData => {
+            if (dayData?.off || dayData?.feriado || !dayData?.end) return;
 
-        const end = dayData.end.trim();
-        const [hour] = end.split(':').map(Number);
+            const end = dayData.end.trim();
+            const [hour] = end.split(':').map(Number);
 
-        // Si termina 00:00 o más tarde → cierre completo
-        if (hour >= 0 && hour <= 5) {
-            cierres++;
-        }
-        // Si termina entre 22:00 y 23:59 → pre-cierre
-        else if (hour >= 22 && hour <= 23) {
-            preCierres++;
-        }
-    });
+            // Si termina 00:00 o más tarde → cierre completo
+            if (hour >= 0 && hour <= 5) {
+                cierres++;
+            }
+            // Si termina entre 22:00 y 23:59 → pre-cierre
+            else if (hour >= 22 && hour <= 23) {
+                preCierres++;
+            }
+        });
 
-    return { preCierres, cierres };
-};
+        return { preCierres, cierres };
+    };
 
     const assignedArray = filteredStaff
         .map(p => {
             const d = schedules[p.id]?.[selectedDay];
-            return { position: d?.position, start: d?.start, end: d?.end };
+            if (!d) return {};
+
+            let realEnd = d.end;
+
+            // Si hay horas extra, extender el final visual para el heatmap
+            if (d.extraHours && d.end && !isNaN(d.extraHours) && Number(d.extraHours) > 0) {
+                const [h, m] = d.end.split(':').map(Number);
+                const extraMins = Number(d.extraHours) * 60;
+                const baseMins = h * 60 + m;
+                const newMins = baseMins + extraMins;
+
+                const finalH = Math.floor(newMins / 60) % 24;
+                const finalM = newMins % 60;
+                realEnd = `${String(finalH).padStart(2, '0')}:${String(finalM).padStart(2, '0')}`;
+            }
+
+            return { position: d?.position, start: d?.start, end: realEnd };
         })
         .filter(x => x.position && x.start && x.end);
 
@@ -678,19 +707,19 @@ useEffect(() => {
         );
     }
     // Validación de fecha (evita "Fecha inválida")
-const isValidDate = (() => {
-    if (!weekStartDate) return false;
+    const isValidDate = (() => {
+        if (!weekStartDate) return false;
 
-    const [y, m, d] = weekStartDate.split('-').map(Number);
-    const test = new Date(y, m - 1, d);
+        const [y, m, d] = weekStartDate.split('-').map(Number);
+        const test = new Date(y, m - 1, d);
 
-    // Comprobamos que realmente coincida (evita 32/13/9999 etc.)
-    return (
-        test.getFullYear() === y &&
-        test.getMonth() === m - 1 &&
-        test.getDate() === d
-    );
-})();
+        // Comprobamos que realmente coincida (evita 32/13/9999 etc.)
+        return (
+            test.getFullYear() === y &&
+            test.getMonth() === m - 1 &&
+            test.getDate() === d
+        );
+    })();
 
 
     return (
@@ -705,31 +734,31 @@ const isValidDate = (() => {
                             </h1>
                             {isValidDate && wk && (
                                 <p className="text-sm text-gray-600 mt-1">
-                                    Semana: {new Date(weekStartDate).toLocaleDateString('es-ES', { 
-                                        day: 'numeric', 
-                                        month: 'long', 
-                                        year: 'numeric' 
+                                    Semana: {new Date(weekStartDate).toLocaleDateString('es-ES', {
+                                        day: 'numeric',
+                                        month: 'long',
+                                        year: 'numeric'
                                     })}
                                 </p>
                             )}
                         </div>
                         <div className="flex flex-wrap gap-2">
-                            <Link 
-                                to="/admin" 
+                            <Link
+                                to="/admin"
                                 className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium text-sm"
                             >
                                 <Home className="w-4 h-4" />
                                 Inicio
                             </Link>
-                            <Link 
-                                to="/horarios" 
+                            <Link
+                                to="/horarios"
                                 className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium text-sm"
                             >
                                 <Calendar className="w-4 h-4" />
                                 Horarios
                             </Link>
-                            <Link 
-                                to="/posiciones" 
+                            <Link
+                                to="/posiciones"
                                 className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium text-sm"
                             >
                                 <Settings className="w-4 h-4" />
@@ -774,32 +803,32 @@ const isValidDate = (() => {
                                     className="border-2 border-gray-300 rounded-lg px-4 py-2 text-base font-medium focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                                 />
                             </div>
-                            
+
                             <div className="flex flex-wrap gap-3">
                                 <div className="flex items-center gap-2">
                                     <Filter className="w-4 h-4 text-gray-500" />
-                                    <select 
-                                        value={selectedDay} 
-                                        onChange={e => setSelectedDay(e.target.value)} 
+                                    <select
+                                        value={selectedDay}
+                                        onChange={e => setSelectedDay(e.target.value)}
                                         className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white font-medium"
                                     >
                                         {weekdays.map(d => <option key={d} value={d}>{weekdayLabels[d]}</option>)}
                                     </select>
                                 </div>
-                                
-                                <select 
-                                    value={modalityFilter} 
-                                    onChange={e => setModalityFilter(e.target.value)} 
+
+                                <select
+                                    value={modalityFilter}
+                                    onChange={e => setModalityFilter(e.target.value)}
                                     className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white font-medium"
                                 >
                                     <option>Todos</option>
                                     <option>Full-Time</option>
                                     <option>Part-Time</option>
                                 </select>
-                                
-                                <select 
-                                    value={positionFilter} 
-                                    onChange={e => setPositionFilter(e.target.value)} 
+
+                                <select
+                                    value={positionFilter}
+                                    onChange={e => setPositionFilter(e.target.value)}
                                     className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white font-medium"
                                 >
                                     <option>Todas</option>
@@ -810,16 +839,15 @@ const isValidDate = (() => {
 
                         {/* Botones de Acción */}
                         <div className="flex flex-wrap gap-3 items-start">
-                            <button 
-                                onClick={saveSchedules} 
+                            <button
+                                onClick={saveSchedules}
                                 disabled={saveStatus === 'saving'}
-                                className={`flex items-center gap-2 px-5 py-2.5 rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium ${
-                                    saveStatus === 'saving' 
-                                        ? 'bg-gray-400 cursor-not-allowed' 
-                                        : saveStatus === 'success'
+                                className={`flex items-center gap-2 px-5 py-2.5 rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium ${saveStatus === 'saving'
+                                    ? 'bg-gray-400 cursor-not-allowed'
+                                    : saveStatus === 'success'
                                         ? 'bg-green-500 hover:bg-green-600'
                                         : 'bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700'
-                                } text-white`}
+                                    } text-white`}
                             >
                                 {saveStatus === 'saving' ? (
                                     <>
@@ -838,23 +866,23 @@ const isValidDate = (() => {
                                     </>
                                 )}
                             </button>
-                            
-                            <button 
-                                onClick={() => exportSchedulePDF(staff, schedules, wk)} 
+
+                            <button
+                                onClick={() => exportSchedulePDF(staff, schedules, wk)}
                                 className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
                                 <FileText className="w-5 h-5" />
                                 PDF
                             </button>
-                            
-                            <button 
-                                onClick={() => setShowTurnoModal(true)} 
+
+                            <button
+                                onClick={() => setShowTurnoModal(true)}
                                 className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
                                 <Download className="w-5 h-5" />
                                 PDF Posiciones
                             </button>
-                            
+
                             <button
                                 onClick={() => {
                                     if (!wk || Object.keys(turnoMap).length === 0) {
@@ -868,7 +896,18 @@ const isValidDate = (() => {
                                 <Download className="w-5 h-5" />
                                 Excel GeoVictoria
                             </button>
-                            
+
+                            <button
+                                onClick={async () => {
+                                    const currentSchedule = allSchedules[wk] || {};
+                                    await exportExtraHoursReport(staff, currentSchedule, wk);
+                                }}
+                                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <Clock className="w-5 h-5" />
+                                Reporte Horas Extras
+                            </button>
+
                             <button
                                 onClick={generateIdealSchedule}
                                 className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-indigo-500 to-indigo-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
@@ -908,6 +947,7 @@ const isValidDate = (() => {
                                             <th className="px-6 py-4 text-center text-xs font-semibold uppercase tracking-wider sticky left-[280px] z-10 bg-gradient-to-r from-gray-700 to-gray-800" style={{ minWidth: '140px', maxWidth: '140px' }}>Modalidad</th>
                                             <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Entrada</th>
                                             <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Salida</th>
+                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider" title="Horas Extras (Se restarán de la salida para GeoVictoria)">HE</th>
                                             <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Horas Día</th>
                                             <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Horas Semana</th>
                                             <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Posición</th>
@@ -918,182 +958,191 @@ const isValidDate = (() => {
                                         </tr>
                                     </thead>
                                     <tbody className="bg-white divide-y divide-gray-200">
-    {filteredStaff.map(p => {
-        const d = schedules[p.id]?.[selectedDay] || {};
-        const hasConflict = detectScheduleConflict(p, selectedDay, d);
-        const horas = calculateWeeklyHours(p.id);
-        // Cálculo de si tiene al menos un día libre en la semana
-        const tieneDiaLibre = weekdays.some(day =>
-            schedules[p.id]?.[day]?.off === true
-        );
-        // Cálculo de rango correcto de horas según modalidad
-        const esFullTime = p.modality?.toLowerCase() === 'full-time';
-        const horasMin = esFullTime ? 48 * 60 : 24 * 60;  // 45h FT, 24h PT
-        const horasMax = esFullTime ? 48 * 60 : 24 * 60;  // Máximo razonable (evita abusos)
-        const horasEnRango = horas.total >= horasMin && horas.total <= horasMax;
-        const { preCierres, cierres } = calcularCierres(schedules[p.id] || {});
+                                        {filteredStaff.map(p => {
+                                            const d = schedules[p.id]?.[selectedDay] || {};
+                                            const hasConflict = detectScheduleConflict(p, selectedDay, d);
+                                            const horas = calculateWeeklyHours(p.id);
+                                            // Cálculo de si tiene al menos un día libre en la semana
+                                            const tieneDiaLibre = weekdays.some(day =>
+                                                schedules[p.id]?.[day]?.off === true
+                                            );
+                                            // Cálculo de rango correcto de horas según modalidad
+                                            const esFullTime = p.modality?.toLowerCase() === 'full-time';
+                                            const horasMin = esFullTime ? 48 * 60 : 24 * 60;  // 45h FT, 24h PT
+                                            const horasMax = esFullTime ? 48 * 60 : 24 * 60;  // Máximo razonable (evita abusos)
+                                            const horasEnRango = horas.total >= horasMin && horas.total <= horasMax;
+                                            const { preCierres, cierres } = calcularCierres(schedules[p.id] || {});
 
-        return (
-            <tr key={p.id} className="hover:bg-blue-50 transition-colors duration-150 group">
-                <td className="px-6 py-4 relative sticky left-0 z-10 bg-white group-hover:bg-blue-50" style={{ minWidth: '280px', maxWidth: '280px' }}>
-                    <div className="flex items-start gap-2">
-                        <div className="flex-1 min-w-0 pr-2">
-                            <div 
-                                className="font-medium text-sm text-gray-900 leading-tight"
-                                style={{ 
-                                    wordBreak: 'break-word',
-                                    overflowWrap: 'break-word',
-                                    lineHeight: '1.4'
-                                }}
-                            >
-                                {p.name} {p.lastName}
-                            </div>
-                        </div>
+                                            return (
+                                                <tr key={p.id} className="hover:bg-blue-50 transition-colors duration-150 group">
+                                                    <td className="px-6 py-4 relative sticky left-0 z-10 bg-white group-hover:bg-blue-50" style={{ minWidth: '280px', maxWidth: '280px' }}>
+                                                        <div className="flex items-start gap-2">
+                                                            <div className="flex-1 min-w-0 pr-2">
+                                                                <div
+                                                                    className="font-medium text-sm text-gray-900 leading-tight"
+                                                                    style={{
+                                                                        wordBreak: 'break-word',
+                                                                        overflowWrap: 'break-word',
+                                                                        lineHeight: '1.4'
+                                                                    }}
+                                                                >
+                                                                    {p.name} {p.lastName}
+                                                                </div>
+                                                            </div>
 
-                        <div className="flex items-center gap-1.5 flex-shrink-0 relative">
-                            {/* Ícono de información (tooltip estudio) */}
-                            <div className="relative">
-                                <FaInfoCircle
-                                    ref={el => iconRefs.current[p.id] = el}
-                                    className="text-blue-600 cursor-pointer hover:text-blue-800 transition flex-shrink-0"
-                                    size={16}
-                                    onMouseEnter={(e) => {
-                                        const rect = e.currentTarget.getBoundingClientRect();
-                                        const tooltipHeight = 350; // altura aproximada del tooltip
-                                        const tooltipWidth = 300;
-                                        const viewportHeight = window.innerHeight;
-                                        const viewportWidth = window.innerWidth;
-                                        
-                                        // Calcular posición vertical: si no hay espacio abajo, mostrar arriba
-                                        let top = rect.bottom + 8;
-                                        if (rect.bottom + tooltipHeight + 8 > viewportHeight) {
-                                            top = rect.top - tooltipHeight - 8;
-                                        }
-                                        
-                                        // Calcular posición horizontal: centrar pero ajustar si está cerca de los bordes
-                                        let left = rect.left + (rect.width / 2);
-                                        if (left - (tooltipWidth / 2) < 10) {
-                                            left = tooltipWidth / 2 + 10;
-                                        } else if (left + (tooltipWidth / 2) > viewportWidth - 10) {
-                                            left = viewportWidth - (tooltipWidth / 2) - 10;
-                                        }
-                                        
-                                        setTooltipPosition({ top, left });
-                                        setTooltipOpen(p.id);
-                                    }}
-                                    onMouseLeave={() => {
-                                        // Pequeño delay para permitir mover el mouse al tooltip
-                                        setTimeout(() => {
-                                            if (tooltipRef.current && !tooltipRef.current.matches(':hover')) {
-                                                setTooltipOpen(null);
-                                            }
-                                        }, 200);
-                                    }}
-                                />
-                            </div>
+                                                            <div className="flex items-center gap-1.5 flex-shrink-0 relative">
+                                                                {/* Ícono de información (tooltip estudio) */}
+                                                                <div className="relative" ref={el => iconRefs.current[p.id] = el}>
+                                                                    <FaInfoCircle
 
-                            {/* Ícono si NO tiene día libre */}
-                            {!tieneDiaLibre && (
-                                <FaExclamationCircle
-                                    title="No tiene día libre asignado esta semana"
-                                    className="text-red-600 flex-shrink-0"
-                                    size={16}
-                                />
-                            )}
-                        </div>
-                    </div>
+                                                                        className="text-blue-600 cursor-pointer hover:text-blue-800 transition flex-shrink-0"
+                                                                        size={16}
+                                                                        onMouseEnter={(e) => {
+                                                                            const rect = e.currentTarget.getBoundingClientRect();
+                                                                            const tooltipHeight = 350; // altura aproximada del tooltip
+                                                                            const tooltipWidth = 300;
+                                                                            const viewportHeight = window.innerHeight;
+                                                                            const viewportWidth = window.innerWidth;
 
-    {/* Mensaje de conflicto debajo del nombre */}
-    {hasConflict && (
-        <div className="text-xs text-orange-800 bg-orange-50 border border-orange-200 px-2 py-1 rounded mt-2 flex items-center gap-1.5 shadow-sm">
-            <AlertCircle className="w-3.5 h-3.5 text-orange-600 flex-shrink-0" />
-            <span className="font-medium text-xs">{formatConflictMessage(hasConflict)}</span>
-        </div>
-    )}
-</td>
-                <td className="px-6 py-4 text-center sticky left-[280px] z-10 bg-white group-hover:bg-blue-50" style={{ minWidth: '140px', maxWidth: '140px' }}>
-                    <span className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap inline-block ${
-                        p.modality === "Full-Time" 
-                            ? "bg-gradient-to-r from-green-500 to-green-600 text-white shadow-sm" 
-                            : "bg-gradient-to-r from-purple-500 to-purple-600 text-white shadow-sm"
-                    }`}>
-                        {p.modality}
-                    </span>
-                </td>
-                <td className="px-4 py-4 text-center">
-                    <input
-                        type="time"
-                        value={d.start || ''}
-                        onChange={e => handleChange(p.id, 'start', e.target.value)}
-                        disabled={d.feriado || d.off}
-                        className={`w-full px-2 py-2 border rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${
-                            hasConflict ? 'border-orange-500 bg-orange-50' : 'border-gray-300'
-                        } disabled:bg-gray-100 disabled:cursor-not-allowed`}
-                    />
-                </td>
-                <td className="px-4 py-4 text-center">
-                    <input
-                        type="time"
-                        value={d.end || ''}
-                        onChange={e => handleChange(p.id, 'end', e.target.value)}
-                        disabled={d.feriado || d.off}
-                        className={`w-full px-2 py-2 border rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${
-                            hasConflict ? 'border-orange-500 bg-orange-50' : 'border-gray-300'
-                        } disabled:bg-gray-100 disabled:cursor-not-allowed`}
-                    />
-                </td>
-                <td className="px-4 py-4 text-center font-medium text-gray-700 text-sm">
-                    {calculateDailyHours(d.start, d.end)}
-                </td>
-                <td className={`px-4 py-4 text-center font-semibold text-sm ${
-                    !horasEnRango ? 'text-red-600' : 'text-green-700'
-                }`}>
-                    <div className="flex items-center justify-center gap-1">
-                        <Clock className="w-4 h-4" />
-                        {horas.formatted}
-                        {hasConflict && <AlertCircle className="w-4 h-4 text-orange-600" />}
-                    </div>
-                </td>
-                
-                <td className="px-4 py-4 text-center">
-                    <select
-                        value={d.position || ''}
-                        onChange={e => handleChange(p.id, 'position', e.target.value)}
-                        disabled={d.feriado || d.off}
-                        className="w-full px-2 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
-                    >
-                        <option value="">--</option>
-                        {positions.map(pos => (
-                            <option key={pos} value={pos}>{pos}</option>
-                        ))}
-                    </select>
-                </td>
-                <td className="px-4 py-4 text-center font-bold text-orange-600 text-sm">
-                    {preCierres}/4
-                </td>
-                <td className="px-4 py-4 text-center font-bold text-red-600 text-sm">
-                    {cierres}/4
-                </td>
-                <td className="px-4 py-4 text-center">
-                    <input
-                        type="checkbox"
-                        checked={d.off || false}
-                        onChange={e => handleChange(p.id, 'off', e.target.checked)}
-                        disabled={d.feriado}
-                        className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                    />
-                </td>
-                <td className="px-4 py-4 text-center">
-                    <input
-                        type="checkbox"
-                        checked={d.feriado || false}
-                        onChange={e => handleChange(p.id, 'feriado', e.target.checked)}
-                        className="w-5 h-5 text-purple-600 border-gray-300 rounded focus:ring-2 focus:ring-purple-500 cursor-pointer"
-                    />
-                </td>
-            </tr>
-        );
-                                    })}
+                                                                            // Calcular posición vertical: si no hay espacio abajo, mostrar arriba
+                                                                            let top = rect.bottom + 8;
+                                                                            if (rect.bottom + tooltipHeight + 8 > viewportHeight) {
+                                                                                top = rect.top - tooltipHeight - 8;
+                                                                            }
+
+                                                                            // Calcular posición horizontal: centrar pero ajustar si está cerca de los bordes
+                                                                            let left = rect.left + (rect.width / 2);
+                                                                            if (left - (tooltipWidth / 2) < 10) {
+                                                                                left = tooltipWidth / 2 + 10;
+                                                                            } else if (left + (tooltipWidth / 2) > viewportWidth - 10) {
+                                                                                left = viewportWidth - (tooltipWidth / 2) - 10;
+                                                                            }
+
+                                                                            setTooltipPosition({ top, left });
+                                                                            setTooltipOpen(p.id);
+                                                                        }}
+                                                                        onMouseLeave={() => {
+                                                                            // Pequeño delay para permitir mover el mouse al tooltip
+                                                                            setTimeout(() => {
+                                                                                if (tooltipRef.current && !tooltipRef.current.matches(':hover')) {
+                                                                                    setTooltipOpen(null);
+                                                                                }
+                                                                            }, 200);
+                                                                        }}
+                                                                    />
+                                                                </div>
+
+                                                                {/* Ícono si NO tiene día libre */}
+                                                                {!tieneDiaLibre && (
+                                                                    <FaExclamationCircle
+                                                                        title="No tiene día libre asignado esta semana"
+                                                                        className="text-red-600 flex-shrink-0"
+                                                                        size={16}
+                                                                    />
+                                                                )}
+                                                            </div>
+                                                        </div>
+
+                                                        {/* Mensaje de conflicto debajo del nombre */}
+                                                        {hasConflict && (
+                                                            <div className="text-xs text-orange-800 bg-orange-50 border border-orange-200 px-2 py-1 rounded mt-2 flex items-center gap-1.5 shadow-sm">
+                                                                <AlertCircle className="w-3.5 h-3.5 text-orange-600 flex-shrink-0" />
+                                                                <span className="font-medium text-xs">{formatConflictMessage(hasConflict)}</span>
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-6 py-4 text-center sticky left-[280px] z-10 bg-white group-hover:bg-blue-50" style={{ minWidth: '140px', maxWidth: '140px' }}>
+                                                        <span className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap inline-block ${p.modality === "Full-Time"
+                                                            ? "bg-gradient-to-r from-green-500 to-green-600 text-white shadow-sm"
+                                                            : "bg-gradient-to-r from-purple-500 to-purple-600 text-white shadow-sm"
+                                                            }`}>
+                                                            {p.modality}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-4 py-4 text-center">
+                                                        <input
+                                                            type="time"
+                                                            value={d.start || ''}
+                                                            onChange={e => handleChange(p.id, 'start', e.target.value)}
+                                                            disabled={d.feriado || d.off}
+                                                            className={`w-full px-2 py-2 border rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${hasConflict ? 'border-orange-500 bg-orange-50' : 'border-gray-300'
+                                                                } disabled:bg-gray-100 disabled:cursor-not-allowed`}
+                                                        />
+                                                    </td>
+                                                    <td className="px-4 py-4 text-center">
+                                                        <input
+                                                            type="time"
+                                                            value={d.end || ''}
+                                                            onChange={e => handleChange(p.id, 'end', e.target.value)}
+                                                            disabled={d.feriado || d.off}
+                                                            className={`w-full px-2 py-2 border rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${hasConflict ? 'border-orange-500 bg-orange-50' : 'border-gray-300'
+                                                                } disabled:bg-gray-100 disabled:cursor-not-allowed`}
+                                                        />
+                                                    </td>
+                                                    <td className="px-2 py-4 text-center">
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            max="12"
+                                                            step="0.5"
+                                                            value={d.extraHours || ''}
+                                                            onChange={e => handleChange(p.id, 'extraHours', e.target.value)}
+                                                            disabled={d.feriado || d.off}
+                                                            placeholder="0"
+                                                            className="w-16 px-2 py-2 border border-gray-300 rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
+                                                        />
+                                                    </td>
+                                                    <td className="px-4 py-4 text-center font-medium text-gray-700 text-sm">
+                                                        {calculateDailyHours(d.start, d.end, d.extraHours)}
+                                                    </td>
+                                                    <td className={`px-4 py-4 text-center font-semibold text-sm ${!horasEnRango ? 'text-red-600' : 'text-green-700'
+                                                        }`}>
+                                                        <div className="flex items-center justify-center gap-1">
+                                                            <Clock className="w-4 h-4" />
+                                                            {horas.formatted}
+                                                            {hasConflict && <AlertCircle className="w-4 h-4 text-orange-600" />}
+                                                        </div>
+                                                    </td>
+
+                                                    <td className="px-4 py-4 text-center">
+                                                        <select
+                                                            value={d.position || ''}
+                                                            onChange={e => handleChange(p.id, 'position', e.target.value)}
+                                                            disabled={d.feriado || d.off}
+                                                            className="w-full px-2 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
+                                                        >
+                                                            <option value="">--</option>
+                                                            {positions.map(pos => (
+                                                                <option key={pos} value={pos}>{pos}</option>
+                                                            ))}
+                                                        </select>
+                                                    </td>
+                                                    <td className="px-4 py-4 text-center font-bold text-orange-600 text-sm">
+                                                        {preCierres}/4
+                                                    </td>
+                                                    <td className="px-4 py-4 text-center font-bold text-red-600 text-sm">
+                                                        {cierres}/4
+                                                    </td>
+                                                    <td className="px-4 py-4 text-center">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={d.off || false}
+                                                            onChange={e => handleChange(p.id, 'off', e.target.checked)}
+                                                            disabled={d.feriado}
+                                                            className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                                                        />
+                                                    </td>
+                                                    <td className="px-4 py-4 text-center">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={d.feriado || false}
+                                                            onChange={e => handleChange(p.id, 'feriado', e.target.checked)}
+                                                            className="w-5 h-5 text-purple-600 border-gray-300 rounded focus:ring-2 focus:ring-purple-500 cursor-pointer"
+                                                        />
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
                                     </tbody>
                                 </table>
                             </div>
@@ -1120,10 +1169,10 @@ const isValidDate = (() => {
 
                 {/* Tooltip global para horarios de estudio */}
                 {tooltipOpen && (
-                    <div 
+                    <div
                         ref={tooltipRef}
                         className="fixed z-[9999] bg-white border-2 border-blue-200 rounded-lg shadow-xl p-3"
-                        style={{ 
+                        style={{
                             pointerEvents: 'auto',
                             width: '300px',
                             maxHeight: '350px',
@@ -1142,7 +1191,7 @@ const isValidDate = (() => {
                         {(() => {
                             const person = filteredStaff.find(p => p.id === tooltipOpen);
                             if (!person) return null;
-                            
+
                             return (
                                 <>
                                     <strong className="block mb-2 text-xs font-bold text-gray-800 border-b border-gray-200 pb-1.5 flex items-center gap-1.5">
@@ -1205,7 +1254,7 @@ const isValidDate = (() => {
                             <div className="flex justify-between items-center mb-6">
                                 <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">
                                     <Download className="w-5 h-5" />
-                                    Elegir Turno para PDF
+                                    Exportar PDF de Posiciones
                                 </h3>
                                 <button
                                     onClick={() => setShowTurnoModal(false)}
@@ -1248,8 +1297,29 @@ const isValidDate = (() => {
                                 </button>
                                 <button
                                     className="px-5 py-2.5 rounded-lg bg-gradient-to-r from-purple-500 to-purple-600 text-white font-medium shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 flex items-center gap-2"
-                                    onClick={() => {
-                                        exportGroupedPositionsPDF(staff, schedules, selectedDay, turnoPDF);
+                                    onClick={async () => {
+                                        // Calcular fecha exacta
+                                        let dateText = '';
+                                        if (weekStartDate) {
+                                            const dayIndex = weekdays.indexOf(selectedDay);
+                                            if (dayIndex !== -1) {
+                                                const [y, m, d] = weekStartDate.split('-').map(Number);
+                                                const date = new Date(y, m - 1, d);
+                                                date.setDate(date.getDate() + dayIndex);
+                                                dateText = date.toLocaleDateString('es-ES', {
+                                                    weekday: 'long',
+                                                    year: 'numeric',
+                                                    month: 'long',
+                                                    day: 'numeric'
+                                                });
+                                                // Capitalizar primera letra
+                                                dateText = dateText.charAt(0).toUpperCase() + dateText.slice(1);
+                                            }
+                                        }
+
+                                        // Forzar el uso del estado más reciente
+                                        const currentSchedule = allSchedules[wk] || {};
+                                        await exportGroupedPositionsPDF(staff, currentSchedule, selectedDay, dateText, turnoPDF, positions);
                                         setShowTurnoModal(false);
                                     }}
                                 >

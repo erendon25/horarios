@@ -52,7 +52,9 @@ export const exportGeoVictoriaExcel = (staff, schedules, weekKey, turnoMap) => {
       // Sin horario definido
       if (!data?.start || !data?.end) return;
 
-      // CORRECCIÓN: Primero definir start y end
+      // CORRECCIÓN: Usar directamente start y end (Turno Base)
+      // La lógica ahora es: start/end son el turno contractual (ej 9-13)
+      // Las horas extras son ADICIONALES. Por tanto, para GeoVictoria enviamos el turno base tal cual.
       let start = normalizeTime(data.start);
       let end = normalizeTime(data.end);
 
