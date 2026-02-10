@@ -9,6 +9,8 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
     modality: staff?.modality || 'Full-Time',
     dni: staff?.dni || '',
     sanitaryCardDate: staff?.sanitaryCardDate || '',
+    terminationDate: staff?.terminationDate || '',
+    birthDate: staff?.birthDate || '',
   });
   const [loading, setLoading] = useState(false);
   const db = getFirestore();
@@ -31,7 +33,7 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
         });
       } else {
         await addDoc(collection(db, 'staff_profiles'), {
-            ...form,
+          ...form,
           storeId: userData.storeId, // ✅ Esto faltaba, añadir siempre storeId
           status: 'pending',
           createdAt: new Date(),
@@ -73,16 +75,16 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
               className="w-full border p-2 rounded"
             />
           </div>
-	  <div>
-  <label className="block text-sm">DNI</label>
-  <input
-    type="text"
-    name="dni"
-    value={form.dni}
-    onChange={handleChange}
-    className="w-full border p-2 rounded"
-  />
-</div>
+          <div>
+            <label className="block text-sm">DNI</label>
+            <input
+              type="text"
+              name="dni"
+              value={form.dni}
+              onChange={handleChange}
+              className="w-full border p-2 rounded"
+            />
+          </div>
           <div>
             <label className="block text-sm">Modalidad</label>
             <select
@@ -95,16 +97,40 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
               <option>Part-Time</option>
             </select>
           </div>
-<div>
-  <label className="block text-sm">Fecha de vencimiento del carnet</label>
-  <input
-    type="date"
-    name="sanitaryCardDate"
-    value={form.sanitaryCardDate}
-    onChange={handleChange}
-    className="w-full border p-2 rounded"
-  />
-</div>
+
+          <div>
+
+            <label className="block text-sm">Fecha de vencimiento del carnet</label>
+            <input
+              type="date"
+              name="sanitaryCardDate"
+              value={form.sanitaryCardDate}
+              onChange={handleChange}
+              className="w-full border p-2 rounded"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm">Fecha de Cumpleaños</label>
+            <input
+              type="date"
+              name="birthDate"
+              value={form.birthDate || ''}
+              onChange={handleChange}
+              className="w-full border p-2 rounded"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-red-600 font-bold">Fecha de Cese (Último día)</label>
+            <input
+              type="date"
+              name="terminationDate"
+              value={form.terminationDate || ''}
+              onChange={handleChange}
+              className="w-full border p-2 rounded border-red-200 focus:border-red-500"
+            />
+            <p className="text-xs text-gray-500 mt-1">Si se llena, el usuario perderá acceso después de esta fecha.</p>
+          </div>
 
           <button
             type="submit"
@@ -114,8 +140,8 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
             {loading ? 'Guardando...' : 'Guardar'}
           </button>
         </form>
-      </div>
-    </div>
+      </div >
+    </div >
   );
 }
 

@@ -20,7 +20,9 @@ import {
     Building2,
     UserCheck,
     AlertCircle,
-    X
+
+    X,
+    UserX
 } from "lucide-react";
 import {
     doc,
@@ -38,6 +40,7 @@ import { db } from "../firebase";
 import StudyScheduleEditor from './StudyScheduleEditor';
 import ModalSelectorDePosiciones from './ModalSelectorDePosiciones';
 import StaffModal from './StaffModal';
+import CessationReportModal from './CessationReportModal';
 
 
 
@@ -64,6 +67,7 @@ function AdminDashboard() {
     const [positionModalOpen, setPositionModalOpen] = useState(false);
     const [positionTarget, setPositionTarget] = useState(null);
     const [tempAbilities, setTempAbilities] = useState([]);
+    const [showCessationModal, setShowCessationModal] = useState(false);
 
     const isCardExpiringSoon = (dateString) => {
         if (!dateString) return false;
@@ -340,7 +344,11 @@ function AdminDashboard() {
         const matchesModality = modalityFilter === "Todos" || s.modality === modalityFilter;
         const fullName = (s.name + " " + s.lastName).toLowerCase();
         const matchesSearch = fullName.includes(searchTerm.toLowerCase());
-        return matchesModality && matchesSearch;
+
+        // Hide if termination date is in the past (ceased)
+        const isCeased = s.terminationDate && new Date(s.terminationDate) < new Date(new Date().setHours(0, 0, 0, 0));
+
+        return matchesModality && matchesSearch && !isCeased;
     });
 
     return (
@@ -388,6 +396,13 @@ function AdminDashboard() {
                             >
                                 <FaFilePdf className="w-4 h-4" />
                                 Carnets PDF
+                            </button>
+                            <button
+                                onClick={() => setShowCessationModal(true)}
+                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <UserX className="w-4 h-4" />
+                                Ceses
                             </button>
                             <button
                                 onClick={handleLogout}
@@ -531,8 +546,8 @@ function AdminDashboard() {
                                             <td className="px-8 py-5">
                                                 <div className="flex items-center">
                                                     <span className={`px-4 py-2 rounded-full text-sm font-semibold inline-block ${colab.modality === "Full-Time"
-                                                            ? "bg-green-100 text-green-800"
-                                                            : "bg-purple-100 text-purple-800"
+                                                        ? "bg-green-100 text-green-800"
+                                                        : "bg-purple-100 text-purple-800"
                                                         }`}>
                                                         {colab.modality}
                                                     </span>
@@ -665,6 +680,13 @@ function AdminDashboard() {
                     <ModalSelectorDePosiciones
                         docId={positionTarget?.id}
                         onClose={() => setPositionModalOpen(false)}
+                    />
+                )}
+
+                {showCessationModal && (
+                    <CessationReportModal
+                        staff={staff}
+                        onClose={() => setShowCessationModal(false)}
                     />
                 )}
             </div>

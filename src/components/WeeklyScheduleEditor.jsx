@@ -111,7 +111,12 @@ export default function WeeklyScheduleEditor() {
         const diff = (dayOfWeek === 0 ? -6 : 1 - dayOfWeek); // Calcula lunes
         const monday = new Date(today);
         monday.setDate(today.getDate() + diff);
-        setWeekStartDate(monday.toISOString().slice(0, 10));
+
+        // CORRECCIÓN: Usar hora local, no UTC
+        const y = monday.getFullYear();
+        const m = String(monday.getMonth() + 1).padStart(2, '0');
+        const d = String(monday.getDate()).padStart(2, '0');
+        setWeekStartDate(`${y}-${m}-${d}`);
     }, []);
 
     // === VALIDACIÓN TEMPRANA ===
@@ -664,12 +669,23 @@ export default function WeeklyScheduleEditor() {
 
 
     // Filtrar staff según filtros activos
+    // Filtrar staff según filtros activos
     const filteredStaff = staff.filter(person => {
         if (modalityFilter !== 'Todos' && person.modality !== modalityFilter) return false;
 
         if (positionFilter !== 'Todas') {
             const assignedPos = schedules[person.id]?.[selectedDay]?.position?.toLowerCase() || '';
             if (assignedPos !== positionFilter.toLowerCase()) return false;
+        }
+
+        // Logic de Ceses: Si la fecha de cese es ANTERIOR al inicio de la semana, ocultar.
+        if (person.terminationDate && weekStartDate) {
+            const [y, m, d] = weekStartDate.split('-').map(Number);
+            const weekStart = new Date(y, m - 1, d);
+            const termDate = new Date(person.terminationDate + 'T00:00:00'); // Ensure local
+
+            // Si cese fue antes del lunes de esta semana, ya no trabaja esta semana -> ocultar
+            if (termDate < weekStart) return false;
         }
 
         return true;
@@ -1012,8 +1028,41 @@ export default function WeeklyScheduleEditor() {
                                             const horasEnRango = horas.total >= horasMin && horas.total <= horasMax;
                                             const { preCierres, cierres } = calcularCierres(schedules[p.id] || {});
 
+                                            // Lógica de Cese Diario
+                                            let isCeased = false;
+                                            if (p.terminationDate && weekStartDate) {
+                                                const [y, m, d] = weekStartDate.split('-').map(Number);
+                                                const dayIndex = weekdays.indexOf(selectedDay);
+                                                const currentDate = new Date(y, m - 1, d + dayIndex);
+                                                // Ajustar a medianoche para comparar fechas
+                                                currentDate.setHours(0, 0, 0, 0);
+                                                const termDate = new Date(p.terminationDate + 'T00:00:00');
+                                                termDate.setHours(0, 0, 0, 0);
+
+                                                if (currentDate > termDate) {
+                                                    isCeased = true;
+                                                }
+
+                                            }
+
+                                            // Lógica de Cumpleaños
+                                            let isBirthday = false;
+                                            if (p.birthDate && weekStartDate) {
+                                                const [y, m, d] = weekStartDate.split('-').map(Number);
+                                                const dayIndex = weekdays.indexOf(selectedDay);
+                                                const currentDate = new Date(y, m - 1, d + dayIndex);
+
+                                                // Ajustar por zona horaria si es necesario o simplemente comparar día/mes
+                                                // p.birthDate viene como YYYY-MM-DD string
+                                                const [bY, bM, bD] = p.birthDate.split('-').map(Number);
+
+                                                if (currentDate.getDate() === bD && (currentDate.getMonth() + 1) === bM) {
+                                                    isBirthday = true;
+                                                }
+                                            }
+
                                             return (
-                                                <tr key={p.id} className="hover:bg-blue-50 transition-colors duration-150 group">
+                                                <tr key={p.id} className={`hover:bg-blue-50 transition-colors duration-150 group ${isCeased ? 'bg-red-50' : ''}`}>
                                                     <td className="px-6 py-4 relative sticky left-0 z-10 bg-white group-hover:bg-blue-50" style={{ minWidth: '280px', maxWidth: '280px' }}>
                                                         <div className="flex items-start gap-2">
                                                             <div className="flex-1 min-w-0 pr-2">
@@ -1026,7 +1075,15 @@ export default function WeeklyScheduleEditor() {
                                                                     }}
                                                                 >
                                                                     {p.name} {p.lastName}
+                                                                    {isBirthday && (
+                                                                        <span title="¡Cumpleaños!" className="ml-2 text-xl animate-bounce inline-block" role="img" aria-label="birthday">
+                                                                            🎂
+                                                                        </span>
+                                                                    )}
                                                                 </div>
+                                                                {isCeased && (
+                                                                    <span className="text-xs text-red-600 font-bold bg-red-100 px-2 py-0.5 rounded mt-1 inline-block">CESADO</span>
+                                                                )}
                                                             </div>
 
                                                             <div className="flex items-center gap-1.5 flex-shrink-0 relative">
@@ -1072,7 +1129,7 @@ export default function WeeklyScheduleEditor() {
                                                                 </div>
 
                                                                 {/* Ícono si NO tiene día libre */}
-                                                                {!tieneDiaLibre && (
+                                                                {!tieneDiaLibre && !isCeased && (
                                                                     <FaExclamationCircle
                                                                         title="No tiene día libre asignado esta semana"
                                                                         className="text-red-600 flex-shrink-0"
@@ -1083,7 +1140,7 @@ export default function WeeklyScheduleEditor() {
                                                         </div>
 
                                                         {/* Mensaje de conflicto debajo del nombre */}
-                                                        {hasConflict && (
+                                                        {hasConflict && !isCeased && (
                                                             <div className="text-xs text-orange-800 bg-orange-50 border border-orange-200 px-2 py-1 rounded mt-2 flex items-center gap-1.5 shadow-sm">
                                                                 <AlertCircle className="w-3.5 h-3.5 text-orange-600 flex-shrink-0" />
                                                                 <span className="font-medium text-xs">{formatConflictMessage(hasConflict)}</span>
@@ -1099,75 +1156,85 @@ export default function WeeklyScheduleEditor() {
                                                         </span>
                                                     </td>
                                                     <td className="px-4 py-4 text-center">
-                                                        <input
-                                                            type="time"
-                                                            value={d.start || ''}
-                                                            onChange={e => handleChange(p.id, 'start', e.target.value)}
-                                                            disabled={d.feriado || d.off}
-                                                            className={`w-full px-2 py-2 border rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${hasConflict ? 'border-orange-500 bg-orange-50' : 'border-gray-300'
-                                                                } disabled:bg-gray-100 disabled:cursor-not-allowed`}
-                                                        />
+                                                        {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
+                                                            <input
+                                                                type="time"
+                                                                value={d.start || ''}
+                                                                onChange={e => handleChange(p.id, 'start', e.target.value)}
+                                                                disabled={d.feriado || d.off}
+                                                                className={`w-full px-2 py-2 border rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${hasConflict ? 'border-orange-500 bg-orange-50' : 'border-gray-300'
+                                                                    } disabled:bg-gray-100 disabled:cursor-not-allowed`}
+                                                            />
+                                                        )}
                                                     </td>
                                                     <td className="px-4 py-4 text-center">
-                                                        <input
-                                                            type="time"
-                                                            value={d.end || ''}
-                                                            onChange={e => handleChange(p.id, 'end', e.target.value)}
-                                                            disabled={d.feriado || d.off}
-                                                            className={`w-full px-2 py-2 border rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${hasConflict ? 'border-orange-500 bg-orange-50' : 'border-gray-300'
-                                                                } disabled:bg-gray-100 disabled:cursor-not-allowed`}
-                                                        />
+                                                        {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
+                                                            <input
+                                                                type="time"
+                                                                value={d.end || ''}
+                                                                onChange={e => handleChange(p.id, 'end', e.target.value)}
+                                                                disabled={d.feriado || d.off}
+                                                                className={`w-full px-2 py-2 border rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${hasConflict ? 'border-orange-500 bg-orange-50' : 'border-gray-300'
+                                                                    } disabled:bg-gray-100 disabled:cursor-not-allowed`}
+                                                            />
+                                                        )}
                                                     </td>
                                                     <td className="px-2 py-4 text-center">
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            max="12"
-                                                            step="0.5"
-                                                            value={d.extraHours || ''}
-                                                            onChange={e => handleChange(p.id, 'extraHours', e.target.value)}
-                                                            disabled={d.feriado || d.off}
-                                                            placeholder="0"
-                                                            className="w-16 px-2 py-2 border border-gray-300 rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
-                                                        />
+                                                        {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                max="12"
+                                                                step="0.5"
+                                                                value={d.extraHours || ''}
+                                                                onChange={e => handleChange(p.id, 'extraHours', e.target.value)}
+                                                                disabled={d.feriado || d.off}
+                                                                placeholder="0"
+                                                                className="w-16 px-2 py-2 border border-gray-300 rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
+                                                            />
+                                                        )}
                                                     </td>
                                                     <td className="px-4 py-4 text-center font-medium text-gray-700 text-sm">
-                                                        {calculateDailyHours(d.start, d.end, d.extraHours)}
+                                                        {isCeased ? '--' : calculateDailyHours(d.start, d.end, d.extraHours)}
                                                     </td>
-                                                    <td className={`px-4 py-4 text-center font-semibold text-sm ${!horasEnRango ? 'text-red-600' : 'text-green-700'
+                                                    <td className={`px-4 py-4 text-center font-semibold text-sm ${!horasEnRango && !isCeased ? 'text-red-600' : 'text-green-700'
                                                         }`}>
-                                                        <div className="flex items-center justify-center gap-1">
-                                                            <Clock className="w-4 h-4" />
-                                                            {horas.formatted}
-                                                            {hasConflict && <AlertCircle className="w-4 h-4 text-orange-600" />}
-                                                        </div>
+                                                        {isCeased ? '--' : (
+                                                            <div className="flex items-center justify-center gap-1">
+                                                                <Clock className="w-4 h-4" />
+                                                                {horas.formatted}
+                                                                {hasConflict && <AlertCircle className="w-4 h-4 text-orange-600" />}
+                                                            </div>
+                                                        )}
                                                     </td>
 
                                                     <td className="px-4 py-4 text-center">
-                                                        <select
-                                                            value={d.position || ''}
-                                                            onChange={e => handleChange(p.id, 'position', e.target.value)}
-                                                            disabled={d.feriado || d.off}
-                                                            className="w-full px-2 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
-                                                        >
-                                                            <option value="">--</option>
-                                                            {positions.map(pos => (
-                                                                <option key={pos} value={pos}>{pos}</option>
-                                                            ))}
-                                                        </select>
+                                                        {isCeased ? <span className="text-xs font-bold text-red-500 bg-red-100 px-2 py-1 rounded">CESADO</span> : (
+                                                            <select
+                                                                value={d.position || ''}
+                                                                onChange={e => handleChange(p.id, 'position', e.target.value)}
+                                                                disabled={d.feriado || d.off}
+                                                                className="w-full px-2 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
+                                                            >
+                                                                <option value="">--</option>
+                                                                {positions.map(pos => (
+                                                                    <option key={pos} value={pos}>{pos}</option>
+                                                                ))}
+                                                            </select>
+                                                        )}
                                                     </td>
                                                     <td className="px-4 py-4 text-center font-bold text-orange-600 text-sm">
-                                                        {preCierres}/4
+                                                        {isCeased ? '--' : `${preCierres}/4`}
                                                     </td>
                                                     <td className="px-4 py-4 text-center font-bold text-red-600 text-sm">
-                                                        {cierres}/4
+                                                        {isCeased ? '--' : `${cierres}/4`}
                                                     </td>
                                                     <td className="px-4 py-4 text-center">
                                                         <input
                                                             type="checkbox"
                                                             checked={d.off || false}
                                                             onChange={e => handleChange(p.id, 'off', e.target.checked)}
-                                                            disabled={d.feriado}
+                                                            disabled={d.feriado || isCeased}
                                                             className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                                                         />
                                                     </td>
@@ -1176,7 +1243,8 @@ export default function WeeklyScheduleEditor() {
                                                             type="checkbox"
                                                             checked={d.feriado || false}
                                                             onChange={e => handleChange(p.id, 'feriado', e.target.checked)}
-                                                            className="w-5 h-5 text-purple-600 border-gray-300 rounded focus:ring-2 focus:ring-purple-500 cursor-pointer"
+                                                            disabled={isCeased}
+                                                            className="w-5 h-5 text-purple-600 border-gray-300 rounded focus:ring-2 focus:ring-purple-500 cursor-pointer disabled:opacity-50"
                                                         />
                                                     </td>
                                                 </tr>

@@ -86,7 +86,9 @@ service cloud.firestore {
          // Ensure the doc is NOT already linked
          (!("uid" in resource.data) || resource.data.uid == null || resource.data.uid == "") &&
          // Ensure they are claiming it for themselves
-         request.resource.data.uid == request.auth.uid);
+         request.resource.data.uid == request.auth.uid) ||
+        // 3. User updating their own profile
+        (request.auth != null && resource.data.uid == request.auth.uid);
       allow delete: if isAdmin() || isSuperAdmin();
     }
 
