@@ -15,8 +15,14 @@ import {
   Building2,
   Briefcase,
   X,
-  CheckCircle
+  CheckCircle,
+
+  Quote,
+  Edit,
+  Save,
+  PlusCircle
 } from "lucide-react";
+import { MOTIVATIONAL_QUOTES } from "../constants/quotes";
 
 const CollaboratorDashboard = () => {
   const { currentUser, logout } = useAuth();
@@ -28,6 +34,15 @@ const CollaboratorDashboard = () => {
   const [selectedStore, setSelectedStore] = useState("");
   const [availableStaff, setAvailableStaff] = useState([]);
   const [selectedStaffId, setSelectedStaffId] = useState("");
+
+  const [dailyQuote, setDailyQuote] = useState("");
+  const [isEditingBirthday, setIsEditingBirthday] = useState(false);
+  const [tempBirthDate, setTempBirthDate] = useState("");
+
+  useEffect(() => {
+    const randomIndex = Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length);
+    setDailyQuote(MOTIVATIONAL_QUOTES[randomIndex]);
+  }, []);
 
   useEffect(() => {
     const fetchPerfil = async () => {
@@ -91,6 +106,28 @@ const CollaboratorDashboard = () => {
       email: currentUser.email || ""
     });
     window.location.reload();
+  };
+
+
+
+  const handleSaveBirthday = async () => {
+    if (!perfil?.id) return;
+    try {
+      const db = getFirestore();
+      await updateDoc(doc(db, "staff_profiles", perfil.id), {
+        birthDate: tempBirthDate
+      });
+      setPerfil(prev => ({ ...prev, birthDate: tempBirthDate }));
+      setIsEditingBirthday(false);
+    } catch (error) {
+      console.error("Error al guardar fecha de nacimiento:", error);
+      alert("Error al actualizar la fecha. Intentalo de nuevo.");
+    }
+  };
+
+  const startEditingBirthday = () => {
+    setTempBirthDate(perfil?.birthDate || "");
+    setIsEditingBirthday(true);
   };
 
   const closeModal = () => setModalType(null);
@@ -238,6 +275,47 @@ const CollaboratorDashboard = () => {
                 <p className="text-sm font-semibold text-gray-800">{storeName}</p>
               </div>
             </div>
+            {/* Added Birthday Field */}
+            <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg group transition-all duration-200 hover:shadow-sm">
+              <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
+                <span className="text-xl" role="img" aria-label="birthday">🎂</span>
+              </div>
+              <div className="flex-1">
+                <p className="text-xs text-gray-500 font-medium">Cumpleaños</p>
+                {isEditingBirthday ? (
+                  <div className="flex items-center gap-2 mt-1">
+                    <input
+                      type="date"
+                      value={tempBirthDate}
+                      onChange={(e) => setTempBirthDate(e.target.value)}
+                      className="text-sm border border-gray-300 rounded px-2 py-1 w-full focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                    />
+                    <button onClick={handleSaveBirthday} className="text-green-600 hover:text-green-800 p-1 hover:bg-green-50 rounded-full transition-colors">
+                      <Save className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => setIsEditingBirthday(false)} className="text-red-500 hover:text-red-700 p-1 hover:bg-red-50 rounded-full transition-colors">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-semibold text-gray-800">
+                      {perfil.birthDate ? (() => {
+                        const [y, m, d] = perfil.birthDate.split('-');
+                        return `${d}/${m}/${y}`;
+                      })() : <span className="text-gray-400 italic font-normal">Sin asignar</span>}
+                    </p>
+                    <button
+                      onClick={startEditingBirthday}
+                      className="opacity-0 group-hover:opacity-100 transition-all duration-200 text-blue-500 hover:text-blue-700 p-1 hover:bg-blue-50 rounded-full"
+                      title={perfil.birthDate ? "Editar fecha" : "Agregar fecha"}
+                    >
+                      {perfil.birthDate ? <Edit className="w-4 h-4" /> : <PlusCircle className="w-4 h-4" />}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -307,6 +385,24 @@ const CollaboratorDashboard = () => {
           }
         `}</style>
       </div>
+
+      {/* Footer Motivacional */}
+      <footer className="bg-white border-t border-gray-200 mt-auto">
+        <div className="max-w-6xl mx-auto px-4 py-6 text-center">
+          <div className="flex flex-col items-center justify-center gap-2">
+            <Quote className="w-8 h-8 text-blue-300 transform rotate-180" />
+            <p className="text-gray-600 font-medium italic text-lg max-w-2xl">
+              "{dailyQuote}"
+            </p>
+          </div>
+        </div>
+      </footer>
+
+
+
+
+
+
     </div>
   );
 };

@@ -34,7 +34,7 @@ export const exportGeoVictoriaExcel = (staff, schedules, weekKey, turnoMap) => {
     if (!dni) return;
 
     const fullName = `${person.name || ""} ${person.lastName || ""}`.trim();
-    const row = Array(33).fill("");
+    const row = Array(33).fill(null);
     row[0] = fullName;
     row[1] = dni;
 

@@ -353,7 +353,9 @@ export const exportExtraHoursReport = async (staff, schedules, weekKey) => {
     const pageWidth = pdf.internal.pageSize.getWidth();
 
     // Header
-    const addHeader = (page) => {
+    const addHeader = (data) => {
+        // Solo dibujar en la primera página o si es una nueva página agregada automáticamente
+        // autoTable llama a esto en cada página
         pdf.setFillColor(250, 250, 250);
         pdf.rect(0, 0, pageWidth, 80, 'F');
         if (logoB64) pdf.addImage(logoB64, 'PNG', margin, 15, 100, 50, undefined, 'FAST');
@@ -382,31 +384,50 @@ export const exportExtraHoursReport = async (staff, schedules, weekKey) => {
         const schedule = schedules[p.id] || {};
         days.forEach(day => {
             const info = schedule[day];
-            if (info && info.extraHours && !isNaN(info.extraHours) && Number(info.extraHours) > 0) {
-                // Calcular turno extendido para mostrar
+            if (!info) return;
+
+            const extraPre = info.extraHoursPre ? Number(info.extraHoursPre) : 0;
+            const extraPost = info.extraHoursPost ? Number(info.extraHoursPost) : (info.extraHours ? Number(info.extraHours) : 0);
+            const totalExtra = extraPre + extraPost;
+
+            if (totalExtra > 0 && info.start && info.end) {
+                let startStr = info.start;
                 let endStr = info.end;
-                const extraVal = Number(info.extraHours);
-                if (info.end && info.start) {
+
+                // Ajustar Inicio si hay HE Antes
+                if (extraPre > 0) {
+                    const [sh, sm] = info.start.split(':').map(Number);
+                    const totalMinsStart = sh * 60 + sm - (extraPre * 60);
+                    // Manejo simple de 00:00 como tope visual
+                    const finalMinsStart = Math.max(0, totalMinsStart);
+                    const finalH = Math.floor(finalMinsStart / 60);
+                    const finalM = finalMinsStart % 60;
+                    startStr = `${String(finalH).padStart(2, '0')}:${String(finalM).padStart(2, '0')}`;
+                }
+
+                // Ajustar Fin si hay HE Después
+                if (extraPost > 0) {
                     const [eh, em] = info.end.split(':').map(Number);
-                    const totalMins = eh * 60 + em + (extraVal * 60);
-                    const finalH = Math.floor(totalMins / 60) % 24;
-                    const finalM = totalMins % 60;
+                    const totalMinsEnd = eh * 60 + em + (extraPost * 60);
+                    const finalH = Math.floor(totalMinsEnd / 60) % 24;
+                    const finalM = totalMinsEnd % 60;
                     endStr = `${String(finalH).padStart(2, '0')}:${String(finalM).padStart(2, '0')}`;
                 }
 
                 reportData.push({
                     name: `${p.name} ${p.lastName}`,
                     modality: p.modality,
-                    day: dayNames[day], // O la fecha exacta si la tuviéramos calculada fácil
-                    shift: `${info.start} - ${endStr}`,
-                    extra: extraVal
+                    day: dayNames[day],
+                    shift: `${startStr} - ${endStr}`,
+                    extra: totalExtra
                 });
             }
         });
     });
 
     if (reportData.length === 0) {
-        addHeader(1);
+        // Inicializar manualmente para pintar el header si no hay datos
+        addHeader({ pageNumber: 1 });
         pdf.setFontSize(12);
         pdf.setTextColor(0);
         pdf.text("No se encontraron horas extras registradas esta semana.", margin, 100);
@@ -414,32 +435,92 @@ export const exportExtraHoursReport = async (staff, schedules, weekKey) => {
         return;
     }
 
-    autoTable(pdf, {
-        startY: 100,
-        head: [['Colaborador', 'Modalidad', 'Día', 'Turno (+HE)', 'Horas Extras']],
-        body: reportData.map(d => [
-            d.name.toUpperCase(),
-            d.modality,
-            d.day,
-            d.shift,
-            d.extra + ' hrs'
-        ]),
-        theme: 'grid',
-        styles: { fontSize: 10, cellPadding: 5 },
-        headStyles: { fillColor: [41, 128, 185], textColor: 255, fontStyle: 'bold' },
-        didDrawPage: (data) => {
-            addHeader(data.pageNumber);
+    const fullTimeData = reportData.filter(d => d.modality === 'Full-Time');
+    const partTimeData = reportData.filter(d => d.modality !== 'Full-Time');
+
+    let currentY = 100;
+
+    const drawTable = (title, data) => {
+        if (data.length === 0) return;
+
+        // Verificar si cabe el título, si no, nueva página
+        if (currentY + 50 > pdf.internal.pageSize.getHeight()) {
+            pdf.addPage();
+            currentY = 100;
         }
-    });
 
-    // Total General
+        pdf.setFontSize(14);
+        pdf.setTextColor(41, 128, 185);
+        pdf.setFont('helvetica', 'bold');
+        pdf.text(title, margin, currentY);
+        currentY += 15;
+
+        autoTable(pdf, {
+            startY: currentY,
+            head: [['Colaborador', 'Día', 'Turno (+HE)', 'Horas Extras']],
+            body: data.map(d => [
+                d.name.toUpperCase(),
+                d.day,
+                d.shift,
+                d.extra + ' hrs'
+            ]),
+            theme: 'grid',
+            styles: { fontSize: 10, cellPadding: 5 },
+            headStyles: { fillColor: [41, 128, 185], textColor: 255, fontStyle: 'bold' },
+            didDrawPage: (data) => {
+                // Hook para header en cada página nueva generada por la tabla
+                addHeader(data);
+            }
+        });
+
+        // Totales de la sección
+        const totalSection = data.reduce((acc, curr) => acc + curr.extra, 0);
+        currentY = pdf.lastAutoTable.finalY + 20;
+
+        // Verificar espacio para total
+        if (currentY + 20 > pdf.internal.pageSize.getHeight()) {
+            pdf.addPage();
+            currentY = 100;
+            // Si agregamos página manual, necesitamos poner el header manual si autoTable no lo hizo (que no lo hará pq no estamos dentro de autoTable)
+            // Pero addHeader usa datos de autoTable, aquí podemos llamar a addHeader mockeado o simplificado
+            addHeader({ pageNumber: pdf.internal.getNumberOfPages() });
+        }
+
+        pdf.setFontSize(12);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(0);
+        pdf.text(`TOTAL ${title}: ${totalSection} hrs`, margin, currentY);
+
+        currentY += 30; // Espacio para la siguiente tabla
+    };
+
+    // Dibujar Full Time
+    if (fullTimeData.length > 0) {
+        drawTable("FULL TIME", fullTimeData);
+    }
+
+    // Dibujar Part Time
+    if (partTimeData.length > 0) {
+        drawTable("PART TIME", partTimeData);
+    }
+
+    // Total General (Solo si mostramos ambos, o siempre?)
     const totalExtras = reportData.reduce((acc, curr) => acc + curr.extra, 0);
-    const finalY = pdf.lastAutoTable.finalY + 20;
 
-    pdf.setFontSize(12);
-    pdf.setFont('helvetica', 'bold');
-    pdf.setTextColor(0);
-    pdf.text(`TOTAL HORAS EXTRAS SEMANA: ${totalExtras} hrs`, margin, finalY);
+    // Verificar si cabe
+    if (currentY + 20 > pdf.internal.pageSize.getHeight()) {
+        pdf.addPage();
+        currentY = 100;
+        addHeader({ pageNumber: pdf.internal.getNumberOfPages() });
+    }
+
+    pdf.setDrawColor(200);
+    pdf.setLineWidth(1);
+    pdf.line(margin, currentY - 10, pageWidth - margin, currentY - 10);
+
+    pdf.setFontSize(14);
+    pdf.setTextColor(41, 128, 185);
+    pdf.text(`TOTAL GENERAL HORAS EXTRAS: ${totalExtras} hrs`, margin, currentY + 10);
 
     pdf.save(`Reporte_Extras_${weekKey}_v${Date.now()}.pdf`);
 };

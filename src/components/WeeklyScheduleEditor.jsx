@@ -111,7 +111,12 @@ export default function WeeklyScheduleEditor() {
         const diff = (dayOfWeek === 0 ? -6 : 1 - dayOfWeek); // Calcula lunes
         const monday = new Date(today);
         monday.setDate(today.getDate() + diff);
-        setWeekStartDate(monday.toISOString().slice(0, 10));
+
+        // CORRECCIÓN: Usar hora local, no UTC
+        const y = monday.getFullYear();
+        const m = String(monday.getMonth() + 1).padStart(2, '0');
+        const d = String(monday.getDate()).padStart(2, '0');
+        setWeekStartDate(`${y}-${m}-${d}`);
     }, []);
 
     // === VALIDACIÓN TEMPRANA ===
@@ -251,17 +256,17 @@ export default function WeeklyScheduleEditor() {
         const current = schedules[staffId]?.[selectedDay] || {};
         const modality = staff.find(p => p.id === staffId)?.modality || '';
 
-        // Convertir a número si es horas extras
+        // Convertir a número si es horas extras (cualquier campo de HE)
         let finalValue = value;
-        if (field === 'extraHours') {
-            finalValue = value === '' ? '' : parseFloat(value);
+        if (field === 'extraHours' || field === 'extraHoursPre' || field === 'extraHoursPost') {
+            finalValue = value === '' ? '' : parseFloat(String(value).replace(',', '.'));
         }
 
         let updates = { [field]: finalValue };
 
         // 🔒 Si se marca "off", borrar datos relacionados
         if (field === 'off' && value === true) {
-            updates = { off: true, start: '', end: '', position: '', feriado: false, extraHours: '' };
+            updates = { off: true, start: '', end: '', position: '', feriado: false, extraHours: '', extraHoursPre: '', extraHoursPost: '' };
         }
 
         // 🔒 Si se marca "feriado", setear horarios fijos según modalidad
@@ -273,7 +278,9 @@ export default function WeeklyScheduleEditor() {
                 start: '08:00',
                 end: isFull ? '16:45' : '12:00',
                 position: '',
-                extraHours: ''
+                extraHours: '',
+                extraHoursPre: '',
+                extraHoursPost: ''
             };
         }
 
@@ -303,24 +310,25 @@ export default function WeeklyScheduleEditor() {
     };
 
 
-    // Función para calcular horas diarias
-    const calculateDailyHours = (start, end, extraHours = 0) => {
+    // Función para calcular horas diarias (turno + horas extras)
+    const calculateDailyHours = (start, end, extraHoursPre = 0, extraHoursPost = 0) => {
         if (!start || !end) return '--';
 
         const startMinutes = timeToMinutes(start);
         let endMinutes = timeToMinutes(end);
 
-        // Si termina antes de empezar, asumimos que pasó medianoche
         if (endMinutes <= startMinutes) {
             endMinutes += 24 * 60;
         }
 
         let diff = endMinutes - startMinutes;
 
-        // Sumar horas extras
-        if (extraHours && !isNaN(extraHours)) {
-            diff += Number(extraHours) * 60;
-        }
+        // Sumar horas extras al total diario
+        const pre = parseFloat(String(extraHoursPre || 0).replace(',', '.')) || 0;
+        if (pre > 0) diff += pre * 60;
+
+        const post = parseFloat(String(extraHoursPost || 0).replace(',', '.')) || 0;
+        if (post > 0) diff += post * 60;
 
         return formatMinutesToHours(diff);
     };
@@ -343,32 +351,46 @@ export default function WeeklyScheduleEditor() {
 
     // Función para calcular horas semanales
     const calculateWeeklyHours = (staffId) => {
-        if (!wk || !schedules[staffId]) {
+        // Asegurarnos de tener los datos necesarios
+        if (!wk || !schedules || !schedules[staffId]) {
             return { total: 0, formatted: '0:00' };
         }
 
-        const modality = staff.find(p => p.id === staffId)?.modality || '';
+        const person = staff.find(p => p.id === staffId);
+        const modality = person?.modality || '';
         const isFullTime = modality.toLowerCase() === 'full-time';
 
         let totalMinutes = 0;
+
         weekdays.forEach(day => {
             const daySchedule = schedules[staffId][day];
-            if (daySchedule && daySchedule.start && daySchedule.end && !daySchedule.off && !daySchedule.feriado) {
-                let startMinutes = timeToMinutes(daySchedule.start);
-                let endMinutes = timeToMinutes(daySchedule.end);
 
-                if (endMinutes <= startMinutes) {
-                    endMinutes += 24 * 60; // día cruza medianoche
-                }
+            // Si no hay horario o es día libre/feriado, saltar (a menos que queramos contar HE en libres?)
+            // Por ahora mantenemos la lógica de que debe haber turno activo.
+            if (!daySchedule || daySchedule.off || daySchedule.feriado) return;
 
-                let dailyMinutes = endMinutes - startMinutes;
+            // Validar start y end existan para calcular base
+            if (!daySchedule.start || !daySchedule.end) return;
 
-                if (isFullTime) {
-                    dailyMinutes = Math.max(0, dailyMinutes - 45); // Descontar break
-                }
+            // 1. Calcular Horas Base (Turno)
+            const startMinutes = timeToMinutes(daySchedule.start);
+            let endMinutes = timeToMinutes(daySchedule.end);
 
-                totalMinutes += dailyMinutes;
+            if (endMinutes <= startMinutes) {
+                endMinutes += 24 * 60; // Cruce de medianoche
             }
+
+            let baseMinutes = endMinutes - startMinutes;
+
+            // Las horas extras NO se suman al total semanal
+            // Solo se cuenta el turno contractual (start - end)
+
+            // Descuento Break (Solo Full Time)
+            if (isFullTime) {
+                baseMinutes = Math.max(0, baseMinutes - 45);
+            }
+
+            totalMinutes += baseMinutes;
         });
 
         return {
@@ -450,7 +472,7 @@ export default function WeeklyScheduleEditor() {
             return total;
         };
 
-        const shuffledStaff = [...staff]
+        const shuffledStaff = [...activeStaff]
             .filter(p => p?.id && p?.name)
             .sort(() => Math.random() - 0.5);
 
@@ -674,7 +696,32 @@ export default function WeeklyScheduleEditor() {
 
 
     // Filtrar staff según filtros activos
-    const filteredStaff = staff.filter(person => {
+    // Filtrar staff según filtros activos
+    // 1. Filtrar primero por Cese (Active Staff)
+    // Esto asegura que activeStaff solo contenga empleados activos para esta semana
+    const activeStaff = staff.filter(person => {
+        // Logic de Ceses: Si la fecha de cese es ANTERIOR al inicio de la semana, ocultar.
+        if (person.terminationDate && weekStartDate) {
+            try {
+                const [y, m, d] = weekStartDate.split('-').map(Number);
+                const weekStart = new Date(y, m - 1, d);
+
+                // Parse termination date manually
+                const [tY, tM, tD] = person.terminationDate.split('-').map(Number);
+                const termDate = new Date(tY, tM - 1, tD);
+
+                if (isNaN(termDate.getTime())) return true;
+                if (termDate < weekStart) return false;
+            } catch (e) {
+                return true;
+            }
+        }
+        return true;
+    });
+
+    // 2. Filtrar activeStaff según inputs de la UI (Modalidad, Posición)
+    // Usamos activeStaff como base para que los cesados no aparezcan en la tabla ni en los filtros
+    const filteredStaff = activeStaff.filter(person => {
         if (modalityFilter !== 'Todos' && person.modality !== modalityFilter) return false;
 
         if (positionFilter !== 'Todas') {
@@ -724,23 +771,46 @@ export default function WeeklyScheduleEditor() {
     const assignedArray = filteredStaff
         .map(p => {
             const d = schedules[p.id]?.[selectedDay];
-            if (!d) return {};
+            // Si no hay datos, o faltan start/end esenciales, retornar vacío se filtrará luego
+            if (!d || !d.start || !d.end) return {};
 
+            let realStart = d.start;
             let realEnd = d.end;
 
-            // Si hay horas extra, extender el final visual para el heatmap
-            if (d.extraHours && d.end && !isNaN(d.extraHours) && Number(d.extraHours) > 0) {
-                const [h, m] = d.end.split(':').map(Number);
-                const extraMins = Number(d.extraHours) * 60;
+            // 1. Extender inicio si hay HE Antes
+            //    Si entra a las 9:00 y tiene 1h HE pre, en el heatmap debe verse desde las 8:00
+            if (d.extraHoursPre && !isNaN(d.extraHoursPre) && Number(d.extraHoursPre) > 0) {
+                const [h, m] = realStart.split(':').map(Number);
+                const extraMins = Number(d.extraHoursPre) * 60;
                 const baseMins = h * 60 + m;
-                const newMins = baseMins + extraMins;
+                let newMins = baseMins - extraMins;
 
+                // Evitar tiempos negativos si se pasa del día anterior (00:00 como tope visual simple)
+                if (newMins < 0) newMins = 0;
+
+                const finalH = Math.floor(newMins / 60);
+                const finalM = newMins % 60;
+                realStart = `${String(finalH).padStart(2, '0')}:${String(finalM).padStart(2, '0')}`;
+            }
+
+            // 2. Extender final si hay HE Después
+            const hePost = d.extraHoursPost || d.extraHours;
+            if (hePost && !isNaN(hePost) && Number(hePost) > 0) {
+                const [h, m] = realEnd.split(':').map(Number);
+                const extraMins = Number(hePost) * 60;
+                const baseMins = h * 60 + m; // Hora de salida normal
+
+                // Casos de turno nocturno: si termina a las 02:00, son 26 horas desde el día anterior para calculo lineal
+                // Pero aquí asumimos simple extensión. Si start > end, ya cruzó medianoche.
+                // Para el heatmap visual simple, solo extendemos la hora final.
+
+                const newMins = baseMins + extraMins;
                 const finalH = Math.floor(newMins / 60) % 24;
                 const finalM = newMins % 60;
                 realEnd = `${String(finalH).padStart(2, '0')}:${String(finalM).padStart(2, '0')}`;
             }
 
-            return { position: d?.position, start: d?.start, end: realEnd };
+            return { position: d?.position, start: realStart, end: realEnd };
         })
         .filter(x => x.position && x.start && x.end);
 
@@ -917,7 +987,7 @@ export default function WeeklyScheduleEditor() {
                             </button>
 
                             <button
-                                onClick={() => exportSchedulePDF(staff, schedules, wk)}
+                                onClick={() => exportSchedulePDF(activeStaff, schedules, wk)}
                                 className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
                                 <FileText className="w-5 h-5" />
@@ -938,7 +1008,7 @@ export default function WeeklyScheduleEditor() {
                                         alert('Primero sube el archivo de turnos de GeoVictoria');
                                         return;
                                     }
-                                    exportGeoVictoriaExcel(staff, schedules, wk, turnoMap);
+                                    exportGeoVictoriaExcel(activeStaff, schedules, wk, turnoMap);
                                 }}
                                 className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-teal-500 to-teal-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
@@ -949,7 +1019,7 @@ export default function WeeklyScheduleEditor() {
                             <button
                                 onClick={async () => {
                                     const currentSchedule = allSchedules[wk] || {};
-                                    await exportExtraHoursReport(staff, currentSchedule, wk);
+                                    await exportExtraHoursReport(activeStaff, currentSchedule, wk);
                                 }}
                                 className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
@@ -996,7 +1066,8 @@ export default function WeeklyScheduleEditor() {
                                             <th className="px-6 py-4 text-center text-xs font-semibold uppercase tracking-wider sticky left-[280px] z-10 bg-gradient-to-r from-gray-700 to-gray-800" style={{ minWidth: '140px', maxWidth: '140px' }}>Modalidad</th>
                                             <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Entrada</th>
                                             <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Salida</th>
-                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider" title="Horas Extras (Se restarán de la salida para GeoVictoria)">HE</th>
+                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider" title="Horas Extras Antes">HE Ant</th>
+                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider" title="Horas Extras Después">HE Desp</th>
                                             <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Horas Día</th>
                                             <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Horas Semana</th>
                                             <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Posición</th>
@@ -1022,8 +1093,41 @@ export default function WeeklyScheduleEditor() {
                                             const horasEnRango = horas.total >= horasMin && horas.total <= horasMax;
                                             const { preCierres, cierres } = calcularCierres(schedules[p.id] || {});
 
+                                            // Lógica de Cese Diario
+                                            let isCeased = false;
+                                            if (p.terminationDate && weekStartDate) {
+                                                const [y, m, d] = weekStartDate.split('-').map(Number);
+                                                const dayIndex = weekdays.indexOf(selectedDay);
+                                                const currentDate = new Date(y, m - 1, d + dayIndex);
+                                                // Ajustar a medianoche para comparar fechas
+                                                currentDate.setHours(0, 0, 0, 0);
+                                                const termDate = new Date(p.terminationDate + 'T00:00:00');
+                                                termDate.setHours(0, 0, 0, 0);
+
+                                                if (currentDate > termDate) {
+                                                    isCeased = true;
+                                                }
+
+                                            }
+
+                                            // Lógica de Cumpleaños
+                                            let isBirthday = false;
+                                            if (p.birthDate && weekStartDate) {
+                                                const [y, m, d] = weekStartDate.split('-').map(Number);
+                                                const dayIndex = weekdays.indexOf(selectedDay);
+                                                const currentDate = new Date(y, m - 1, d + dayIndex);
+
+                                                // Ajustar por zona horaria si es necesario o simplemente comparar día/mes
+                                                // p.birthDate viene como YYYY-MM-DD string
+                                                const [bY, bM, bD] = p.birthDate.split('-').map(Number);
+
+                                                if (currentDate.getDate() === bD && (currentDate.getMonth() + 1) === bM) {
+                                                    isBirthday = true;
+                                                }
+                                            }
+
                                             return (
-                                                <tr key={p.id} className="hover:bg-blue-50 transition-colors duration-150 group">
+                                                <tr key={p.id} className={`hover:bg-blue-50 transition-colors duration-150 group ${isCeased ? 'bg-red-50' : ''}`}>
                                                     <td className="px-6 py-4 relative sticky left-0 z-10 bg-white group-hover:bg-blue-50" style={{ minWidth: '280px', maxWidth: '280px' }}>
                                                         <div className="flex items-start gap-2">
                                                             <div className="flex-1 min-w-0 pr-2">
@@ -1036,7 +1140,15 @@ export default function WeeklyScheduleEditor() {
                                                                     }}
                                                                 >
                                                                     {p.name} {p.lastName}
+                                                                    {isBirthday && (
+                                                                        <span title="¡Cumpleaños!" className="ml-2 text-xl animate-bounce inline-block" role="img" aria-label="birthday">
+                                                                            🎂
+                                                                        </span>
+                                                                    )}
                                                                 </div>
+                                                                {isCeased && (
+                                                                    <span className="text-xs text-red-600 font-bold bg-red-100 px-2 py-0.5 rounded mt-1 inline-block">CESADO</span>
+                                                                )}
                                                             </div>
 
                                                             <div className="flex items-center gap-1.5 flex-shrink-0 relative">
@@ -1082,7 +1194,7 @@ export default function WeeklyScheduleEditor() {
                                                                 </div>
 
                                                                 {/* Ícono si NO tiene día libre */}
-                                                                {!tieneDiaLibre && (
+                                                                {!tieneDiaLibre && !isCeased && (
                                                                     <FaExclamationCircle
                                                                         title="No tiene día libre asignado esta semana"
                                                                         className="text-red-600 flex-shrink-0"
@@ -1093,7 +1205,7 @@ export default function WeeklyScheduleEditor() {
                                                         </div>
 
                                                         {/* Mensaje de conflicto debajo del nombre */}
-                                                        {hasConflict && (
+                                                        {hasConflict && !isCeased && (
                                                             <div className="text-xs text-orange-800 bg-orange-50 border border-orange-200 px-2 py-1 rounded mt-2 flex items-center gap-1.5 shadow-sm">
                                                                 <AlertCircle className="w-3.5 h-3.5 text-orange-600 flex-shrink-0" />
                                                                 <span className="font-medium text-xs">{formatConflictMessage(hasConflict)}</span>
@@ -1109,75 +1221,100 @@ export default function WeeklyScheduleEditor() {
                                                         </span>
                                                     </td>
                                                     <td className="px-4 py-4 text-center">
-                                                        <input
-                                                            type="time"
-                                                            value={d.start || ''}
-                                                            onChange={e => handleChange(p.id, 'start', e.target.value)}
-                                                            disabled={d.feriado || d.off}
-                                                            className={`w-full px-2 py-2 border rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${hasConflict ? 'border-orange-500 bg-orange-50' : 'border-gray-300'
-                                                                } disabled:bg-gray-100 disabled:cursor-not-allowed`}
-                                                        />
+                                                        {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
+                                                            <input
+                                                                type="time"
+                                                                value={d.start || ''}
+                                                                onChange={e => handleChange(p.id, 'start', e.target.value)}
+                                                                disabled={d.feriado || d.off}
+                                                                className={`w-full px-2 py-2 border rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${hasConflict ? 'border-orange-500 bg-orange-50' : 'border-gray-300'
+                                                                    } disabled:bg-gray-100 disabled:cursor-not-allowed`}
+                                                            />
+                                                        )}
                                                     </td>
                                                     <td className="px-4 py-4 text-center">
-                                                        <input
-                                                            type="time"
-                                                            value={d.end || ''}
-                                                            onChange={e => handleChange(p.id, 'end', e.target.value)}
-                                                            disabled={d.feriado || d.off}
-                                                            className={`w-full px-2 py-2 border rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${hasConflict ? 'border-orange-500 bg-orange-50' : 'border-gray-300'
-                                                                } disabled:bg-gray-100 disabled:cursor-not-allowed`}
-                                                        />
+                                                        {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
+                                                            <input
+                                                                type="time"
+                                                                value={d.end || ''}
+                                                                onChange={e => handleChange(p.id, 'end', e.target.value)}
+                                                                disabled={d.feriado || d.off}
+                                                                className={`w-full px-2 py-2 border rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${hasConflict ? 'border-orange-500 bg-orange-50' : 'border-gray-300'
+                                                                    } disabled:bg-gray-100 disabled:cursor-not-allowed`}
+                                                            />
+                                                        )}
                                                     </td>
                                                     <td className="px-2 py-4 text-center">
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            max="12"
-                                                            step="0.5"
-                                                            value={d.extraHours || ''}
-                                                            onChange={e => handleChange(p.id, 'extraHours', e.target.value)}
-                                                            disabled={d.feriado || d.off}
-                                                            placeholder="0"
-                                                            className="w-16 px-2 py-2 border border-gray-300 rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
-                                                        />
+                                                        {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                max="12"
+                                                                step="0.5"
+                                                                value={d.extraHoursPre || ''}
+                                                                onChange={e => handleChange(p.id, 'extraHoursPre', e.target.value)}
+                                                                disabled={d.feriado || d.off}
+                                                                placeholder="0"
+                                                                className="w-16 px-2 py-2 border border-blue-200 bg-blue-50 rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
+                                                            />
+                                                        )}
+                                                    </td>
+                                                    <td className="px-2 py-4 text-center">
+                                                        {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                max="12"
+                                                                step="0.5"
+                                                                value={d.extraHoursPost || d.extraHours || ''}
+                                                                onChange={e => handleChange(p.id, 'extraHoursPost', e.target.value)}
+                                                                disabled={d.feriado || d.off}
+                                                                placeholder="0"
+                                                                className="w-16 px-2 py-2 border border-gray-300 rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
+                                                            />
+                                                        )}
                                                     </td>
                                                     <td className="px-4 py-4 text-center font-medium text-gray-700 text-sm">
-                                                        {calculateDailyHours(d.start, d.end, d.extraHours)}
+                                                        {isCeased ? '--' : calculateDailyHours(d.start, d.end, d.extraHoursPre, (d.extraHoursPost || d.extraHours))}
                                                     </td>
-                                                    <td className={`px-4 py-4 text-center font-semibold text-sm ${!horasEnRango ? 'text-red-600' : 'text-green-700'
+                                                    <td className={`px-4 py-4 text-center font-semibold text-sm ${!horasEnRango && !isCeased ? 'text-red-600' : 'text-green-700'
                                                         }`}>
-                                                        <div className="flex items-center justify-center gap-1">
-                                                            <Clock className="w-4 h-4" />
-                                                            {horas.formatted}
-                                                            {hasConflict && <AlertCircle className="w-4 h-4 text-orange-600" />}
-                                                        </div>
+                                                        {isCeased ? '--' : (
+                                                            <div className="flex items-center justify-center gap-1">
+                                                                <Clock className="w-4 h-4" />
+                                                                {horas.formatted}
+                                                                {hasConflict && <AlertCircle className="w-4 h-4 text-orange-600" />}
+                                                            </div>
+                                                        )}
                                                     </td>
 
                                                     <td className="px-4 py-4 text-center">
-                                                        <select
-                                                            value={d.position || ''}
-                                                            onChange={e => handleChange(p.id, 'position', e.target.value)}
-                                                            disabled={d.feriado || d.off}
-                                                            className="w-full px-2 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
-                                                        >
-                                                            <option value="">--</option>
-                                                            {positions.map(pos => (
-                                                                <option key={pos} value={pos}>{pos}</option>
-                                                            ))}
-                                                        </select>
+                                                        {isCeased ? <span className="text-xs font-bold text-red-500 bg-red-100 px-2 py-1 rounded">CESADO</span> : (
+                                                            <select
+                                                                value={d.position || ''}
+                                                                onChange={e => handleChange(p.id, 'position', e.target.value)}
+                                                                disabled={d.feriado || d.off}
+                                                                className="w-full px-2 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
+                                                            >
+                                                                <option value="">--</option>
+                                                                {positions.map(pos => (
+                                                                    <option key={pos} value={pos}>{pos}</option>
+                                                                ))}
+                                                            </select>
+                                                        )}
                                                     </td>
                                                     <td className="px-4 py-4 text-center font-bold text-orange-600 text-sm">
-                                                        {preCierres}/4
+                                                        {isCeased ? '--' : `${preCierres}/4`}
                                                     </td>
                                                     <td className="px-4 py-4 text-center font-bold text-red-600 text-sm">
-                                                        {cierres}/4
+                                                        {isCeased ? '--' : `${cierres}/4`}
                                                     </td>
                                                     <td className="px-4 py-4 text-center">
                                                         <input
                                                             type="checkbox"
                                                             checked={d.off || false}
                                                             onChange={e => handleChange(p.id, 'off', e.target.checked)}
-                                                            disabled={d.feriado}
+                                                            disabled={d.feriado || isCeased}
                                                             className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                                                         />
                                                     </td>
@@ -1186,7 +1323,8 @@ export default function WeeklyScheduleEditor() {
                                                             type="checkbox"
                                                             checked={d.feriado || false}
                                                             onChange={e => handleChange(p.id, 'feriado', e.target.checked)}
-                                                            className="w-5 h-5 text-purple-600 border-gray-300 rounded focus:ring-2 focus:ring-purple-500 cursor-pointer"
+                                                            disabled={isCeased}
+                                                            className="w-5 h-5 text-purple-600 border-gray-300 rounded focus:ring-2 focus:ring-purple-500 cursor-pointer disabled:opacity-50"
                                                         />
                                                     </td>
                                                 </tr>
@@ -1368,7 +1506,7 @@ export default function WeeklyScheduleEditor() {
 
                                         // Forzar el uso del estado más reciente
                                         const currentSchedule = allSchedules[wk] || {};
-                                        await exportGroupedPositionsPDF(staff, currentSchedule, selectedDay, dateText, turnoPDF, positions);
+                                        await exportGroupedPositionsPDF(activeStaff, currentSchedule, selectedDay, dateText, turnoPDF, positions);
                                         setShowTurnoModal(false);
                                     }}
                                 >
