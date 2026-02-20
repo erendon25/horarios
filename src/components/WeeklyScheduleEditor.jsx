@@ -631,10 +631,20 @@ export default function WeeklyScheduleEditor() {
                     })
                 );
 
-                setStaff(staffList);
+                // Filtrar colaboradores cesados: excluir si cessationDate < hoy
+                const todayMidnight = new Date();
+                todayMidnight.setHours(0, 0, 0, 0);
+
+                const activeStaff = staffList.filter(s => {
+                    if (!s.cessationDate) return true; // sin fecha de cese → activo
+                    const cessation = new Date(s.cessationDate + 'T00:00:00');
+                    return cessation >= todayMidnight; // cese hoy o futuro → aún activo
+                });
+
+                setStaff(activeStaff);
 
                 const posSet = new Set();
-                staffList.forEach(s => s.positionAbilities?.forEach(p => posSet.add(p)));
+                activeStaff.forEach(s => s.positionAbilities?.forEach(p => posSet.add(p)));
                 setPositions(Array.from(posSet));
             } catch (err) {
             } finally {

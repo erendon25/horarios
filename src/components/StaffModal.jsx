@@ -1,5 +1,5 @@
 // ✅ StaffModal.jsx
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { getFirestore, doc, setDoc, addDoc, collection } from 'firebase/firestore';
 
 function StaffModal({ staff = null, userData, onClose, onSaved }) {
@@ -8,7 +8,10 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
     lastName: staff?.lastName || '',
     modality: staff?.modality || 'Full-Time',
     dni: staff?.dni || '',
+    gender: staff?.gender || '',
+    joinDate: staff?.joinDate || '',
     sanitaryCardDate: staff?.sanitaryCardDate || '',
+    cessationDate: staff?.cessationDate || '',
   });
   const [loading, setLoading] = useState(false);
   const db = getFirestore();
@@ -20,7 +23,7 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
 
   async function handleSave(e) {
     e.preventDefault();
-    if (!form.name || !form.lastName) return alert('Todos los campos son obligatorios');
+    if (!form.name || !form.lastName) return alert('Nombre y apellido son obligatorios');
     setLoading(true);
 
     try {
@@ -31,10 +34,10 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
         });
       } else {
         await addDoc(collection(db, 'staff_profiles'), {
-            ...form,
-          storeId: userData.storeId, // ✅ Esto faltaba, añadir siempre storeId
+          ...form,
+          storeId: userData.storeId,
           status: 'pending',
-          createdAt: new Date(),
+          createdAt: new Date().toISOString(),
         });
       }
       onSaved();
@@ -46,73 +49,109 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
     }
   }
 
+  const inputCls = "w-full border border-gray-300 p-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400 text-sm";
+  const labelCls = "block text-sm font-medium text-gray-600 mb-1";
+
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
-      <div className="bg-white p-6 rounded shadow max-w-md w-full relative">
-        <button onClick={onClose} className="absolute top-2 right-2 text-gray-500 hover:text-black">✖</button>
-        <h2 className="text-xl font-bold mb-4">{staff ? 'Editar' : 'Agregar'} Colaborador</h2>
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center px-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg relative overflow-hidden">
 
-        <form onSubmit={handleSave} className="space-y-4">
-          <div>
-            <label className="block text-sm">Nombre</label>
-            <input
-              type="text"
-              name="name"
-              value={form.name}
-              onChange={handleChange}
-              className="w-full border p-2 rounded"
-            />
+        {/* Header */}
+        <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-4 flex items-center justify-between">
+          <h2 className="text-xl font-bold text-white">
+            {staff ? 'Editar' : 'Agregar'} Colaborador
+          </h2>
+          <button onClick={onClose} className="text-white hover:text-blue-200 text-2xl font-bold leading-none">&times;</button>
+        </div>
+
+        <form onSubmit={handleSave} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+
+          {/* Nombre + Apellido */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Nombre *</label>
+              <input type="text" name="name" value={form.name} onChange={handleChange} className={inputCls} placeholder="Ej: Aydan" />
+            </div>
+            <div>
+              <label className={labelCls}>Apellido *</label>
+              <input type="text" name="lastName" value={form.lastName} onChange={handleChange} className={inputCls} placeholder="Ej: Cari Sanchez" />
+            </div>
           </div>
-          <div>
-            <label className="block text-sm">Apellido</label>
-            <input
-              type="text"
-              name="lastName"
-              value={form.lastName}
-              onChange={handleChange}
-              className="w-full border p-2 rounded"
-            />
+
+          {/* DNI + Sexo */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>DNI</label>
+              <input type="text" name="dni" value={form.dni} onChange={handleChange} className={inputCls} placeholder="Ej: 73221235" maxLength={15} />
+            </div>
+            <div>
+              <label className={labelCls}>Sexo</label>
+              <select name="gender" value={form.gender} onChange={handleChange} className={inputCls}>
+                <option value="">— Seleccionar —</option>
+                <option value="MASCULINO">MASCULINO</option>
+                <option value="FEMENINO">FEMENINO</option>
+              </select>
+            </div>
           </div>
-	  <div>
-  <label className="block text-sm">DNI</label>
-  <input
-    type="text"
-    name="dni"
-    value={form.dni}
-    onChange={handleChange}
-    className="w-full border p-2 rounded"
-  />
-</div>
+
+          {/* Modalidad + Fecha de ingreso */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Modalidad</label>
+              <select name="modality" value={form.modality} onChange={handleChange} className={inputCls}>
+                <option>Full-Time</option>
+                <option>Part-Time</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>Fecha de Ingreso</label>
+              <input type="date" name="joinDate" value={form.joinDate} onChange={handleChange} className={inputCls} />
+            </div>
+          </div>
+
+          {/* Carnet sanitario */}
           <div>
-            <label className="block text-sm">Modalidad</label>
-            <select
-              name="modality"
-              value={form.modality}
+            <label className={labelCls}>Fecha de vencimiento del carnet sanitario</label>
+            <input type="date" name="sanitaryCardDate" value={form.sanitaryCardDate} onChange={handleChange} className={inputCls} />
+          </div>
+
+          {/* Fecha de cese */}
+          <div>
+            <label className="block text-sm font-medium text-red-600 mb-1">
+              Fecha de Cese <span className="font-normal text-gray-400">(dejar vacío si está activo)</span>
+            </label>
+            <input
+              type="date"
+              name="cessationDate"
+              value={form.cessationDate}
               onChange={handleChange}
-              className="w-full border p-2 rounded"
+              className="w-full border border-red-300 p-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-400 text-sm"
+            />
+            {form.cessationDate && (
+              <p className="text-xs text-gray-500 mt-1">
+                ⚠️ Dejará de contarse a partir del{' '}
+                {new Date(form.cessationDate + 'T00:00:00').toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' })}.
+              </p>
+            )}
+          </div>
+
+          {/* Botones */}
+          <div className="flex justify-end gap-3 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-colors"
             >
-              <option>Full-Time</option>
-              <option>Part-Time</option>
-            </select>
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors"
+            >
+              {loading ? 'Guardando...' : 'Guardar'}
+            </button>
           </div>
-<div>
-  <label className="block text-sm">Fecha de vencimiento del carnet</label>
-  <input
-    type="date"
-    name="sanitaryCardDate"
-    value={form.sanitaryCardDate}
-    onChange={handleChange}
-    className="w-full border p-2 rounded"
-  />
-</div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
-          >
-            {loading ? 'Guardando...' : 'Guardar'}
-          </button>
         </form>
       </div>
     </div>
@@ -120,4 +159,3 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
 }
 
 export default StaffModal;
-

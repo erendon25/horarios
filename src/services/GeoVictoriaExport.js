@@ -11,6 +11,14 @@ export const exportGeoVictoriaExcel = (staff, schedules, weekKey, turnoMap) => {
   const startDateStr = weekKey.split('_to_')[0];
   const startDate = parseISO(startDateStr);
 
+  // Excluir colaboradores cesados
+  const todayMidnight = new Date();
+  todayMidnight.setHours(0, 0, 0, 0);
+  const activeStaff = staff.filter(s => {
+    if (!s.cessationDate) return true;
+    return new Date(s.cessationDate + 'T00:00:00') >= todayMidnight;
+  });
+
   const wsData = [];
   const header = ["Nombre", "DNI", ...Array.from({ length: 31 }, (_, i) => i + 1)];
   wsData.push(header);
@@ -21,7 +29,7 @@ export const exportGeoVictoriaExcel = (staff, schedules, weekKey, turnoMap) => {
     return `${hh}:${mm}`;
   };
 
-  staff.forEach(person => {
+  activeStaff.forEach(person => {
     const dni = person.dni || person.DNI || "";
     if (!dni) return;
 

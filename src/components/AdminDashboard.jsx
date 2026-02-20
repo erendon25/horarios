@@ -43,6 +43,7 @@ import StaffModal from './StaffModal';
 
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import * as XLSX from "xlsx";
 
 function AdminDashboard() {
     const { logout, currentUser, userRole, userData } = useAuth();
@@ -64,6 +65,24 @@ function AdminDashboard() {
     const [positionModalOpen, setPositionModalOpen] = useState(false);
     const [positionTarget, setPositionTarget] = useState(null);
     const [tempAbilities, setTempAbilities] = useState([]);
+    const [showCesadosModal, setShowCesadosModal] = useState(false);
+    const [cesosRegistros, setCesosRegistros] = useState([]);
+    const [cesosFilterMonth, setCesosFilterMonth] = useState('');
+    const [cesosLoading, setCesosLoading] = useState(false);
+    const [reporteBajaColaborador, setReporteBajaColaborador] = useState(null);
+    const [reporteBajaForm, setReporteBajaForm] = useState({
+        desempenio: 'BUENO',
+        motivoCese: 'RENUNCIA VOLUNTARIA',
+        motivoReal: 'MEJORA ECONÓMICA',
+        comentario: '',
+        diasDescansoMedico: '',
+        inasistencias: '',
+        tardanzas: '',
+        horasNocturnas: '',
+        horasExtras: '',
+        feriados: '',
+        descuentos: '',
+    });
 
     const isCardExpiringSoon = (dateString) => {
         if (!dateString) return false;
@@ -220,8 +239,21 @@ function AdminDashboard() {
             // O carga solo si uid existe y en batch
 
             setStaff(enriched);
-            setFullTimeCount(enriched.filter(u => u.modality === "Full-Time").length);
-            setPartTimeCount(enriched.filter(u => u.modality === "Part-Time").length);
+
+            // Un colaborador se considera activo si NO tiene fecha de cese,
+            // o si su fecha de cese es HOY o en el futuro (se resta a partir del día siguiente).
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+
+            const isActive = (u) => {
+                if (!u.cessationDate) return true;
+                // Comparamos: el colaborador sigue activo si su cese es HOY o futuro
+                const cessation = new Date(u.cessationDate + "T00:00:00");
+                return cessation >= today;
+            };
+
+            setFullTimeCount(enriched.filter(u => u.modality === "Full-Time" && isActive(u)).length);
+            setPartTimeCount(enriched.filter(u => u.modality === "Part-Time" && isActive(u)).length);
 
         } catch (error) {
             console.error("Error:", error);
@@ -323,7 +355,219 @@ function AdminDashboard() {
             console.error("Error al guardar usuario:", err);
             alert(`Error al guardar: ${err.message}`);
         }
-    }; const handleDelete = async (uid, id) => {
+    };
+
+    const loadCesosRegistros = async () => {
+        setCesosLoading(true);
+        try {
+            // 1. Leer la colección independiente de ceses
+            const snap = await getDocs(collection(db, 'ceses'));
+            const existingIds = new Set(snap.docs.map(d => d.id));
+            const lista = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+            // 2. Migrar automáticamente colaboradores con cessationDate
+            //    que aún no estén registrados en la colección 'ceses'
+            const staffSnap = await getDocs(collection(db, 'staff_profiles'));
+            const migraciones = [];
+            staffSnap.docs.forEach(d => {
+                const s = d.data();
+                if (!s.cessationDate) return; // sin fecha de cese → ignorar
+                const docId = `${d.id}_${s.cessationDate}`;
+                if (existingIds.has(docId)) return; // ya existe → no duplicar
+                const registro = {
+                    staffId: d.id,
+                    name: s.name || '',
+                    lastName: s.lastName || '',
+                    modality: s.modality || '',
+                    dni: s.dni || '',
+                    cessationDate: s.cessationDate,
+                    storeId: s.storeId || '',
+                    registeredAt: new Date().toISOString(),
+                    migratedFromProfile: true
+                };
+                migraciones.push(
+                    setDoc(doc(db, 'ceses', docId), registro)
+                        .then(() => lista.push({ id: docId, ...registro }))
+                );
+            });
+
+            if (migraciones.length > 0) {
+                await Promise.all(migraciones);
+            }
+
+            lista.sort((a, b) => new Date(b.cessationDate) - new Date(a.cessationDate));
+            setCesosRegistros(lista);
+        } catch (err) {
+            console.error('Error cargando ceses:', err);
+        } finally {
+            setCesosLoading(false);
+        }
+    };
+
+    const abrirReporteBaja = (registro) => {
+        setReporteBajaColaborador(registro);
+        setReporteBajaForm({
+            desempenio: 'BUENO',
+            motivoCese: 'RENUNCIA VOLUNTARIA',
+            motivoReal: 'MEJORA ECONÓMICA',
+            comentario: '',
+            diasDescansoMedico: '',
+            inasistencias: '',
+            tardanzas: '',
+            horasNocturnas: '',
+            horasExtras: '',
+            feriados: '',
+            descuentos: '',
+        });
+    };
+
+    const exportarReporteBajaExcel = () => {
+        if (!reporteBajaColaborador) return;
+        const s = reporteBajaColaborador;
+        const f = reporteBajaForm;
+
+        // Mes del cese para el título
+        const fechaCeseObj = s.cessationDate ? new Date(s.cessationDate + 'T00:00:00') : new Date();
+        const mesLabel = fechaCeseObj.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+        const mesCapitalized = mesLabel.charAt(0).toUpperCase() + mesLabel.slice(1);
+
+        // Formatear fecha
+        const fmtFecha = (str) => {
+            if (!str) return '';
+            const d = new Date(str + 'T00:00:00');
+            return d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        };
+
+        const wb = XLSX.utils.book_new();
+
+        // ─── HEADERS (2 filas) ───
+        const cabeceras1 = [
+            'TIENDA', 'PUESTO', 'MO', 'DNI',
+            'NOMBRE DE COLABORADOR', 'SEXO',
+            'FECHA DE INGRESO', 'FECHA DE CESE',
+            'DIAS DESCANSO MEDICO', 'INASISTENCIAS',
+            'TARDANZAS (MINUTOS, HORAS)',
+            'HORAS NOCTURNAS', 'HORAS EXTRAS', 'FERIADOS', 'DESCUENTOS',
+            'DESEMPEÑO', 'MOTIVO DE CESE', 'MOTIVO REAL',
+            'COMENTARIO TIENDA - DESCRIBIR CON MAYOR DETALLE EL MOTIVO POR EL QUE SE RETIRA EL COLABORADOR DE LA EMPRESA'
+        ];
+
+        // ─── FILA DE DATOS ───
+        const fila = [
+            storeName || s.storeId || '',
+            s.position || 'TEAM MEMBER',
+            s.modality === 'Full-Time' ? 'FT' : s.modality === 'Part-Time' ? 'PT' : (s.modality || ''),
+            s.dni || '',
+            `${s.name || ''} ${s.lastName || ''}`.trim(),
+            s.gender || s.sexo || '',
+            fmtFecha(s.joinDate || s.createdAt?.split?.('T')?.[0] || ''),
+            fmtFecha(s.cessationDate),
+            f.diasDescansoMedico,
+            f.inasistencias,
+            f.tardanzas,
+            f.horasNocturnas,
+            f.horasExtras,
+            f.feriados,
+            f.descuentos,
+            f.desempenio,
+            f.motivoCese,
+            f.motivoReal,
+            f.comentario,
+        ];
+
+        const wsData = [cabeceras1, fila];
+        const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+        // Ancho de columnas
+        ws['!cols'] = [
+            { wch: 14 }, { wch: 14 }, { wch: 5 }, { wch: 11 },
+            { wch: 28 }, { wch: 10 },
+            { wch: 14 }, { wch: 12 },
+            { wch: 10 }, { wch: 12 },
+            { wch: 14 },
+            { wch: 13 }, { wch: 13 }, { wch: 10 }, { wch: 12 },
+            { wch: 12 }, { wch: 18 }, { wch: 22 },
+            { wch: 50 }
+        ];
+
+        // Estilos de cabecera: fondo amarillo, texto negro, negrita
+        const headerStyle = {
+            fill: { fgColor: { rgb: "FFFF00" } },
+            font: { bold: true, color: { rgb: "000000" } },
+            alignment: { wrapText: true, horizontal: 'center', vertical: 'center' },
+            border: {
+                top: { style: 'thin', color: { rgb: "000000" } },
+                bottom: { style: 'thin', color: { rgb: "000000" } },
+                left: { style: 'thin', color: { rgb: "000000" } },
+                right: { style: 'thin', color: { rgb: "000000" } }
+            }
+        };
+        const dataStyle = {
+            alignment: { wrapText: true, horizontal: 'center', vertical: 'center' },
+            border: {
+                top: { style: 'thin', color: { rgb: "000000" } },
+                bottom: { style: 'thin', color: { rgb: "000000" } },
+                left: { style: 'thin', color: { rgb: "000000" } },
+                right: { style: 'thin', color: { rgb: "000000" } }
+            }
+        };
+
+        cabeceras1.forEach((_, ci) => {
+            const cellRef = XLSX.utils.encode_cell({ r: 0, c: ci });
+            if (ws[cellRef]) ws[cellRef].s = headerStyle;
+            const dataRef = XLSX.utils.encode_cell({ r: 1, c: ci });
+            if (ws[dataRef]) ws[dataRef].s = dataStyle;
+        });
+
+        ws['!rows'] = [{ hpt: 40 }, { hpt: 25 }];
+
+        XLSX.utils.book_append_sheet(wb, ws, 'Reporte de Bajas');
+        XLSX.writeFile(wb, `Reporte de Bajas - ${mesCapitalized}.xlsx`);
+    };
+
+    const handleCessation = async (colab) => {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const cessation = colab.cessationDate ? new Date(colab.cessationDate + 'T00:00:00') : null;
+        const isAlreadyCeased = cessation && cessation < today;
+
+        if (isAlreadyCeased) {
+            // Reactivar
+            const confirm = window.confirm(`¿Deseas reactivar a ${colab.name} ${colab.lastName}?`);
+            if (!confirm) return;
+            try {
+                await updateDoc(doc(db, 'staff_profiles', colab.id), { cessationDate: '' });
+                await fetchAllStaffProfiles();
+            } catch (err) {
+                alert('Error al reactivar el colaborador.');
+            }
+        } else {
+            // Cesar hoy
+            const todayStr = today.toISOString().split('T')[0];
+            const confirm = window.confirm(`¿Confirmas que ${colab.name} ${colab.lastName} fue cesado hoy (${todayStr.split('-').reverse().join('/')})?\n\nEl colaborador dejará de contarse a partir de mañana.`);
+            if (!confirm) return;
+            try {
+                // 1. Actualizar perfil del colaborador
+                await updateDoc(doc(db, 'staff_profiles', colab.id), { cessationDate: todayStr });
+                // 2. Guardar en colección independiente 'ceses' (persiste aunque se elimine al colaborador)
+                await setDoc(doc(db, 'ceses', `${colab.id}_${todayStr}`), {
+                    staffId: colab.id,
+                    name: colab.name,
+                    lastName: colab.lastName,
+                    modality: colab.modality || '',
+                    dni: colab.dni || '',
+                    cessationDate: todayStr,
+                    storeId: colab.storeId || '',
+                    registeredAt: new Date().toISOString()
+                });
+                await fetchAllStaffProfiles();
+            } catch (err) {
+                alert('Error al registrar el cese.');
+            }
+        }
+    };
+
+    const handleDelete = async (uid, id) => {
         const confirm = window.confirm("¿Estás seguro de que deseas eliminar este usuario?");
         if (!confirm) return;
         try {
@@ -390,6 +634,13 @@ function AdminDashboard() {
                                 Carnets PDF
                             </button>
                             <button
+                                onClick={() => { setShowCesadosModal(true); loadCesosRegistros(); }}
+                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <Users className="w-4 h-4" />
+                                Consultar Ceses
+                            </button>
+                            <button
                                 onClick={handleLogout}
                                 className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-gray-700 to-gray-800 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
@@ -417,7 +668,11 @@ function AdminDashboard() {
                         <div className="flex items-center justify-between">
                             <div>
                                 <p className="text-blue-100 text-sm font-medium mb-1">Total Personal</p>
-                                <p className="text-3xl font-bold">{staff.length}</p>
+                                <p className="text-3xl font-bold">{staff.filter(u => {
+                                    if (!u.cessationDate) return true;
+                                    const t = new Date(); t.setHours(0, 0, 0, 0);
+                                    return new Date(u.cessationDate + 'T00:00:00') >= t;
+                                }).length}</p>
                             </div>
                             <Users className="w-12 h-12 text-blue-200" />
                         </div>
@@ -499,6 +754,7 @@ function AdminDashboard() {
                                         <th className="px-8 py-5 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider min-w-[140px]">Modalidad</th>
                                         <th className="px-6 py-5 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Rol</th>
                                         <th className="px-6 py-5 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Vinculado</th>
+                                        <th className="px-6 py-5 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Estado</th>
                                         <th className="px-6 py-5 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Acciones</th>
                                     </tr>
                                 </thead>
@@ -516,6 +772,23 @@ function AdminDashboard() {
                                                     >
                                                         {`${colab.name} ${colab.lastName}`}
                                                     </span>
+                                                    {colab.cessationDate && (() => {
+                                                        const today = new Date(); today.setHours(0, 0, 0, 0);
+                                                        const cessation = new Date(colab.cessationDate + 'T00:00:00');
+                                                        if (cessation < today) {
+                                                            return (
+                                                                <span className="text-xs font-semibold text-red-600 bg-red-100 px-2 py-0.5 rounded-full w-fit">
+                                                                    CESADO el {cessation.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                                                                </span>
+                                                            );
+                                                        } else {
+                                                            return (
+                                                                <span className="text-xs font-semibold text-orange-600 bg-orange-100 px-2 py-0.5 rounded-full w-fit">
+                                                                    Cese: {cessation.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                                                                </span>
+                                                            );
+                                                        }
+                                                    })()}
                                                 </div>
                                                 <div className="hidden group-hover:block absolute top-full left-0 mt-2 bg-gray-900 text-white text-xs rounded-lg shadow-xl p-3 z-20 w-72">
                                                     <div className="space-y-1.5">
@@ -531,8 +804,8 @@ function AdminDashboard() {
                                             <td className="px-8 py-5">
                                                 <div className="flex items-center">
                                                     <span className={`px-4 py-2 rounded-full text-sm font-semibold inline-block ${colab.modality === "Full-Time"
-                                                            ? "bg-green-100 text-green-800"
-                                                            : "bg-purple-100 text-purple-800"
+                                                        ? "bg-green-100 text-green-800"
+                                                        : "bg-purple-100 text-purple-800"
                                                         }`}>
                                                         {colab.modality}
                                                     </span>
@@ -555,6 +828,22 @@ function AdminDashboard() {
                                                         Asignar posiciones
                                                     </button>
                                                 </div>
+                                            </td>
+                                            {/* Columna Estado / Cesar */}
+                                            <td className="px-6 py-5 text-center">
+                                                <button
+                                                    onClick={() => handleCessation(colab)}
+                                                    className={
+                                                        colab.cessationDate && new Date(colab.cessationDate + 'T00:00:00') < new Date(new Date().setHours(0, 0, 0, 0))
+                                                            ? "w-full text-xs font-bold bg-green-100 hover:bg-green-200 text-green-800 px-3 py-2 rounded-lg border border-green-400 transition-colors"
+                                                            : "w-full text-xs font-bold bg-orange-100 hover:bg-orange-200 text-orange-800 px-3 py-2 rounded-lg border border-orange-400 transition-colors"
+                                                    }
+                                                >
+                                                    {colab.cessationDate && new Date(colab.cessationDate + 'T00:00:00') < new Date(new Date().setHours(0, 0, 0, 0))
+                                                        ? "Reactivar"
+                                                        : "Cesar"
+                                                    }
+                                                </button>
                                             </td>
                                             <td className="px-6 py-5">
                                                 <div className="flex flex-col gap-2">
@@ -667,6 +956,278 @@ function AdminDashboard() {
                         onClose={() => setPositionModalOpen(false)}
                     />
                 )}
+
+                {/* Modal Consultar Ceses */}
+                {showCesadosModal && (() => {
+                    const today = new Date(); today.setHours(0, 0, 0, 0);
+
+                    // Filtrar por mes/año si se seleccionó un mes
+                    const filtered = cesosRegistros.filter(s => {
+                        if (!cesosFilterMonth) return true; // sin filtro → todos
+                        return s.cessationDate && s.cessationDate.startsWith(cesosFilterMonth);
+                    });
+
+                    // Obtener meses únicos para el selector
+                    const uniqueMonths = [...new Set(
+                        cesosRegistros
+                            .filter(s => s.cessationDate)
+                            .map(s => s.cessationDate.slice(0, 7)) // "2026-02"
+                    )].sort((a, b) => b.localeCompare(a)); // más reciente primero
+
+                    return (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm px-4">
+                            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+
+                                {/* Header */}
+                                <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-orange-500 to-orange-600 flex-shrink-0">
+                                    <div>
+                                        <h2 className="text-xl font-bold text-white">Historial de Ceses</h2>
+                                        <p className="text-orange-100 text-sm mt-0.5">
+                                            {filtered.length} registro{filtered.length !== 1 ? 's' : ''} encontrado{filtered.length !== 1 ? 's' : ''}
+                                            {cesosFilterMonth && ` en ${new Date(cesosFilterMonth + '-02').toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}`}
+                                        </p>
+                                    </div>
+                                    <button
+                                        onClick={() => setShowCesadosModal(false)}
+                                        className="text-white hover:text-orange-200 transition-colors text-2xl font-bold leading-none"
+                                    >
+                                        &times;
+                                    </button>
+                                </div>
+
+                                {/* Filtro de mes */}
+                                <div className="px-6 py-3 bg-orange-50 border-b border-orange-100 flex-shrink-0 flex items-center gap-3 flex-wrap">
+                                    <label className="text-sm font-semibold text-orange-800">Filtrar por mes:</label>
+                                    <select
+                                        value={cesosFilterMonth}
+                                        onChange={e => setCesosFilterMonth(e.target.value)}
+                                        className="text-sm border border-orange-300 rounded-lg px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-400"
+                                    >
+                                        <option value="">Todos los meses</option>
+                                        {uniqueMonths.map(m => {
+                                            const [yyyy, mm] = m.split('-');
+                                            const label = new Date(Number(yyyy), Number(mm) - 1, 1)
+                                                .toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+                                            return <option key={m} value={m}>{label.charAt(0).toUpperCase() + label.slice(1)}</option>;
+                                        })}
+                                    </select>
+                                    {cesosFilterMonth && (
+                                        <button
+                                            onClick={() => setCesosFilterMonth('')}
+                                            className="text-xs text-orange-600 hover:text-orange-800 underline"
+                                        >
+                                            Limpiar filtro
+                                        </button>
+                                    )}
+                                    <button
+                                        onClick={loadCesosRegistros}
+                                        className="ml-auto text-xs text-orange-700 hover:text-orange-900 flex items-center gap-1 font-medium"
+                                        title="Actualizar lista"
+                                    >
+                                        ↻ Actualizar
+                                    </button>
+                                </div>
+
+                                {/* Body */}
+                                <div className="overflow-y-auto flex-1 p-4">
+                                    {cesosLoading ? (
+                                        <div className="text-center py-12 text-gray-400">
+                                            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-orange-500 mb-3"></div>
+                                            <p className="text-sm">Cargando registros...</p>
+                                        </div>
+                                    ) : filtered.length === 0 ? (
+                                        <div className="text-center py-12 text-gray-400">
+                                            <Users className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                                            <p className="font-medium">
+                                                {cesosFilterMonth ? 'No hay ceses en el mes seleccionado' : 'No hay ceses registrados'}
+                                            </p>
+                                        </div>
+                                    ) : (
+                                        <table className="w-full text-sm">
+                                            <thead className="sticky top-0">
+                                                <tr className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wider">
+                                                    <th className="px-4 py-3 text-left rounded-l-lg">Colaborador</th>
+                                                    <th className="px-4 py-3 text-left">DNI</th>
+                                                    <th className="px-4 py-3 text-left">Modalidad</th>
+                                                    <th className="px-4 py-3 text-left">Fecha de Cese</th>
+                                                    <th className="px-4 py-3 text-center rounded-r-lg">Estado</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-100">
+                                                {filtered.map((s, i) => {
+                                                    const cessation = new Date(s.cessationDate + 'T00:00:00');
+                                                    const isCeased = cessation < today;
+                                                    return (
+                                                        <tr key={i} className={`transition-colors hover:brightness-95 ${isCeased ? 'bg-red-50' : 'bg-orange-50'}`}>
+                                                            <td className="px-4 py-3 font-medium">
+                                                                <button
+                                                                    onClick={() => abrirReporteBaja(s)}
+                                                                    className="text-blue-700 hover:text-blue-900 hover:underline font-semibold text-left"
+                                                                    title="Click para generar Reporte de Baja"
+                                                                >
+                                                                    {s.name} {s.lastName}
+                                                                </button>
+                                                                <span className="block text-xs text-gray-400 mt-0.5">Generar reporte</span>
+                                                            </td>
+                                                            <td className="px-4 py-3 text-gray-500 font-mono text-xs">
+                                                                {s.dni || '—'}
+                                                            </td>
+                                                            <td className="px-4 py-3 text-gray-600">{s.modality || '—'}</td>
+                                                            <td className="px-4 py-3 font-semibold text-gray-700">
+                                                                {cessation.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                                                            </td>
+                                                            <td className="px-4 py-3 text-center">
+                                                                {isCeased ? (
+                                                                    <span className="inline-block bg-red-100 text-red-700 text-xs font-bold px-3 py-1 rounded-full border border-red-300">
+                                                                        CESADO
+                                                                    </span>
+                                                                ) : (
+                                                                    <span className="inline-block bg-orange-100 text-orange-700 text-xs font-bold px-3 py-1 rounded-full border border-orange-300">
+                                                                        Cese próximo
+                                                                    </span>
+                                                                )}
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    )}
+                                </div>
+
+                                {/* Footer */}
+                                <div className="px-6 py-4 border-t border-gray-100 flex justify-between items-center flex-shrink-0">
+                                    <span className="text-xs text-gray-400">
+                                        Los registros se conservan aunque el colaborador sea eliminado del sistema.
+                                    </span>
+                                    <button
+                                        onClick={() => setShowCesadosModal(false)}
+                                        className="px-5 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors"
+                                    >
+                                        Cerrar
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    );
+                })()}
+                {/* ===== MODAL REPORTE DE BAJAS ===== */}
+                {reporteBajaColaborador && (() => {
+                    const s = reporteBajaColaborador;
+                    const fmtFecha = (str) => {
+                        if (!str) return '—';
+                        return new Date(str + 'T00:00:00').toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                    };
+                    const inputCls = "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400";
+                    const selectCls = "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-400";
+                    return (
+                        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+                            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[95vh] flex flex-col overflow-hidden">
+
+                                {/* Header */}
+                                <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-yellow-500 to-orange-500 flex-shrink-0">
+                                    <div>
+                                        <h2 className="text-xl font-bold text-white">Reporte de Baja</h2>
+                                        <p className="text-yellow-100 text-sm mt-0.5">{s.name} {s.lastName} · {fmtFecha(s.cessationDate)}</p>
+                                    </div>
+                                    <button onClick={() => setReporteBajaColaborador(null)} className="text-white hover:text-yellow-200 text-2xl font-bold">&times;</button>
+                                </div>
+
+                                {/* Datos automáticos */}
+                                <div className="px-6 pt-4 pb-2 bg-yellow-50 border-b border-yellow-100 flex-shrink-0">
+                                    <p className="text-xs font-bold text-yellow-800 uppercase tracking-wider mb-2">Datos del colaborador (automáticos)</p>
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                                        <div><span className="text-gray-500 block text-xs">Tienda</span><span className="font-semibold">{storeName || s.storeId || '—'}</span></div>
+                                        <div><span className="text-gray-500 block text-xs">Puesto</span><span className="font-semibold">{s.position || 'TEAM MEMBER'}</span></div>
+                                        <div><span className="text-gray-500 block text-xs">Modalidad</span><span className="font-semibold">{s.modality === 'Full-Time' ? 'FT' : s.modality === 'Part-Time' ? 'PT' : (s.modality || '—')}</span></div>
+                                        <div><span className="text-gray-500 block text-xs">DNI</span><span className="font-semibold font-mono">{s.dni || '—'}</span></div>
+                                        <div><span className="text-gray-500 block text-xs">Nombre</span><span className="font-semibold">{s.name} {s.lastName}</span></div>
+                                        <div><span className="text-gray-500 block text-xs">Sexo</span><span className="font-semibold">{s.gender || s.sexo || '—'}</span></div>
+                                        <div><span className="text-gray-500 block text-xs">Fecha Ingreso</span><span className="font-semibold">{fmtFecha(s.joinDate || s.createdAt?.split?.('T')?.[0])}</span></div>
+                                        <div><span className="text-gray-500 block text-xs">Fecha Cese</span><span className="font-semibold text-red-600">{fmtFecha(s.cessationDate)}</span></div>
+                                    </div>
+                                </div>
+
+                                {/* Formulario */}
+                                <div className="overflow-y-auto flex-1 px-6 py-4">
+                                    <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Datos opcionales / campos vacíos</p>
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                                        {[
+                                            ['diasDescansoMedico', 'Días Desc. Médico'],
+                                            ['inasistencias', 'Inasistencias'],
+                                            ['tardanzas', 'Tardanzas (min)'],
+                                            ['horasNocturnas', 'Horas Nocturnas'],
+                                            ['horasExtras', 'Horas Extras'],
+                                            ['feriados', 'Feriados'],
+                                            ['descuentos', 'Descuentos'],
+                                        ].map(([field, label]) => (
+                                            <div key={field}>
+                                                <label className="block text-xs text-gray-500 mb-1">{label}</label>
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    step="0.01"
+                                                    value={reporteBajaForm[field]}
+                                                    onChange={e => setReporteBajaForm(prev => ({ ...prev, [field]: e.target.value }))}
+                                                    className={inputCls}
+                                                    placeholder="0"
+                                                />
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                                        <div>
+                                            <label className="block text-xs text-gray-500 mb-1">Desempeño</label>
+                                            <select value={reporteBajaForm.desempenio} onChange={e => setReporteBajaForm(prev => ({ ...prev, desempenio: e.target.value }))} className={selectCls}>
+                                                {['BUENO', 'REGULAR', 'MALO', 'EXCELENTE'].map(o => <option key={o}>{o}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs text-gray-500 mb-1">Motivo de Cese</label>
+                                            <select value={reporteBajaForm.motivoCese} onChange={e => setReporteBajaForm(prev => ({ ...prev, motivoCese: e.target.value }))} className={selectCls}>
+                                                {['RENUNCIA VOLUNTARIA', 'ABANDONO DE TRABAJO', 'DESPIDO', 'TÉRMINO DE CONTRATO'].map(o => <option key={o}>{o}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs text-gray-500 mb-1">Motivo Real</label>
+                                            <select value={reporteBajaForm.motivoReal} onChange={e => setReporteBajaForm(prev => ({ ...prev, motivoReal: e.target.value }))} className={selectCls}>
+                                                {['MEJORA ECONÓMICA', 'HORARIO DE ESTUDIO', 'SALUD', 'BAJO DESEMPEÑO', 'DESACUERDO CON BENEFICIOS', 'DISTANCIA DE LA TIENDA', 'FALTA GRAVE', 'HORARIO DE CIERRE EXTENDIDO', 'INASISTENCIAS', 'MAL CLIMA LABORAL'].map(o => <option key={o}>{o}</option>)}
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-xs text-gray-500 mb-1">Comentario Tienda – Describir con mayor detalle el motivo por el que se retira el colaborador</label>
+                                        <textarea
+                                            rows={3}
+                                            value={reporteBajaForm.comentario}
+                                            onChange={e => setReporteBajaForm(prev => ({ ...prev, comentario: e.target.value }))}
+                                            className={`${inputCls} resize-none`}
+                                            placeholder="Escriba aquí el comentario..."
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Footer */}
+                                <div className="px-6 py-4 border-t border-gray-100 flex justify-between items-center flex-shrink-0">
+                                    <button
+                                        onClick={() => setReporteBajaColaborador(null)}
+                                        className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors text-sm"
+                                    >
+                                        Cancelar
+                                    </button>
+                                    <button
+                                        onClick={exportarReporteBajaExcel}
+                                        className="flex items-center gap-2 px-6 py-2 bg-gradient-to-r from-green-600 to-green-700 text-white font-bold rounded-lg shadow hover:shadow-lg transition-all text-sm"
+                                    >
+                                        ⬇ Descargar Excel
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    );
+                })()}
             </div>
         </div>
     );

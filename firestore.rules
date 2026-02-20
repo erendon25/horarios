@@ -168,6 +168,15 @@ service cloud.firestore {
     }
 
     // ========================
+    // HISTORIAL DE CESES
+    // ========================
+    match /ceses/{docId} {
+      allow read: if isAdmin() || isSuperAdmin();
+      allow create, update: if isAdmin() || isSuperAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
+    // ========================
     // REGLA POR DEFECTO
     // ========================
     match /{document=**} {

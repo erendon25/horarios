@@ -27,8 +27,16 @@ export default function PDFSchedulePreview({ weekStartDate }) {
       const usersSnap = await getDocs(collection(db, 'staff_profiles'));
       const schedulesSnap = await getDocs(collection(db, 'schedules'));
 
-      const users = [];
-      usersSnap.forEach(doc => users.push({ id: doc.id, ...doc.data() }));
+      const allUsers = [];
+      usersSnap.forEach(doc => allUsers.push({ id: doc.id, ...doc.data() }));
+
+      // Excluir colaboradores cesados (cessationDate < hoy)
+      const todayMidnight = new Date();
+      todayMidnight.setHours(0, 0, 0, 0);
+      const users = allUsers.filter(u => {
+        if (!u.cessationDate) return true;
+        return new Date(u.cessationDate + 'T00:00:00') >= todayMidnight;
+      });
 
       const days = dias.map((d, i) => format(addDays(new Date(weekStartDate), i), 'yyyy-MM-dd'));
 
