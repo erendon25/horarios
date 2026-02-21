@@ -55,6 +55,9 @@ function AdminDashboard() {
     const [staff, setStaff] = useState([]);
     const [fullTimeCount, setFullTimeCount] = useState(0);
     const [partTimeCount, setPartTimeCount] = useState(0);
+    const [traineeCount, setTraineeCount] = useState(0);
+    const [traineeFTCount, setTraineeFTCount] = useState(0);
+    const [traineePTCount, setTraineePTCount] = useState(0);
     const [editModal, setEditModal] = useState(null);
     const [modalityFilter, setModalityFilter] = useState("Todos");
     const [searchTerm, setSearchTerm] = useState("");
@@ -250,14 +253,25 @@ function AdminDashboard() {
             today.setHours(0, 0, 0, 0);
 
             const isActive = (u) => {
+                if (u.isTrainee) {
+                    // Trainee: usar trainingEndDate como su fecha de "cese"
+                    if (!u.trainingEndDate) return true;
+                    const endDate = new Date(u.trainingEndDate + 'T00:00:00');
+                    return endDate >= today;
+                }
                 if (!u.cessationDate) return true;
-                // Comparamos: el colaborador sigue activo si su cese es HOY o futuro
                 const cessation = new Date(u.cessationDate + "T00:00:00");
                 return cessation >= today;
             };
 
-            setFullTimeCount(enriched.filter(u => u.modality === "Full-Time" && isActive(u)).length);
-            setPartTimeCount(enriched.filter(u => u.modality === "Part-Time" && isActive(u)).length);
+            const activePlantilla = enriched.filter(u => !u.isTrainee && isActive(u));
+            const activeTrainees = enriched.filter(u => u.isTrainee && isActive(u));
+
+            setFullTimeCount(activePlantilla.filter(u => u.modality === "Full-Time").length);
+            setPartTimeCount(activePlantilla.filter(u => u.modality === "Part-Time").length);
+            setTraineeCount(activeTrainees.length);
+            setTraineeFTCount(activeTrainees.filter(u => u.modality === "Full-Time").length);
+            setTraineePTCount(activeTrainees.filter(u => u.modality === "Part-Time").length);
 
         } catch (error) {
             console.error("Error:", error);
@@ -723,7 +737,14 @@ function AdminDashboard() {
     };
 
     const filteredStaff = staff.filter(s => {
-        const matchesModality = modalityFilter === "Todos" || s.modality === modalityFilter;
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        // Ocultar trainees cuyo entrenamiento ya terminó
+        if (s.isTrainee && s.trainingEndDate) {
+            const endDate = new Date(s.trainingEndDate + 'T00:00:00');
+            if (endDate < today) return false;
+        }
+        const matchesModality = modalityFilter === "Todos"
+            || (modalityFilter === "Trainee" ? s.isTrainee : s.modality === modalityFilter && !s.isTrainee);
         const fullName = (s.name + " " + s.lastName).toLowerCase();
         const matchesSearch = fullName.includes(searchTerm.toLowerCase());
         return matchesModality && matchesSearch;
@@ -805,20 +826,18 @@ function AdminDashboard() {
                 )}
 
                 {/* Stats Cards */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+                    {/* Total Plantilla */}
                     <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl shadow-lg p-6 text-white transform hover:scale-105 transition-all duration-200">
                         <div className="flex items-center justify-between">
                             <div>
-                                <p className="text-blue-100 text-sm font-medium mb-1">Total Personal</p>
-                                <p className="text-3xl font-bold">{staff.filter(u => {
-                                    if (!u.cessationDate) return true;
-                                    const t = new Date(); t.setHours(0, 0, 0, 0);
-                                    return new Date(u.cessationDate + 'T00:00:00') >= t;
-                                }).length}</p>
+                                <p className="text-blue-100 text-sm font-medium mb-1">Total Plantilla</p>
+                                <p className="text-3xl font-bold">{fullTimeCount + partTimeCount}</p>
                             </div>
                             <Users className="w-12 h-12 text-blue-200" />
                         </div>
                     </div>
+                    {/* Full-Time */}
                     <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-xl shadow-lg p-6 text-white transform hover:scale-105 transition-all duration-200">
                         <div className="flex items-center justify-between">
                             <div>
@@ -828,6 +847,7 @@ function AdminDashboard() {
                             <UserCheck className="w-12 h-12 text-green-200" />
                         </div>
                     </div>
+                    {/* Part-Time */}
                     <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl shadow-lg p-6 text-white transform hover:scale-105 transition-all duration-200">
                         <div className="flex items-center justify-between">
                             <div>
@@ -835,6 +855,22 @@ function AdminDashboard() {
                                 <p className="text-3xl font-bold">{partTimeCount}</p>
                             </div>
                             <Clock className="w-12 h-12 text-purple-200" />
+                        </div>
+                    </div>
+                    {/* Trainees */}
+                    <div className="bg-gradient-to-br from-orange-400 to-orange-500 rounded-xl shadow-lg p-6 text-white transform hover:scale-105 transition-all duration-200">
+                        <div className="flex items-start justify-between">
+                            <div className="flex-1">
+                                <p className="text-orange-100 text-sm font-medium mb-1">🎓 Entrenamiento</p>
+                                <p className="text-3xl font-bold">{traineeCount}</p>
+                                {traineeCount > 0 && (
+                                    <div className="flex gap-3 mt-2 text-xs text-orange-100">
+                                        <span className="bg-white/20 px-2 py-0.5 rounded-full">FT: {traineeFTCount}</span>
+                                        <span className="bg-white/20 px-2 py-0.5 rounded-full">PT: {traineePTCount}</span>
+                                    </div>
+                                )}
+                            </div>
+                            <UserCheck className="w-12 h-12 text-orange-200 flex-shrink-0" />
                         </div>
                     </div>
                 </div>
@@ -862,6 +898,7 @@ function AdminDashboard() {
                             <option value="Todos">Todos</option>
                             <option value="Full-Time">Full-Time</option>
                             <option value="Part-Time">Part-Time</option>
+                            <option value="Trainee">🎓 Entrenamiento</option>
                         </select>
                         <button
                             onClick={handleAddStaff}
@@ -914,6 +951,11 @@ function AdminDashboard() {
                                                     >
                                                         {`${colab.name} ${colab.lastName}`}
                                                     </span>
+                                                    {colab.isTrainee && (
+                                                        <span className="text-xs font-bold text-orange-700 bg-orange-100 border border-orange-300 px-2 py-0.5 rounded-full w-fit flex items-center gap-1">
+                                                            🎓 TRAINEE
+                                                        </span>
+                                                    )}
                                                     {colab.cessationDate && (() => {
                                                         const today = new Date(); today.setHours(0, 0, 0, 0);
                                                         const cessation = new Date(colab.cessationDate + 'T00:00:00');
@@ -989,6 +1031,21 @@ function AdminDashboard() {
                                             </td>
                                             <td className="px-6 py-5">
                                                 <div className="flex flex-col gap-2">
+                                                    {colab.isTrainee && (
+                                                        <button
+                                                            onClick={async () => {
+                                                                if (!window.confirm(`¿Finalizar el entrenamiento de ${colab.name} ${colab.lastName} y eliminar del sistema?`)) return;
+                                                                try {
+                                                                    await deleteDoc(doc(db, "staff_profiles", colab.id));
+                                                                    if (colab.uid) await deleteDoc(doc(db, "users", colab.uid));
+                                                                    setStaff(prev => prev.filter(u => u.id !== colab.id));
+                                                                } catch (err) { alert('Error: ' + err.message); }
+                                                            }}
+                                                            className="text-xs font-bold text-orange-700 bg-orange-50 hover:bg-orange-100 border border-orange-300 px-2 py-1 rounded-lg transition-colors whitespace-nowrap"
+                                                        >
+                                                            ✓ Finalizar entrenamiento
+                                                        </button>
+                                                    )}
                                                     <button
                                                         onClick={() => handleUnlinkEmail(colab.id)}
                                                         className="text-xs text-red-600 hover:text-red-800 hover:underline font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"

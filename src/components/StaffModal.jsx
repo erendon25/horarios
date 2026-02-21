@@ -12,6 +12,8 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
     joinDate: staff?.joinDate || '',
     sanitaryCardDate: staff?.sanitaryCardDate || '',
     cessationDate: staff?.cessationDate || '',
+    isTrainee: staff?.isTrainee || false,
+    trainingEndDate: staff?.trainingEndDate || '',
   });
   const [loading, setLoading] = useState(false);
   const db = getFirestore();
@@ -115,25 +117,68 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
             <input type="date" name="sanitaryCardDate" value={form.sanitaryCardDate} onChange={handleChange} className={inputCls} />
           </div>
 
-          {/* Fecha de cese */}
-          <div>
-            <label className="block text-sm font-medium text-red-600 mb-1">
-              Fecha de Cese <span className="font-normal text-gray-400">(dejar vacío si está activo)</span>
-            </label>
-            <input
-              type="date"
-              name="cessationDate"
-              value={form.cessationDate}
-              onChange={handleChange}
-              className="w-full border border-red-300 p-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-400 text-sm"
-            />
-            {form.cessationDate && (
-              <p className="text-xs text-gray-500 mt-1">
-                ⚠️ Dejará de contarse a partir del{' '}
-                {new Date(form.cessationDate + 'T00:00:00').toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' })}.
+          {/* Fecha de cese — solo si NO es trainee */}
+          {!form.isTrainee && (
+            <div>
+              <label className="block text-sm font-medium text-red-600 mb-1">
+                Fecha de Cese <span className="font-normal text-gray-400">(dejar vacío si está activo)</span>
+              </label>
+              <input
+                type="date"
+                name="cessationDate"
+                value={form.cessationDate}
+                onChange={handleChange}
+                className="w-full border border-red-300 p-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-400 text-sm"
+              />
+              {form.cessationDate && (
+                <p className="text-xs text-gray-500 mt-1">
+                  ⚠️ Dejará de contarse a partir del{' '}
+                  {new Date(form.cessationDate + 'T00:00:00').toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' })}.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Trainee toggle */}
+          <div
+            onClick={() => setForm(prev => ({ ...prev, isTrainee: !prev.isTrainee, cessationDate: '', trainingEndDate: '' }))}
+            className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all select-none ${form.isTrainee
+                ? 'border-orange-400 bg-orange-50'
+                : 'border-gray-200 bg-gray-50 hover:border-gray-300'
+              }`}
+          >
+            <div className={`w-10 h-6 rounded-full relative transition-colors ${form.isTrainee ? 'bg-orange-500' : 'bg-gray-300'}`}>
+              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all ${form.isTrainee ? 'left-5' : 'left-1'}`} />
+            </div>
+            <div>
+              <p className={`text-sm font-semibold ${form.isTrainee ? 'text-orange-700' : 'text-gray-600'}`}>
+                🎓 Colaborador de Entrenamiento
               </p>
-            )}
+              <p className="text-xs text-gray-400 mt-0.5">No cuenta en los totales de plantilla</p>
+            </div>
           </div>
+
+          {/* Fecha de fin de entrenamiento — solo si es trainee */}
+          {form.isTrainee && (
+            <div>
+              <label className="block text-sm font-medium text-orange-600 mb-1">
+                Fecha de Fin de Entrenamiento <span className="font-normal text-gray-400">(dejar vacío si no se sabe aún)</span>
+              </label>
+              <input
+                type="date"
+                name="trainingEndDate"
+                value={form.trainingEndDate}
+                onChange={handleChange}
+                className="w-full border border-orange-300 p-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400 text-sm"
+              />
+              {form.trainingEndDate && (
+                <p className="text-xs text-orange-500 mt-1">
+                  🎓 Dejará de aparecer en el sistema a partir del{' '}
+                  {new Date(form.trainingEndDate + 'T00:00:00').toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' })}.
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Botones */}
           <div className="flex justify-end gap-3 pt-2">
