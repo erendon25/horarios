@@ -11,7 +11,6 @@ import {
     Users,
     Clock,
     Settings,
-    FileText,
     Calendar,
     Search,
     Plus,
@@ -22,7 +21,9 @@ import {
     AlertCircle,
     X,
     Download,
-    Save
+    Save,
+    Award,
+    BarChart3
 } from "lucide-react";
 import {
     doc,
@@ -76,6 +77,8 @@ function AdminDashboard() {
     const [cesosRegistros, setCesosRegistros] = useState([]);
     const [cesosFilterMonth, setCesosFilterMonth] = useState('');
     const [cesosLoading, setCesosLoading] = useState(false);
+    const [showTrainingReport, setShowTrainingReport] = useState(false);
+    const [storeRequirements, setStoreRequirements] = useState([]);
     const [reporteBajaColaborador, setReporteBajaColaborador] = useState(null);
     const [reporteBajaForm, setReporteBajaForm] = useState({
         desempenio: 'BUENO',
@@ -90,6 +93,47 @@ function AdminDashboard() {
         feriados: '',
         descuentos: '',
     });
+    const [lockSettings, setLockSettings] = useState({
+        restrictionsEnabled: false,
+        reenableDate: ''
+    });
+
+    const fetchScheduleLock = async () => {
+        if (!userData?.storeId) return;
+        try {
+            const docRef = doc(db, "stores", userData.storeId, "config", "schedule_lock");
+            const snap = await getDoc(docRef);
+            if (snap.exists()) {
+                setLockSettings(snap.data());
+            }
+        } catch (err) {
+            console.error("Error al cargar configuración de bloqueo:", err);
+        }
+    };
+
+    const handleUpdateLock = async (newSettings) => {
+        if (!userData?.storeId) return;
+        try {
+            const docRef = doc(db, "stores", userData.storeId, "config", "schedule_lock");
+            await setDoc(docRef, newSettings);
+            setLockSettings(newSettings);
+            alert("Configuración de bloqueo actualizada.");
+        } catch (err) {
+            console.error("Error al guardar bloqueo:", err);
+            alert("Error al guardar configuración.");
+        }
+    };
+
+    const fetchStoreRequirements = async () => {
+        if (!userData?.storeId) return;
+        try {
+            const q = query(collection(db, "stores", userData.storeId, "positioning_requirements"));
+            const snap = await getDocs(q);
+            setStoreRequirements(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        } catch (e) {
+            console.error("Error al obtener requerimientos:", e);
+        }
+    };
 
     const isCardExpiringSoon = (dateString) => {
         if (!dateString) return false;
@@ -190,18 +234,31 @@ function AdminDashboard() {
     };
     const handleViewHolidays = async (colab) => {
         let feriados = [];
-
         try {
-            if (colab.uid) {
-                feriados = await getWorkedHolidaysByUid(colab.uid);
+            // Buscar en la colección de feriados filtrando por staffId Y storeId (obligatorio por reglas)
+            const q = query(
+                collection(db, 'feriados_trabajados'),
+                where('staffId', '==', colab.id),
+                where('storeId', '==', userData.storeId)
+            );
+            const snap = await getDocs(q);
+            feriados = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-                const staffDoc = await getDoc(doc(db, 'staff_profiles', colab.id));
-                if (staffDoc.exists()) {
-                    const profileData = staffDoc.data();
-                    const pending = profileData.pendingHolidays || [];
-                    feriados = [...feriados, ...pending];
+            // Agregar feriados pendientes del perfil si los hay
+            const pending = colab.pendingHolidays || [];
+            const mappedPending = pending.map(p => {
+                if (typeof p === 'string') {
+                    return { date: p, type: 'ganado', isPending: true, name: 'Feriado Pendiente' };
                 }
-            }
+                return { ...p, type: 'ganado', isPending: true, name: p.name || 'Feriado Pendiente' };
+            });
+
+            feriados = [...feriados, ...mappedPending].sort((a, b) => {
+                const dateA = new Date(a.date || 0);
+                const dateB = new Date(b.date || 0);
+                return dateB - dateA;
+            });
+
             setSelectedHolidays(feriados);
             setSelectedStaff(colab);
             setShowHolidayModal(true);
@@ -227,23 +284,38 @@ function AdminDashboard() {
             const profilesSnap = await getDocs(profilesQuery);
             const profiles = profilesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-            // 2. Cargar todos los study_schedules de una vez
-            const studySnap = await getDocs(collection(db, 'study_schedules'));
+            // 2. Cargar study_schedules solo para los perfiles encontrados (evita listado masivo)
             const studyMap = {};
-            studySnap.forEach(doc => {
-                studyMap[doc.id] = doc.data();
+            const uids = profiles.map(p => p.uid).filter(uid => !!uid);
+
+            if (uids.length > 0) {
+                // Dividir en grupos de 10 para la cláusula 'in' de Firestore
+                for (let i = 0; i < uids.length; i += 10) {
+                    const chunk = uids.slice(i, i + 10);
+                    const q = query(collection(db, 'study_schedules'), where('__name__', 'in', chunk));
+                    const snap = await getDocs(q);
+                    snap.forEach(doc => {
+                        studyMap[doc.id] = doc.data();
+                    });
+                }
+            }
+
+            // 3. Cargar balance de feriados de la tienda
+            const holidaysQuery = query(collection(db, 'feriados_trabajados'), where('storeId', '==', userData.storeId));
+            const hSnap = await getDocs(holidaysQuery);
+            const holidayBalances = {};
+            hSnap.forEach(hDoc => {
+                const hData = hDoc.data();
+                if (!holidayBalances[hData.staffId]) holidayBalances[hData.staffId] = 0;
+                holidayBalances[hData.staffId] += (hData.type === 'compensado' ? -1 : 1);
             });
 
-            // 3. Enriquecer perfiles (sin más getDoc)
+            // 4. Enriquecer perfiles
             const enriched = profiles.map(profile => ({
                 ...profile,
                 study_schedule: studyMap[profile.uid] || {},
-                feriados: profile.pendingHolidays?.length || 0,
-                horasNocturnas: 0, // Si no tienes colección, calcular en backend
+                feriados: (holidayBalances[profile.id] || 0) + (profile.pendingHolidays?.length || 0),
             }));
-
-            // 4. Si necesitas feriados trabajados y nocturnidad → hazlo en Cloud Function
-            // O carga solo si uid existe y en batch
 
             setStaff(enriched);
 
@@ -284,7 +356,9 @@ function AdminDashboard() {
         if (userData?.storeId) {
             console.log("userData cambiado, actualizando perfiles");
             fetchStoreName();
-            fetchAllStaffProfiles(); // Usamos la función alternativa
+            fetchAllStaffProfiles();
+            fetchScheduleLock();
+            fetchStoreRequirements();
         }
     }, [userData]);
 
@@ -342,12 +416,56 @@ function AdminDashboard() {
         );
     };
 
+    const handleDeleteHoliday = async (holiday) => {
+        if (!window.confirm("¿Seguro que deseas eliminar este registro de feriado? Esto afectará el balance actual del colaborador.")) return;
+
+        try {
+            // 1. Eliminar el registro físico
+            if (holiday.isPending) {
+                // Es un registro en staff_profiles.pendingHolidays
+                const ref = doc(db, "staff_profiles", selectedStaff.id);
+                const updatedPending = (selectedStaff.pendingHolidays || []).filter(p => {
+                    const date = typeof p === 'string' ? p : p.date;
+                    return date !== holiday.date;
+                });
+                await updateDoc(ref, { pendingHolidays: updatedPending });
+            } else {
+                // Es un documento en feriados_trabajados
+                await deleteDoc(doc(db, 'feriados_trabajados', holiday.id));
+            }
+
+            // 2. Ajustar el balance en el perfil
+            const impact = holiday.type === 'ganado' ? -1 : 1;
+            const newBalance = (selectedStaff.feriados || 0) + impact;
+            await updateDoc(doc(db, "staff_profiles", selectedStaff.id), {
+                feriados: newBalance
+            });
+
+            // 3. Actualizar estados locales
+            setSelectedHolidays(prev => prev.filter(h => {
+                if (holiday.isPending) return h.date !== holiday.date;
+                return h.id !== holiday.id;
+            }));
+
+            const updatedStaff = { ...selectedStaff, feriados: newBalance };
+            setSelectedStaff(updatedStaff);
+
+            // Actualizar la lista principal de staff
+            setStaff(prev => prev.map(s => s.id === selectedStaff.id ? { ...s, feriados: newBalance } : s));
+
+        } catch (error) {
+            console.error("Error al eliminar feriado:", error);
+            alert("No se pudo eliminar el registro: " + error.message);
+        }
+    };
+
     const handleEditSave = async () => {
         try {
             if (!editModal.name || !editModal.lastName) {
                 alert("Nombre y apellido son obligatorios.");
                 return;
             }
+
             const payload = {
                 name: editModal.name,
                 lastName: editModal.lastName,
@@ -364,6 +482,18 @@ function AdminDashboard() {
             if (editModal.isNew) {
                 await addDoc(collection(db, "staff_profiles"), payload);
             } else {
+                // Verificar si hubo cambio de modalidad
+                const original = staff.find(s => s.id === editModal.id);
+                if (original && original.modality !== editModal.modality) {
+                    if (window.confirm(`Has cambiado la modalidad de ${original.modality} a ${editModal.modality}. El balance de feriados se reseteará a 0 ya que se considera liquidado/pagado. ¿Continuar?`)) {
+                        payload.feriados = 0;
+                        payload.pendingHolidays = [];
+                        // Nota: Los documentos en feriados_trabajados permanecen como historial, 
+                        // pero el balance del perfil empieza de nuevo.
+                    } else {
+                        return; // Cancelar guardado si no acepta el reset
+                    }
+                }
                 await updateDoc(doc(db, "staff_profiles", editModal.id), payload);
             }
 
@@ -376,22 +506,24 @@ function AdminDashboard() {
     };
 
     const loadCesosRegistros = async () => {
+        if (!userData?.storeId) return;
         setCesosLoading(true);
         try {
-            // 1. Leer la colección independiente de ceses
-            const snap = await getDocs(collection(db, 'ceses'));
+            // 1. Leer solo los ceses de ESTA tienda
+            const qCeses = query(collection(db, 'ceses'), where('storeId', '==', userData.storeId));
+            const snap = await getDocs(qCeses);
             const existingIds = new Set(snap.docs.map(d => d.id));
             const lista = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-            // 2. Migrar automáticamente colaboradores con cessationDate
-            //    que aún no estén registrados en la colección 'ceses'
-            const staffSnap = await getDocs(collection(db, 'staff_profiles'));
+            // 2. Migrar solo colaboradores de ESTA tienda
+            const staffQuery = query(collection(db, 'staff_profiles'), where('storeId', '==', userData.storeId));
+            const staffSnap = await getDocs(staffQuery);
             const migraciones = [];
             staffSnap.docs.forEach(d => {
                 const s = d.data();
-                if (!s.cessationDate) return; // sin fecha de cese → ignorar
+                if (!s.cessationDate) return;
                 const docId = `${d.id}_${s.cessationDate}`;
-                if (existingIds.has(docId)) return; // ya existe → no duplicar
+                if (existingIds.has(docId)) return;
                 const registro = {
                     staffId: d.id,
                     name: s.name || '',
@@ -402,7 +534,7 @@ function AdminDashboard() {
                     position: s.position || 'TEAM MEMBER',
                     joinDate: s.joinDate || s.createdAt?.split?.('T')?.[0] || '',
                     cessationDate: s.cessationDate,
-                    storeId: s.storeId || '',
+                    storeId: userData.storeId, // Forzamos el storeId actual
                     registeredAt: new Date().toISOString(),
                     migratedFromProfile: true
                 };
@@ -783,13 +915,6 @@ function AdminDashboard() {
                                 Horarios
                             </button>
                             <button
-                                onClick={() => navigate("/admin/nocturnidad")}
-                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
-                            >
-                                <FileText className="w-4 h-4" />
-                                Consultas
-                            </button>
-                            <button
                                 onClick={exportCarnetExpiringPDF}
                                 className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
@@ -810,6 +935,53 @@ function AdminDashboard() {
                                 <LogOut className="w-4 h-4" />
                                 Salir
                             </button>
+                        </div>
+                    </div>
+                </div>
+
+                {/* System Settings Bar */}
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
+                    <div className="bg-white border border-blue-100 rounded-xl shadow-sm p-4 flex flex-col md:flex-row items-center justify-between gap-4">
+                        <div className="flex items-center gap-3">
+                            <div className={`p-2 rounded-full ${lockSettings.restrictionsEnabled ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
+                                {lockSettings.restrictionsEnabled ? <AlertCircle className="w-5 h-5" /> : <UserCheck className="w-5 h-5" />}
+                            </div>
+                            <div>
+                                <h3 className="text-sm font-bold text-gray-800">Bloqueo de Cambios (Dashboard Colaborador)</h3>
+                                <p className="text-xs text-gray-500">
+                                    {lockSettings.restrictionsEnabled
+                                        ? `Activo hasta el ${new Date(lockSettings.reenableDate + 'T00:00:00').toLocaleDateString('es-ES')}`
+                                        : 'Los colaboradores pueden editar sus horarios libremente.'}
+                                </p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            {lockSettings.restrictionsEnabled ? (
+                                <button
+                                    onClick={() => handleUpdateLock({ ...lockSettings, restrictionsEnabled: false })}
+                                    className="px-4 py-2 bg-green-500 text-white text-xs font-bold rounded-lg hover:bg-green-600 transition-colors"
+                                >
+                                    DESBLOQUEAR AHORA
+                                </button>
+                            ) : (
+                                <div className="flex items-center gap-2">
+                                    <input
+                                        type="date"
+                                        className="text-xs border rounded p-2"
+                                        value={lockSettings.reenableDate}
+                                        onChange={(e) => setLockSettings({ ...lockSettings, reenableDate: e.target.value })}
+                                    />
+                                    <button
+                                        onClick={() => {
+                                            if (!lockSettings.reenableDate) return alert("Selecciona una fecha de reactivación");
+                                            handleUpdateLock({ ...lockSettings, restrictionsEnabled: true });
+                                        }}
+                                        className="px-4 py-2 bg-red-500 text-white text-xs font-bold rounded-lg hover:bg-red-600 transition-colors whitespace-nowrap"
+                                    >
+                                        BLOQUEAR CAMBIOS
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -901,6 +1073,13 @@ function AdminDashboard() {
                             <option value="Trainee">🎓 Entrenamiento</option>
                         </select>
                         <button
+                            onClick={() => setShowTrainingReport(true)}
+                            className="flex items-center gap-2 px-5 py-2.5 bg-white border border-orange-200 text-orange-600 rounded-lg shadow-sm hover:shadow-md transform hover:scale-105 transition-all duration-200 font-medium whitespace-nowrap"
+                        >
+                            <Award className="w-5 h-5 text-orange-500" />
+                            Ver Avances
+                        </button>
+                        <button
                             onClick={handleAddStaff}
                             className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium whitespace-nowrap"
                         >
@@ -956,6 +1135,11 @@ function AdminDashboard() {
                                                             🎓 TRAINEE
                                                         </span>
                                                     )}
+                                                    {colab.position === 'ENTRENADOR' && (
+                                                        <span className="text-xs font-bold text-blue-700 bg-blue-100 border border-blue-300 px-2 py-0.5 rounded-full w-fit flex items-center gap-1">
+                                                            ⭐ ENTRENADOR / TRAINER
+                                                        </span>
+                                                    )}
                                                     {colab.cessationDate && (() => {
                                                         const today = new Date(); today.setHours(0, 0, 0, 0);
                                                         const cessation = new Date(colab.cessationDate + 'T00:00:00');
@@ -972,6 +1156,17 @@ function AdminDashboard() {
                                                                 </span>
                                                             );
                                                         }
+                                                    })()}
+                                                    {colab.modalityChangeDate && colab.nextModality && (() => {
+                                                        const todayStr = new Date().toISOString().split('T')[0];
+                                                        if (colab.modalityChangeDate > todayStr) {
+                                                            return (
+                                                                <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full w-fit flex items-center gap-1 mt-1">
+                                                                    ⚡ CAMBIA A {colab.nextModality} EL {new Date(colab.modalityChangeDate + 'T00:00:00').toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' })}
+                                                                </span>
+                                                            );
+                                                        }
+                                                        return null;
                                                     })()}
                                                 </div>
                                                 <div className="hidden group-hover:block absolute top-full left-0 mt-2 bg-gray-900 text-white text-xs rounded-lg shadow-xl p-3 z-20 w-72">
@@ -1156,6 +1351,71 @@ function AdminDashboard() {
                     />
                 )}
 
+                {showHolidayModal && selectedStaff && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                        <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col overflow-hidden">
+                            {/* Header */}
+                            <div className="px-6 py-4 bg-gradient-to-r from-blue-600 to-indigo-600 flex justify-between items-center text-white">
+                                <h3 className="text-xl font-bold">Historial de Feriados: {selectedStaff.name}</h3>
+                                <button onClick={() => setShowHolidayModal(false)} className="text-2xl hover:text-gray-200">&times;</button>
+                            </div>
+                            {/* Body */}
+                            <div className="p-6 overflow-y-auto flex-1">
+                                <div className="mb-6 p-4 bg-blue-50 border border-blue-100 rounded-xl flex justify-between items-center">
+                                    <div>
+                                        <p className="text-blue-600 text-sm font-medium">Balance Actual</p>
+                                        <p className="text-3xl font-bold text-blue-900">{selectedStaff.feriados} días</p>
+                                    </div>
+                                    <Calendar className="w-12 h-12 text-blue-200" />
+                                </div>
+                                <div className="space-y-3">
+                                    <h4 className="text-sm font-bold text-gray-500 uppercase tracking-wider">Movimientos</h4>
+                                    {selectedHolidays.length === 0 ? (
+                                        <p className="text-center py-8 text-gray-400">No hay movimientos registrados</p>
+                                    ) : (
+                                        <div className="bg-white border rounded-xl overflow-hidden">
+                                            <table className="w-full text-sm text-left">
+                                                <thead className="bg-gray-50 text-gray-500 font-medium border-b">
+                                                    <tr>
+                                                        <th className="px-4 py-3">Fecha</th>
+                                                        <th className="px-4 py-3">Concepto</th>
+                                                        <th className="px-4 py-3 text-right">Efecto</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-gray-100">
+                                                    {selectedHolidays.map((h, i) => (
+                                                        <tr key={i} className="hover:bg-gray-50 transition-colors">
+                                                            <td className="px-4 py-3 font-medium text-gray-900">
+                                                                {h.date ? new Date(h.date + 'T00:00:00').toLocaleDateString('es-ES') : '—'}
+                                                            </td>
+                                                            <td className="px-4 py-3 text-gray-600">
+                                                                {h.name}
+                                                                {h.isPending && <span className="ml-2 px-1.5 py-0.5 bg-yellow-100 text-yellow-700 text-[10px] font-bold rounded uppercase">Migrado</span>}
+                                                            </td>
+                                                            <td className={`px-4 py-3 text-right font-bold ${h.type === 'compensado' ? 'text-red-500' : 'text-green-500'}`}>
+                                                                {h.type === 'compensado' ? '-1 día' : '+1 día'}
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                            {/* Footer */}
+                            <div className="p-4 border-t bg-gray-50 flex justify-end">
+                                <button
+                                    onClick={() => setShowHolidayModal(false)}
+                                    className="px-6 py-2 bg-white border border-gray-300 rounded-lg text-gray-700 font-semibold hover:bg-gray-50 transition-colors"
+                                >
+                                    Cerrar
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 {/* Modal Consultar Ceses */}
                 {showCesadosModal && (() => {
                     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -1319,6 +1579,122 @@ function AdminDashboard() {
                         </div>
                     );
                 })()}
+
+                {/* ===== MODAL HISTORIAL DE FERIADOS ===== */}
+                {showHolidayModal && selectedStaff && (
+                    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+                        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
+                            {/* Header */}
+                            <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-blue-600 to-indigo-700 flex-shrink-0">
+                                <div>
+                                    <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                                        <Calendar className="w-5 h-5" />
+                                        Balance de Feriados
+                                    </h2>
+                                    <p className="text-blue-100 text-sm mt-0.5">{selectedStaff.name} {selectedStaff.lastName}</p>
+                                </div>
+                                <button
+                                    onClick={() => {
+                                        setShowHolidayModal(false);
+                                        setSelectedHolidays([]);
+                                    }}
+                                    className="text-white hover:bg-white/20 p-2 rounded-lg transition-colors"
+                                >
+                                    <X className="w-6 h-6" />
+                                </button>
+                            </div>
+
+                            {/* Resumen del Balance */}
+                            <div className="px-6 py-4 bg-blue-50 border-b border-blue-100 flex items-center justify-between">
+                                <span className="text-blue-800 font-medium">Balance Actual:</span>
+                                <div className="flex items-center gap-2">
+                                    <span className={`text-2xl font-bold ${selectedStaff.feriados > 0 ? 'text-green-600' : selectedStaff.feriados < 0 ? 'text-red-600' : 'text-gray-600'}`}>
+                                        {selectedStaff.feriados > 0 ? `+${selectedStaff.feriados}` : selectedStaff.feriados}
+                                    </span>
+                                    <span className="text-sm text-blue-600 font-medium">días disponibles</span>
+                                </div>
+                            </div>
+
+                            {/* Tabla de Movimientos */}
+                            <div className="overflow-y-auto flex-1 p-6">
+                                {selectedHolidays.length === 0 ? (
+                                    <div className="text-center py-12">
+                                        <Calendar className="w-12 h-12 text-gray-200 mx-auto mb-3" />
+                                        <p className="text-gray-500">No hay movimientos registrados para este colaborador.</p>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-3">
+                                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Historial de Movimientos</p>
+                                        <div className="border border-gray-100 rounded-xl overflow-hidden">
+                                            <table className="w-full text-sm">
+                                                <thead className="bg-gray-50 text-gray-600 text-xs uppercase">
+                                                    <tr>
+                                                        <th className="px-4 py-3 text-left">Fecha</th>
+                                                        <th className="px-4 py-3 text-left">Concepto</th>
+                                                        <th className="px-4 py-3 text-center">Tipo</th>
+                                                        <th className="px-4 py-3 text-center">Impacto</th>
+                                                        <th className="px-4 py-3 text-center">Acción</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-gray-100">
+                                                    {selectedHolidays.map((h, i) => {
+                                                        const isGanado = h.type === 'ganado';
+                                                        return (
+                                                            <tr key={i} className="hover:bg-gray-50 transition-colors">
+                                                                <td className="px-4 py-3 font-medium text-gray-700">
+                                                                    {(() => {
+                                                                        if (!h.date) return 'Sin fecha';
+                                                                        const d = new Date(h.date + 'T00:00:00');
+                                                                        return isNaN(d.getTime()) ? 'Fecha inválida' : d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                                                                    })()}
+                                                                </td>
+                                                                <td className="px-4 py-3 text-gray-600">
+                                                                    {h.name || 'Feriado de Ley'}
+                                                                    {h.isPending && <span className="ml-2 bg-yellow-100 text-yellow-700 text-[10px] px-1.5 py-0.5 rounded font-bold">PENDIENTE</span>}
+                                                                </td>
+                                                                <td className="px-4 py-3 text-center">
+                                                                    <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${isGanado ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                                                        {isGanado ? 'Trabajado' : 'Compensado'}
+                                                                    </span>
+                                                                </td>
+                                                                <td className={`px-4 py-3 text-center font-bold ${isGanado ? 'text-green-600' : 'text-red-600'}`}>
+                                                                    {isGanado ? '+1' : '-1'}
+                                                                </td>
+                                                                <td className="px-4 py-3 text-center">
+                                                                    <button
+                                                                        onClick={() => handleDeleteHoliday(h)}
+                                                                        className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                                                        title="Eliminar este registro"
+                                                                    >
+                                                                        <FaTrash className="w-4 h-4" />
+                                                                    </button>
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Footer */}
+                            <div className="px-6 py-4 border-t border-gray-100 flex justify-end">
+                                <button
+                                    onClick={() => {
+                                        setShowHolidayModal(false);
+                                        setSelectedHolidays([]);
+                                    }}
+                                    className="px-6 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-lg transition-all"
+                                >
+                                    Cerrar
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 {/* ===== MODAL REPORTE DE BAJAS ===== */}
                 {reporteBajaColaborador && (() => {
                     const s = reporteBajaColaborador;
@@ -1445,6 +1821,79 @@ function AdminDashboard() {
                         </div>
                     );
                 })()}
+
+                {showTrainingReport && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                        <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-fadeIn">
+                            <div className="px-6 py-4 bg-gradient-to-r from-orange-600 to-orange-700 flex justify-between items-center text-white">
+                                <h3 className="text-xl font-bold flex items-center gap-2">
+                                    <Award className="w-6 h-6" />
+                                    Reporte de Avances y Entrenamiento
+                                </h3>
+                                <button onClick={() => setShowTrainingReport(false)} className="text-white hover:bg-white/10 p-2 rounded-lg">
+                                    <X className="w-6 h-6" />
+                                </button>
+                            </div>
+
+                            <div className="p-6 overflow-y-auto flex-1">
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                    {staff.filter(s => !s.cessationDate).map(s => {
+                                        const mastered = s.skills?.length || 0;
+                                        const total = storeRequirements.length || 1;
+                                        const percent = Math.round((mastered / total) * 100);
+
+                                        return (
+                                            <div key={s.id} className="border border-gray-100 rounded-xl p-4 bg-gray-50 flex flex-col gap-3">
+                                                <div className="flex justify-between items-start">
+                                                    <div>
+                                                        <p className="font-bold text-gray-800">{s.name} {s.lastName}</p>
+                                                        <p className="text-[10px] text-gray-500 uppercase tracking-widest">{s.position || 'Colaborador'}</p>
+                                                    </div>
+                                                    {s.isTrainee && (
+                                                        <span className="text-[9px] font-bold bg-orange-100 text-orange-600 px-2 py-0.5 rounded-full">TRAINEE</span>
+                                                    )}
+                                                </div>
+
+                                                <div className="space-y-1">
+                                                    <div className="flex justify-between text-[10px] font-bold text-gray-600 uppercase">
+                                                        <span>Progreso</span>
+                                                        <span>{percent}%</span>
+                                                    </div>
+                                                    <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden shadow-inner">
+                                                        <div
+                                                            className={`h-full transition-all duration-1000 ${percent === 100 ? 'bg-green-500' : 'bg-orange-500'}`}
+                                                            style={{ width: `${percent}%` }}
+                                                        />
+                                                    </div>
+                                                </div>
+
+                                                <div className="flex flex-wrap gap-1 mt-auto">
+                                                    {s.skills?.map(skill => (
+                                                        <span key={skill} className="text-[9px] bg-green-50 text-green-700 px-1.5 py-0.5 rounded border border-green-100">
+                                                            {skill}
+                                                        </span>
+                                                    ))}
+                                                    {(!s.skills || s.skills.length === 0) && (
+                                                        <span className="text-[9px] text-gray-400 italic">Sin habilidades registradas</span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            <div className="p-4 border-t bg-gray-50 flex justify-end">
+                                <button
+                                    onClick={() => setShowTrainingReport(false)}
+                                    className="px-6 py-2 bg-white border border-gray-300 rounded-lg text-gray-700 font-semibold hover:bg-gray-50 transition-colors"
+                                >
+                                    Cerrar Reporte
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );

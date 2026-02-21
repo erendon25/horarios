@@ -16,13 +16,15 @@ import {
   Briefcase,
   X,
   CheckCircle,
-
   Quote,
   Edit,
   Save,
-  PlusCircle
+  PlusCircle,
+  Award,
+  Lock
 } from "lucide-react";
 import { MOTIVATIONAL_QUOTES } from "../constants/quotes";
+import ModalSelectorDePosiciones from "./ModalSelectorDePosiciones";
 
 const CollaboratorDashboard = () => {
   const { currentUser, logout } = useAuth();
@@ -38,11 +40,59 @@ const CollaboratorDashboard = () => {
   const [dailyQuote, setDailyQuote] = useState("");
   const [isEditingBirthday, setIsEditingBirthday] = useState(false);
   const [tempBirthDate, setTempBirthDate] = useState("");
+  const [lockSettings, setLockSettings] = useState({ restrictionsEnabled: false, reenableDate: '' });
+  const [storeStaff, setStoreStaff] = useState([]);
+  const [selectedTrainerStaff, setSelectedTrainerStaff] = useState(null);
+  const [storeRequirements, setStoreRequirements] = useState([]);
+
+  const isRestricted = () => {
+    if (!lockSettings.restrictionsEnabled) return false;
+    const today = new Date().toISOString().split('T')[0];
+    return today < lockSettings.reenableDate;
+  };
+
+  const isTrainer = perfil?.position === 'ENTRENADOR';
+
+  useEffect(() => {
+    const fetchStoreStaff = async () => {
+      if (!isTrainer || !perfil?.storeId) return;
+      const db = getFirestore();
+      const q = query(collection(db, "staff_profiles"), where("storeId", "==", perfil.storeId));
+      const snap = await getDocs(q);
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setStoreStaff(list.sort((a, b) => a.name.localeCompare(b.name)));
+    };
+    fetchStoreStaff();
+  }, [isTrainer, perfil?.storeId]);
+
+  useEffect(() => {
+    const fetchRequirements = async () => {
+      if (!perfil?.storeId) return;
+      const db = getFirestore();
+      const q = query(collection(db, "stores", perfil.storeId, "positioning_requirements"));
+      const snap = await getDocs(q);
+      setStoreRequirements(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    };
+    fetchRequirements();
+  }, [perfil?.storeId]);
 
   useEffect(() => {
     const randomIndex = Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length);
     setDailyQuote(MOTIVATIONAL_QUOTES[randomIndex]);
   }, []);
+
+  useEffect(() => {
+    const fetchLock = async () => {
+      if (!perfil?.storeId) return;
+      const db = getFirestore();
+      try {
+        const docRef = doc(db, "stores", perfil.storeId, "config", "schedule_lock");
+        const snap = await getDoc(docRef);
+        if (snap.exists()) setLockSettings(snap.data());
+      } catch (e) { console.error(e); }
+    };
+    fetchLock();
+  }, [perfil]);
 
   useEffect(() => {
     const fetchPerfil = async () => {
@@ -319,26 +369,155 @@ const CollaboratorDashboard = () => {
           </div>
         </div>
 
-        {/* Botones de acción (SOLO 2: Estudio y Feriados) */}
+        {/* Bloqueo de Cambios Warning */}
+        {isRestricted() && (
+          <div className="bg-orange-50 border-l-4 border-orange-400 p-4 mb-6 rounded-r-xl flex items-center gap-3 shadow-sm">
+            <Lock className="w-6 h-6 text-orange-600 animate-pulse" />
+            <div>
+              <p className="text-orange-800 font-bold">Cambios Bloqueos temporalmente</p>
+              <p className="text-sm text-orange-700">
+                La administración ha restringido los cambios hasta el <b>{new Date(lockSettings.reenableDate + 'T00:00:00').toLocaleDateString('es-ES')}</b> para evitar modificaciones de última hora.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Botones de acción */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           <button
-            onClick={() => setModalType("study")}
-            className="bg-gradient-to-r from-blue-500 to-blue-600 text-white p-6 rounded-xl shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 flex flex-col items-center gap-3"
+            onClick={() => !isRestricted() && setModalType("study")}
+            className={`${isRestricted() ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-blue-500 to-blue-600 text-white transform hover:scale-105'} p-6 rounded-xl shadow-md transition-all duration-200 flex flex-col items-center gap-3`}
+            disabled={isRestricted()}
           >
             <BookOpen className="w-8 h-8" />
             <span className="font-semibold text-lg">Editar Horarios de Estudio</span>
-            <span className="text-sm opacity-90">Gestiona tus horarios académicos</span>
+            <span className="text-sm opacity-90">{isRestricted() ? 'Cambios inhabilitados' : 'Gestiona tus horarios académicos'}</span>
           </button>
 
           <button
-            onClick={() => setModalType("feriados")}
-            className="bg-gradient-to-r from-purple-500 to-purple-600 text-white p-6 rounded-xl shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 flex flex-col items-center gap-3"
+            onClick={() => !isRestricted() && setModalType("feriados")}
+            className={`${isRestricted() ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-purple-500 to-purple-600 text-white transform hover:scale-105'} p-6 rounded-xl shadow-md transition-all duration-200 flex flex-col items-center gap-3`}
+            disabled={isRestricted()}
           >
             <Calendar className="w-8 h-8" />
             <span className="font-semibold text-lg">Registrar Feriados</span>
-            <span className="text-sm opacity-90">Indica días festivos trabajados</span>
+            <span className="text-sm opacity-90">{isRestricted() ? 'Cambios inhabilitados' : 'Indica días festivos trabajados'}</span>
           </button>
         </div>
+
+        {/* --- SECCIÓN DE HABILIDADES Y PROGRESO (Para todos) --- */}
+        {perfil?.id && (
+          <div className="bg-white rounded-xl shadow-lg p-6 mb-6 border-t-4 border-orange-400">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+                  <Award className="w-7 h-7 text-orange-500" />
+                  Mi Progreso y Habilidades
+                </h2>
+                <p className="text-gray-500 text-sm">Visualiza las áreas que has dominado en la tienda.</p>
+              </div>
+
+              {/* Solo Trainees pueden auto-gestionarse, o si el admin lo permite. 
+                  Para colaboradores regulares, el progreso lo marca el Trainer/Admin */}
+              {perfil.isTrainee && (
+                <button
+                  onClick={() => setModalType("skills")}
+                  className="px-6 py-3 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-xl font-bold shadow-md hover:shadow-lg transition-all flex items-center gap-2"
+                >
+                  <PlusCircle className="w-5 h-5" />
+                  Actualizar Mis Skills
+                </button>
+              )}
+            </div>
+
+            {/* Progress Bar */}
+            <div className="mb-6">
+              <div className="flex justify-between items-end mb-2">
+                <span className="text-sm font-bold text-gray-700">Progreso Total</span>
+                <span className="text-sm font-bold text-orange-600">
+                  {perfil.skills?.length || 0} de {storeRequirements.length || 0} posiciones
+                </span>
+              </div>
+              <div className="w-full bg-gray-100 rounded-full h-4 overflow-hidden border border-gray-200 shadow-inner">
+                <div
+                  className="bg-gradient-to-r from-orange-400 to-orange-600 h-full transition-all duration-1000 ease-out shadow-md"
+                  style={{ width: `${Math.min(100, Math.round(((perfil.skills?.length || 0) / (storeRequirements.length || 1)) * 100))}%` }}
+                />
+              </div>
+              <p className="text-[10px] text-gray-400 mt-2 uppercase font-bold tracking-wider">
+                {Math.round(((perfil.skills?.length || 0) / (storeRequirements.length || 1)) * 100)}% de maestría alcanzada
+              </p>
+            </div>
+
+            {/* Lista visual de Skills actuales */}
+            <div className="flex flex-wrap gap-2">
+              {perfil.skills && perfil.skills.length > 0 ? (
+                perfil.skills.map(s => (
+                  <span key={s} className="px-4 py-2 bg-green-50 text-green-700 rounded-lg text-xs font-bold border border-green-200 flex items-center gap-2 shadow-sm">
+                    <CheckCircle className="w-4 h-4 text-green-500" /> {s}
+                  </span>
+                ))
+              ) : (
+                <div className="w-full py-4 text-center bg-gray-50 rounded-xl border border-dashed border-gray-300">
+                  <p className="text-gray-400 italic text-sm">Aún no hay habilidades registradas en tu perfil.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* --- CONSOLA DE ENTRENADOR --- */}
+        {isTrainer && (
+          <div className="bg-white rounded-xl shadow-lg overflow-hidden mb-6 border-t-4 border-blue-600">
+            <div className="bg-gradient-to-r from-blue-700 to-indigo-800 px-6 py-4 flex items-center gap-3">
+              <Award className="w-6 h-6 text-white" />
+              <h2 className="text-xl font-bold text-white">Consola de Entrenador</h2>
+            </div>
+            <div className="p-6">
+              <p className="text-gray-500 text-sm mb-6">Como Entrenador, puedes gestionar el progreso de los colaboradores en entrenamiento de tu tienda.</p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {storeStaff.map(staffMember => (
+                  <div
+                    key={staffMember.id}
+                    className="border border-gray-100 rounded-xl p-4 bg-gray-50 hover:bg-white hover:shadow-md transition-all group"
+                  >
+                    <div className="flex justify-between items-start mb-3">
+                      <div>
+                        <p className="font-bold text-gray-800">{staffMember.name} {staffMember.lastName}</p>
+                        <p className="text-[10px] text-gray-400 uppercase tracking-widest">{staffMember.modality}</p>
+                      </div>
+                      {staffMember.isTrainee && (
+                        <span className="text-[9px] font-bold bg-orange-100 text-orange-600 px-2 py-0.5 rounded-full">TRAINEE</span>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap gap-1 mb-4 h-12 overflow-y-auto">
+                      {staffMember.skills?.map(s => (
+                        <span key={s} className="text-[9px] bg-green-50 text-green-600 px-1.5 py-0.5 rounded border border-green-100">
+                          {s}
+                        </span>
+                      ))}
+                      {(!staffMember.skills || staffMember.skills.length === 0) && (
+                        <span className="text-[10px] text-gray-400 italic">Sin habilidades registradas</span>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        setSelectedTrainerStaff(staffMember);
+                        setModalType("trainer_skills");
+                      }}
+                      className="w-full py-2 bg-white border border-blue-200 text-blue-600 rounded-lg text-xs font-bold hover:bg-blue-600 hover:text-white transition-all shadow-sm"
+                    >
+                      GESTIONAR SKILLS
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* --- SECCIÓN DE HORARIO SEMANAL --- */}
         {perfil?.id && (
@@ -356,8 +535,12 @@ const CollaboratorDashboard = () => {
                 <h3 className="text-xl font-bold text-white flex items-center gap-2">
                   {modalType === "study" && <BookOpen className="w-5 h-5" />}
                   {modalType === "feriados" && <Calendar className="w-5 h-5" />}
+                  {modalType === "skills" && <Award className="w-5 h-5" />}
+                  {modalType === "trainer_skills" && <Award className="w-5 h-5" />}
                   {modalType === "study" && "Editar horarios de estudio"}
                   {modalType === "feriados" && "Registrar feriado"}
+                  {modalType === "skills" && "Mis Habilidades"}
+                  {modalType === "trainer_skills" && `Gestionar: ${selectedTrainerStaff?.name}`}
                 </h3>
                 <button
                   onClick={closeModal}
@@ -370,6 +553,39 @@ const CollaboratorDashboard = () => {
               <div className="p-6">
                 {modalType === "study" && <StudyScheduleForm onSuccess={closeModal} />}
                 {modalType === "feriados" && <HolidayForm />}
+                {modalType === "skills" && (
+                  <ModalSelectorDePosiciones
+                    docId={perfil.id}
+                    storeId={perfil.storeId}
+                    onClose={() => {
+                      closeModal();
+                      // Refrescar perfil localmente para ver cambios
+                      const fetchPerfil = async () => {
+                        const db = getFirestore();
+                        const snap = await getDoc(doc(db, "staff_profiles", perfil.id));
+                        if (snap.exists()) setPerfil({ id: snap.id, ...snap.data() });
+                      };
+                      fetchPerfil();
+                    }}
+                  />
+                )}
+                {modalType === "trainer_skills" && (
+                  <ModalSelectorDePosiciones
+                    docId={selectedTrainerStaff.id}
+                    storeId={perfil.storeId}
+                    onClose={() => {
+                      closeModal();
+                      // Refrescar lista de staff para el entrenador
+                      const fetchStoreStaff = async () => {
+                        const db = getFirestore();
+                        const q = query(collection(db, "staff_profiles"), where("storeId", "==", perfil.storeId));
+                        const snap = await getDocs(q);
+                        setStoreStaff(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => a.name.localeCompare(b.name)));
+                      };
+                      fetchStoreStaff();
+                    }}
+                  />
+                )}
               </div>
             </div>
           </div>

@@ -14,6 +14,9 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
     cessationDate: staff?.cessationDate || '',
     isTrainee: staff?.isTrainee || false,
     trainingEndDate: staff?.trainingEndDate || '',
+    modalityChangeDate: staff?.modalityChangeDate || '',
+    nextModality: staff?.nextModality || '',
+    position: staff?.position || 'COLABORADOR',
   });
   const [loading, setLoading] = useState(false);
   const db = getFirestore();
@@ -42,6 +45,26 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
           createdAt: new Date().toISOString(),
         });
       }
+
+      // Si el colaborador ya tiene cuenta (uid) y lo estamos poniendo como ENTRENADOR,
+      // actualizamos su rol en la colección de usuarios para que tenga permisos
+      if (form.uid || staff?.uid) {
+        const targetUid = form.uid || staff.uid;
+        const userDocRef = doc(db, 'users', targetUid);
+        const userSnap = await getDoc(userDocRef);
+
+        if (userSnap.exists()) {
+          const currentRole = userSnap.data().role;
+          // Solo cambiamos si no es admin/superadmin
+          if (currentRole !== 'admin' && currentRole !== 'superadmin') {
+            const newRole = form.position === 'ENTRENADOR' ? 'trainer' : 'colaborador';
+            if (currentRole !== newRole) {
+              await updateDoc(userDocRef, { role: newRole });
+            }
+          }
+        }
+      }
+
       onSaved();
     } catch (err) {
       console.error('Error al guardar:', err);
@@ -99,7 +122,7 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
           {/* Modalidad + Fecha de ingreso */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={labelCls}>Modalidad</label>
+              <label className={labelCls}>Modalidad Actual</label>
               <select name="modality" value={form.modality} onChange={handleChange} className={inputCls}>
                 <option>Full-Time</option>
                 <option>Part-Time</option>
@@ -109,6 +132,45 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
               <label className={labelCls}>Fecha de Ingreso</label>
               <input type="date" name="joinDate" value={form.joinDate} onChange={handleChange} className={inputCls} />
             </div>
+          </div>
+
+          {/* Programar cambio de modalidad */}
+          <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl space-y-3">
+            <p className="text-xs font-bold text-blue-800 uppercase tracking-wider flex items-center gap-1">
+              <span className="text-lg">⚡</span> Programar cambio de modalidad
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[10px] font-bold text-blue-600 uppercase mb-1">Nueva Modalidad</label>
+                <select name="nextModality" value={form.nextModality} onChange={handleChange} className={inputCls}>
+                  <option value="">— Ninguno —</option>
+                  <option>Full-Time</option>
+                  <option>Part-Time</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-blue-600 uppercase mb-1">A partir del día</label>
+                <input type="date" name="modalityChangeDate" value={form.modalityChangeDate} onChange={handleChange} className={inputCls} />
+              </div>
+            </div>
+            {form.modalityChangeDate && form.nextModality && (
+              <p className="text-[10px] text-blue-500 font-medium">
+                INFO: El sistema usará {form.nextModality} para este colaborador a partir del{' '}
+                {new Date(form.modalityChangeDate + 'T00:00:00').toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' })} inclusive.
+              </p>
+            )}
+          </div>
+
+          {/* Cargo / Posición */}
+          <div>
+            <label className={labelCls}>Cargo / Posición</label>
+            <select name="position" value={form.position} onChange={handleChange} className={inputCls}>
+              <option value="COLABORADOR">COLABORADOR</option>
+              <option value="ENTRENADOR">ENTRENADOR / TRAINER</option>
+              <option value="LIDER">LIDER / ENCARGADO</option>
+              <option value="ASISTENTE">ASISTENTE</option>
+              <option value="GERENTE">GERENTE</option>
+            </select>
           </div>
 
           {/* Carnet sanitario */}
@@ -143,8 +205,8 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
           <div
             onClick={() => setForm(prev => ({ ...prev, isTrainee: !prev.isTrainee, cessationDate: '', trainingEndDate: '' }))}
             className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all select-none ${form.isTrainee
-                ? 'border-orange-400 bg-orange-50'
-                : 'border-gray-200 bg-gray-50 hover:border-gray-300'
+              ? 'border-orange-400 bg-orange-50'
+              : 'border-gray-200 bg-gray-50 hover:border-gray-300'
               }`}
           >
             <div className={`w-10 h-6 rounded-full relative transition-colors ${form.isTrainee ? 'bg-orange-500' : 'bg-gray-300'}`}>

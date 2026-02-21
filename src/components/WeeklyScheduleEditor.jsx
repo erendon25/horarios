@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 import { HOURS } from './ScheduleHeatmapMatrix';
 import ModalSelectorDePosiciones from './ModalSelectorDePosiciones';
-import { HOLIDAYS_2026 } from '../constants/holidays';
+import { HOLIDAYS_2026, isHoliday } from '../constants/holidays';
 
 const weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const weekdayLabels = {
@@ -66,6 +66,17 @@ const getWeekKey = (s) => {
 const getScheduleDocRef = (db, staffId, weekKey) =>
     doc(db, 'schedules', `${staffId}_${weekKey}`);
 
+const getEffectiveModality = (person, dateStr) => {
+    if (!person || !person.modalityChangeDate || !person.nextModality || !dateStr) {
+        return person?.modality || '';
+    }
+    // Comparación lexicográfica de fechas ISO (YYYY-MM-DD)
+    if (dateStr >= person.modalityChangeDate) {
+        return person.nextModality;
+    }
+    return person.modality;
+};
+
 export default function WeeklyScheduleEditor() {
     const [staff, setStaff] = useState([]);
     const [positions, setPositions] = useState([]);
@@ -86,15 +97,52 @@ export default function WeeklyScheduleEditor() {
     const [storeId, setStoreId] = useState('');
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
+    const [dirtyStaff, setDirtyStaff] = useState(new Set());
+    const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+
+    const wk = getWeekKey(weekStartDate);
+    const schedules = wk ? allSchedules[wk] || {} : {};
+
+    // === PERSISTENCIA LOCAL STORAGE (Evitar pérdidas y llamadas innecesarias) ===
+    useEffect(() => {
+        if (!wk) return;
+        const saved = localStorage.getItem(`draft_schedule_${wk}`);
+        if (saved) {
+            try {
+                const parsed = JSON.parse(saved);
+                setAllSchedules(prev => ({ ...prev, [wk]: parsed }));
+            } catch (e) {
+                console.error("Error cargando borrador local");
+            }
+        }
+    }, [wk]);
+
+    useEffect(() => {
+        if (!wk || Object.keys(schedules).length === 0) return;
+        // Guardar borrador localmente cada vez que cambie algo
+        const timer = setTimeout(() => {
+            localStorage.setItem(`draft_schedule_${wk}`, JSON.stringify(schedules));
+        }, 1000);
+        return () => clearTimeout(timer);
+    }, [schedules, wk]);
 
     const tooltipRef = useRef(null);
     const iconRefs = useRef({});
     const db = getFirestore();
     const navigate = useNavigate();
     const { currentUser, userRole } = useAuth();
+    const getSelectedDateStr = () => {
+        if (!weekStartDate || !selectedDay) return null;
+        const [y, m, d] = weekStartDate.split('-').map(Number);
+        const dayIndex = weekdays.indexOf(selectedDay);
+        const date = new Date(y, m - 1, d + dayIndex);
+        return [
+            date.getFullYear(),
+            String(date.getMonth() + 1).padStart(2, '0'),
+            String(date.getDate()).padStart(2, '0')
+        ].join('-');
+    };
 
-    const wk = getWeekKey(weekStartDate);
-    const schedules = wk ? allSchedules[wk] || {} : {};
     // === OBTENER storeId del usuario ===
     useEffect(() => {
         if (!currentUser) return;
@@ -158,56 +206,101 @@ export default function WeeklyScheduleEditor() {
     }, [storeId]);
 
     const saveSchedules = async () => {
+        if (dirtyStaff.size === 0) {
+            alert("No hay cambios pendientes para guardar.");
+            return;
+        }
+
         setSaveStatus('saving');
         try {
-            // 1. Guardar Horarios (Batch principal)
             const batch = writeBatch(db);
-            for (const staffId in schedules) {
+            const dirtyArray = Array.from(dirtyStaff);
+
+            // 1. Guardar SOLO Horarios modificados
+            for (const staffId of dirtyArray) {
                 const schedule = schedules[staffId];
+                if (!schedule) continue;
+
                 const ref = doc(db, 'schedules', `${staffId}_${wk}`);
-                batch.set(ref, schedule);
+                // Añadimos campos de indexación para búsqueda masiva eficiente (Cost-Reduction)
+                batch.set(ref, {
+                    ...schedule,
+                    weekKey: wk,
+                    storeId: storeId
+                });
             }
-            // 2. Detectar y Guardar Feriados Trabajados
+
+            // 2. Procesar Feriados SOLO para filas modificadas
             if (weekStartDate) {
                 const [y, m, d] = weekStartDate.split('-').map(Number);
                 const start = new Date(y, m - 1, d);
 
-                for (const staffId in schedules) {
+                for (const staffId of dirtyArray) {
                     const personSchedule = schedules[staffId];
-                    if (!personSchedule) continue;
+                    const person = staff.find(s => s.id === staffId);
+                    if (!personSchedule || !person) continue;
 
                     weekdays.forEach((dayName, idx) => {
                         const shift = personSchedule[dayName];
-                        // Si trabaja (no off, no feriado declarado, tiene entrada/salida)
-                        if (shift && !shift.off && !shift.feriado && shift.start && shift.end) {
-                            const currentDay = new Date(start);
-                            currentDay.setDate(start.getDate() + idx);
-                            const dateStr = [
-                                currentDay.getFullYear(),
-                                String(currentDay.getMonth() + 1).padStart(2, '0'),
-                                String(currentDay.getDate()).padStart(2, '0')
-                            ].join('-');
+                        const currentDay = new Date(start);
+                        currentDay.setDate(start.getDate() + idx);
+                        const dateStr = [
+                            currentDay.getFullYear(),
+                            String(currentDay.getMonth() + 1).padStart(2, '0'),
+                            String(currentDay.getDate()).padStart(2, '0')
+                        ].join('-');
 
-                            const holiday = HOLIDAYS_2026.find(h => h.date === dateStr);
-                            if (holiday) {
-                                // Usar setDoc con ID determinista para evitar duplicados
-                                const holidayRef = doc(db, 'feriados_trabajados', `${staffId}_${dateStr}`);
+                        const holidayRef = doc(db, 'feriados_trabajados', `${staffId}_${dateStr}`);
+                        const calendarHoliday = HOLIDAYS_2026.find(h => h.date === dateStr);
+
+                        if (shift?.feriado) {
+                            if (!calendarHoliday) {
                                 batch.set(holidayRef, {
-                                    uid: staff.find(s => s.id === staffId)?.uid || '', // intentar buscar uid
+                                    uid: person.uid || '',
                                     staffId: staffId,
+                                    storeId: storeId,
                                     date: dateStr,
-                                    name: holiday.name,
+                                    name: 'Compensación de Feriado',
+                                    type: 'compensado',
                                     createdAt: new Date().toISOString()
                                 });
+                            } else {
+                                batch.delete(holidayRef);
                             }
+                        }
+                        else if (shift && !shift.off && shift.start && shift.end) {
+                            if (calendarHoliday) {
+                                batch.set(holidayRef, {
+                                    uid: person.uid || '',
+                                    staffId: staffId,
+                                    storeId: storeId,
+                                    date: dateStr,
+                                    name: calendarHoliday.name,
+                                    type: 'ganado',
+                                    createdAt: new Date().toISOString()
+                                });
+                            } else {
+                                batch.delete(holidayRef);
+                            }
+                        }
+                        else {
+                            batch.delete(holidayRef);
                         }
                     });
                 }
             }
+
             await batch.commit();
+
+            // Limpieza post-guardado exitoso
+            setDirtyStaff(new Set());
+            setHasUnsavedChanges(false);
+            localStorage.removeItem(`draft_schedule_${wk}`); // Limpiar borrador local al sincronizar
+
             setSaveStatus('success');
             setTimeout(() => setSaveStatus('idle'), 3000);
         } catch (err) {
+            console.error("Error al guardar:", err);
             setSaveStatus('error');
             setTimeout(() => setSaveStatus('idle'), 3000);
         }
@@ -256,9 +349,10 @@ export default function WeeklyScheduleEditor() {
         if (!wk) return;
 
         const current = schedules[staffId]?.[selectedDay] || {};
-        const modality = staff.find(p => p.id === staffId)?.modality || '';
+        const person = staff.find(p => p.id === staffId);
+        const dateStr = getSelectedDateStr();
 
-        // Convertir a número si es horas extras (cualquier campo de HE)
+        // Convertir a número si es horas extras
         let finalValue = value;
         if (field === 'extraHours' || field === 'extraHoursPre' || field === 'extraHoursPost') {
             finalValue = value === '' ? '' : parseFloat(String(value).replace(',', '.'));
@@ -273,17 +367,34 @@ export default function WeeklyScheduleEditor() {
 
         // 🔒 Si se marca "feriado", setear horarios fijos según modalidad
         if (field === 'feriado' && value === true) {
-            const isFull = modality.toLowerCase() === 'full-time';
-            updates = {
-                feriado: true,
-                off: false,
-                start: '08:00',
-                end: isFull ? '16:45' : '12:00',
-                position: '',
-                extraHours: '',
-                extraHoursPre: '',
-                extraHoursPost: ''
-            };
+            const holiday = isHoliday(dateStr);
+
+            if (holiday) {
+                alert(`Nota legal activa:\n\nEl ${dateStr} es "${holiday.name}".\n\nPor ley, no se puede usar un feriado oficial para pagar otro feriado. El sistema marcará automáticamente este día como "Día Libre (Descanso Legal)" para preservar el balance del colaborador.`);
+                updates = {
+                    off: true,
+                    feriado: false,
+                    start: '',
+                    end: '',
+                    position: '',
+                    extraHours: '',
+                    extraHoursPre: '',
+                    extraHoursPost: ''
+                };
+            } else {
+                const effModality = getEffectiveModality(person, dateStr);
+                const isFull = (effModality || '').toLowerCase() === 'full-time';
+                updates = {
+                    feriado: true,
+                    off: false,
+                    start: '08:00',
+                    end: isFull ? '16:45' : '12:00',
+                    position: '',
+                    extraHours: '',
+                    extraHoursPre: '',
+                    extraHoursPost: ''
+                };
+            }
         }
 
         // Si se desmarca feriado → limpiar solo feriado
@@ -295,6 +406,9 @@ export default function WeeklyScheduleEditor() {
         if (field === 'off' && value === false) {
             updates = { ...current, off: false };
         }
+
+        setDirtyStaff(prev => new Set(prev).add(staffId));
+        setHasUnsavedChanges(true);
 
         setAllSchedules(prev => ({
             ...prev,
@@ -351,6 +465,18 @@ export default function WeeklyScheduleEditor() {
         return `${hours}:${mins.toString().padStart(2, '0')}`;
     };
 
+    const getDateStrForDay = (day) => {
+        if (!weekStartDate || !day) return null;
+        const [y, m, d] = weekStartDate.split('-').map(Number);
+        const dayIndex = weekdays.indexOf(day);
+        const date = new Date(y, m - 1, d + dayIndex);
+        return [
+            date.getFullYear(),
+            String(date.getMonth() + 1).padStart(2, '0'),
+            String(date.getDate()).padStart(2, '0')
+        ].join('-');
+    };
+
     // Función para calcular horas semanales
     const calculateWeeklyHours = (staffId) => {
         // Asegurarnos de tener los datos necesarios
@@ -359,20 +485,20 @@ export default function WeeklyScheduleEditor() {
         }
 
         const person = staff.find(p => p.id === staffId);
-        const modality = person?.modality || '';
-        const isFullTime = modality.toLowerCase() === 'full-time';
+        if (!person) return { total: 0, formatted: '0:00' };
 
         let totalMinutes = 0;
 
         weekdays.forEach(day => {
             const daySchedule = schedules[staffId][day];
 
-            // Si no hay horario o es día libre/feriado, saltar (a menos que queramos contar HE en libres?)
-            // Por ahora mantenemos la lógica de que debe haber turno activo.
+            // Si no hay horario o es día libre/feriado, saltar
             if (!daySchedule || daySchedule.off || daySchedule.feriado) return;
-
-            // Validar start y end existan para calcular base
             if (!daySchedule.start || !daySchedule.end) return;
+
+            const dateStr = getDateStrForDay(day);
+            const effModality = getEffectiveModality(person, dateStr);
+            const isFullTime = (effModality || '').toLowerCase() === 'full-time';
 
             // 1. Calcular Horas Base (Turno)
             const startMinutes = timeToMinutes(daySchedule.start);
@@ -383,9 +509,6 @@ export default function WeeklyScheduleEditor() {
             }
 
             let baseMinutes = endMinutes - startMinutes;
-
-            // Las horas extras NO se suman al total semanal
-            // Solo se cuenta el turno contractual (start - end)
 
             // Descuento Break (Solo Full Time)
             if (isFullTime) {
@@ -491,7 +614,10 @@ export default function WeeklyScheduleEditor() {
                 continue;
             }
 
-            const isFullTime = (person.modality || '').toLowerCase() === 'full-time';
+            const currentDayDateStr = getDateStrForDay(day);
+            const effModality = getEffectiveModality(person, currentDayDateStr);
+            const isFullTime = (effModality || '').toLowerCase() === 'full-time';
+
             const weeklyLimit = isFullTime ? 2880 : 1440;
             const currentWeekMin = getWeeklyMinutes(person.id);
             const freeDays = Object.values(person.study_schedule || {}).filter(d => d?.free).length;
@@ -679,21 +805,47 @@ export default function WeeklyScheduleEditor() {
     }, [storeId, db]);
 
 
-    // Cargar horarios en tiempo real
+    // Cargar horarios de forma eficiente (Una sola llamada masiva en lugar de listeners individuales)
     useEffect(() => {
-        if (!wk || staff.length === 0) return;
-        const unsubs = staff.map(s => {
-            return onSnapshot(doc(db, 'schedules', `${s.id}_${wk}`), snap => {
-                if (snap.exists()) {
-                    setAllSchedules(prev => ({
-                        ...prev,
-                        [wk]: { ...prev[wk], [s.id]: snap.data() }
+        if (!wk || !storeId || staff.length === 0) return;
+
+        const loadAllSchedules = async () => {
+            try {
+                // Intentamos traer todos los horarios de esta tienda y semana
+                // Nota: Esto asume que guardamos storeId y weekKey en los registros
+                const q = query(
+                    collection(db, 'schedules'),
+                    where('weekKey', '==', wk),
+                    where('storeId', '==', storeId)
+                );
+                const snap = await getDocs(q);
+
+                const wkSchedules = {};
+                snap.docs.forEach(doc => {
+                    // El ID es staffId_weekKey, extraemos el staffId
+                    const sId = doc.id.split('_')[0];
+                    wkSchedules[sId] = doc.data();
+                });
+
+                // Si la consulta masiva no trajo nada (datos antiguos sin campos de filtro), 
+                // hacemos fallback a carga individual para no romper la compatibilidad una única vez
+                if (Object.keys(wkSchedules).length === 0) {
+                    const fallbackData = {};
+                    await Promise.all(staff.map(async (s) => {
+                        const dSnap = await getDoc(doc(db, 'schedules', `${s.id}_${wk}`));
+                        if (dSnap.exists()) fallbackData[s.id] = dSnap.data();
                     }));
+                    setAllSchedules(prev => ({ ...prev, [wk]: fallbackData }));
+                } else {
+                    setAllSchedules(prev => ({ ...prev, [wk]: wkSchedules }));
                 }
-            });
-        });
-        return () => unsubs.forEach(unsub => unsub());
-    }, [wk, staff, db]);
+            } catch (err) {
+                console.error("Error cargando horarios optimizados:", err);
+            }
+        };
+
+        loadAllSchedules();
+    }, [wk, staff, storeId, db]);
 
 
 
@@ -993,7 +1145,9 @@ export default function WeeklyScheduleEditor() {
                                     ? 'bg-gray-400 cursor-not-allowed'
                                     : saveStatus === 'success'
                                         ? 'bg-green-500 hover:bg-green-600'
-                                        : 'bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700'
+                                        : hasUnsavedChanges
+                                            ? 'bg-orange-500 hover:bg-orange-600 animate-pulse'
+                                            : 'bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700'
                                     } text-white`}
                             >
                                 {saveStatus === 'saving' ? (
@@ -1009,7 +1163,12 @@ export default function WeeklyScheduleEditor() {
                                 ) : (
                                     <>
                                         <Save className="w-5 h-5" />
-                                        Guardar
+                                        <span>Guardar</span>
+                                        {hasUnsavedChanges && (
+                                            <span className="bg-white text-orange-600 text-[10px] font-bold px-1.5 py-0.5 rounded-full ml-1">
+                                                {dirtyStaff.size}
+                                            </span>
+                                        )}
                                     </>
                                 )}
                             </button>
@@ -1102,7 +1261,14 @@ export default function WeeklyScheduleEditor() {
                                             <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Pre-cierres</th>
                                             <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Cierres</th>
                                             <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Libre</th>
-                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Feriado</th>
+                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">
+                                                Feriado
+                                                {(() => {
+                                                    const dateStr = getSelectedDateStr();
+                                                    const holiday = isHoliday(dateStr);
+                                                    return holiday ? <span className="block text-[10px] text-yellow-300 mt-1">({holiday.name})</span> : null;
+                                                })()}
+                                            </th>
                                         </tr>
                                     </thead>
                                     <tbody className="bg-white divide-y divide-gray-200">
@@ -1241,12 +1407,26 @@ export default function WeeklyScheduleEditor() {
                                                         )}
                                                     </td>
                                                     <td className="px-6 py-4 text-center sticky left-[280px] z-10 bg-white group-hover:bg-blue-50" style={{ minWidth: '140px', maxWidth: '140px' }}>
-                                                        <span className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap inline-block ${p.modality === "Full-Time"
-                                                            ? "bg-gradient-to-r from-green-500 to-green-600 text-white shadow-sm"
-                                                            : "bg-gradient-to-r from-purple-500 to-purple-600 text-white shadow-sm"
-                                                            }`}>
-                                                            {p.modality}
-                                                        </span>
+                                                        {(() => {
+                                                            const dateStr = getSelectedDateStr();
+                                                            const effModality = getEffectiveModality(p, dateStr);
+                                                            const isChangeDay = p.modalityChangeDate === dateStr;
+                                                            return (
+                                                                <div className="flex flex-col items-center">
+                                                                    <span className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap inline-block ${effModality === "Full-Time"
+                                                                        ? "bg-green-100 text-green-800 border border-green-200"
+                                                                        : "bg-purple-100 text-purple-800 border border-purple-200"
+                                                                        }`}>
+                                                                        {effModality}
+                                                                    </span>
+                                                                    {isChangeDay && (
+                                                                        <span className="text-[9px] font-bold text-blue-600 animate-pulse mt-1">
+                                                                            🔄 CAMBIO HOY
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })()}
                                                     </td>
                                                     <td className="px-4 py-4 text-center">
                                                         {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (

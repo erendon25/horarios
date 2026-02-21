@@ -10,7 +10,7 @@ import WeeklyScheduleEditor from './components/WeeklyScheduleEditor';
 import PositioningConfig from './components/PositioningConfig';
 import StudyScheduleViewer from './components/StudyScheduleViewer';
 import PositionRequirementsWrapper from './components/PositionRequirementsWrapper';
-import ConsultaNocturnidad from './components/ConsultaNocturnidad';
+
 import RequireAdmin from "./components/RequireAdmin";
 import HolidayForm from './components/HolidayForm';
 import StudyScheduleEditor from './components/StudyScheduleEditor';
@@ -25,43 +25,43 @@ function AppRouter() {
   return (
     <Routes>
       <Route path="/" element={
-  <Navigate to={
-    userRole === 'superadmin'
-      ? '/superadmin'
-      : userRole === 'admin'
-        ? '/admin'
-        : '/staff'
-  } />
-} />
+        <Navigate to={
+          userRole === 'superadmin'
+            ? '/superadmin'
+            : userRole === 'admin'
+              ? '/admin'
+              : '/staff'
+        } />
+      } />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/unauthorized" element={<h1>Acceso no autorizado</h1>} />
 
       <Route
-  path="/admin"
-  element={
-    <RequireAdmin>
-      <AdminDashboard />
-    </RequireAdmin>
-  }
-/>
-<Route path="/superadmin" element={
-  <PrivateRoute role="superadmin">
-    <SuperAdminDashboard />
-  </PrivateRoute>
-} />
+        path="/admin"
+        element={
+          <RequireAdmin>
+            <AdminDashboard />
+          </RequireAdmin>
+        }
+      />
+      <Route path="/superadmin" element={
+        <PrivateRoute role="superadmin">
+          <SuperAdminDashboard />
+        </PrivateRoute>
+      } />
 
-    
+
       <Route path="/admin/study/:id" element={
         <PrivateRoute role="admin">
           <StudyScheduleViewer />
         </PrivateRoute>
       } />
       <Route path="/admin/study-schedule/:uid" element={
-              <PrivateRoute role="admin">
-                  <StudyScheduleEditor />
-              </PrivateRoute>
-          } />
+        <PrivateRoute role="admin">
+          <StudyScheduleEditor />
+        </PrivateRoute>
+      } />
 
       <Route path="/admin/generate-schedules" element={
         <PrivateRoute role="admin">
@@ -81,11 +81,7 @@ function AppRouter() {
         </PrivateRoute>
       } />
 
-      <Route path="/admin/nocturnidad" element={
-        <PrivateRoute role="admin">
-          <ConsultaNocturnidad />
-        </PrivateRoute>
-      } />
+
 
       <Route path="/horarios" element={
         <PrivateRoute role="admin">
@@ -95,24 +91,24 @@ function AppRouter() {
 
       <Route path="/staff" element={
         <PrivateRoute role="collaborator">
-          <CollaboratorDashboard/>
+          <CollaboratorDashboard />
         </PrivateRoute>
       } />
       <Route path="/staff/study" element={
         <PrivateRoute role="collaborator">
           <StudyScheduleEditor />
-         </PrivateRoute>
-       } />
-     
-          <Route
+        </PrivateRoute>
+      } />
 
-  path="/staff/feriados"
-  element={
-    <PrivateRoute role="collaborator">
-      <HolidayForm />
-    </PrivateRoute>
-  }
-/>
+      <Route
+
+        path="/staff/feriados"
+        element={
+          <PrivateRoute role="collaborator">
+            <HolidayForm />
+          </PrivateRoute>
+        }
+      />
     </Routes>
   );
 }
