@@ -20,7 +20,9 @@ import {
     Building2,
     UserCheck,
     AlertCircle,
-    X
+    X,
+    Download,
+    Save
 } from "lucide-react";
 import {
     doc,
@@ -44,6 +46,8 @@ import StaffModal from './StaffModal';
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
 
 function AdminDashboard() {
     const { logout, currentUser, userRole, userData } = useAuth();
@@ -380,6 +384,9 @@ function AdminDashboard() {
                     lastName: s.lastName || '',
                     modality: s.modality || '',
                     dni: s.dni || '',
+                    gender: s.gender || s.sexo || '',
+                    position: s.position || 'TEAM MEMBER',
+                    joinDate: s.joinDate || s.createdAt?.split?.('T')?.[0] || '',
                     cessationDate: s.cessationDate,
                     storeId: s.storeId || '',
                     registeredAt: new Date().toISOString(),
@@ -407,21 +414,21 @@ function AdminDashboard() {
     const abrirReporteBaja = (registro) => {
         setReporteBajaColaborador(registro);
         setReporteBajaForm({
-            desempenio: 'BUENO',
-            motivoCese: 'RENUNCIA VOLUNTARIA',
-            motivoReal: 'MEJORA ECONÓMICA',
-            comentario: '',
-            diasDescansoMedico: '',
-            inasistencias: '',
-            tardanzas: '',
-            horasNocturnas: '',
-            horasExtras: '',
-            feriados: '',
-            descuentos: '',
+            desempenio: registro.desempenio || 'BUENO',
+            motivoCese: registro.motivoCese || 'RENUNCIA VOLUNTARIA',
+            motivoReal: registro.motivoReal || 'MEJORA ECONÓMICA',
+            comentario: registro.comentario || '',
+            diasDescansoMedico: registro.diasDescansoMedico || '',
+            inasistencias: registro.inasistencias || '',
+            tardanzas: registro.tardanzas || '',
+            horasNocturnas: registro.horasNocturnas || '',
+            horasExtras: registro.horasExtras || '',
+            feriados: registro.feriados || '',
+            descuentos: registro.descuentos || '',
         });
     };
 
-    const exportarReporteBajaExcel = () => {
+    const exportarReporteBajaExcel = async () => {
         if (!reporteBajaColaborador) return;
         const s = reporteBajaColaborador;
         const f = reporteBajaForm;
@@ -431,29 +438,29 @@ function AdminDashboard() {
         const mesLabel = fechaCeseObj.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
         const mesCapitalized = mesLabel.charAt(0).toUpperCase() + mesLabel.slice(1);
 
-        // Formatear fecha
-        const fmtFecha = (str) => {
-            if (!str) return '';
-            const d = new Date(str + 'T00:00:00');
-            return d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
-        };
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Reporte de Baja');
 
-        const wb = XLSX.utils.book_new();
-
-        // ─── HEADERS (2 filas) ───
-        const cabeceras1 = [
-            'TIENDA', 'PUESTO', 'MO', 'DNI',
+        const headers = [
+            'TIENDA', 'PUESTO', 'MOD', 'DNI',
             'NOMBRE DE COLABORADOR', 'SEXO',
             'FECHA DE INGRESO', 'FECHA DE CESE',
-            'DIAS DESCANSO MEDICO', 'INASISTENCIAS',
+            'DIAS DESCANSO MEDICO', 'INASISTENCIA',
             'TARDANZAS (MINUTOS, HORAS)',
             'HORAS NOCTURNAS', 'HORAS EXTRAS', 'FERIADOS', 'DESCUENTOS',
             'DESEMPEÑO', 'MOTIVO DE CESE', 'MOTIVO REAL',
             'COMENTARIO TIENDA - DESCRIBIR CON MAYOR DETALLE EL MOTIVO POR EL QUE SE RETIRA EL COLABORADOR DE LA EMPRESA'
         ];
 
-        // ─── FILA DE DATOS ───
-        const fila = [
+        worksheet.addRow(headers);
+
+        const fmtFecha = (str) => {
+            if (!str) return '';
+            const d = new Date(str + 'T00:00:00');
+            return d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        };
+
+        const rowData = [
             storeName || s.storeId || '',
             s.position || 'TEAM MEMBER',
             s.modality === 'Full-Time' ? 'FT' : s.modality === 'Part-Time' ? 'PT' : (s.modality || ''),
@@ -462,67 +469,199 @@ function AdminDashboard() {
             s.gender || s.sexo || '',
             fmtFecha(s.joinDate || s.createdAt?.split?.('T')?.[0] || ''),
             fmtFecha(s.cessationDate),
-            f.diasDescansoMedico,
-            f.inasistencias,
-            f.tardanzas,
-            f.horasNocturnas,
-            f.horasExtras,
-            f.feriados,
-            f.descuentos,
+            f.diasDescansoMedico || '0',
+            f.inasistencias || '0',
+            f.tardanzas || '0',
+            f.horasNocturnas || '0',
+            f.horasExtras || '0',
+            f.feriados || '0',
+            f.descuentos || '0',
             f.desempenio,
             f.motivoCese,
             f.motivoReal,
             f.comentario,
         ];
 
-        const wsData = [cabeceras1, fila];
-        const ws = XLSX.utils.aoa_to_sheet(wsData);
+        worksheet.addRow(rowData);
 
-        // Ancho de columnas
-        ws['!cols'] = [
-            { wch: 14 }, { wch: 14 }, { wch: 5 }, { wch: 11 },
-            { wch: 28 }, { wch: 10 },
-            { wch: 14 }, { wch: 12 },
-            { wch: 10 }, { wch: 12 },
-            { wch: 14 },
-            { wch: 13 }, { wch: 13 }, { wch: 10 }, { wch: 12 },
-            { wch: 12 }, { wch: 18 }, { wch: 22 },
-            { wch: 50 }
-        ];
-
-        // Estilos de cabecera: fondo amarillo, texto negro, negrita
-        const headerStyle = {
-            fill: { fgColor: { rgb: "FFFF00" } },
-            font: { bold: true, color: { rgb: "000000" } },
-            alignment: { wrapText: true, horizontal: 'center', vertical: 'center' },
-            border: {
-                top: { style: 'thin', color: { rgb: "000000" } },
-                bottom: { style: 'thin', color: { rgb: "000000" } },
-                left: { style: 'thin', color: { rgb: "000000" } },
-                right: { style: 'thin', color: { rgb: "000000" } }
-            }
-        };
-        const dataStyle = {
-            alignment: { wrapText: true, horizontal: 'center', vertical: 'center' },
-            border: {
-                top: { style: 'thin', color: { rgb: "000000" } },
-                bottom: { style: 'thin', color: { rgb: "000000" } },
-                left: { style: 'thin', color: { rgb: "000000" } },
-                right: { style: 'thin', color: { rgb: "000000" } }
-            }
-        };
-
-        cabeceras1.forEach((_, ci) => {
-            const cellRef = XLSX.utils.encode_cell({ r: 0, c: ci });
-            if (ws[cellRef]) ws[cellRef].s = headerStyle;
-            const dataRef = XLSX.utils.encode_cell({ r: 1, c: ci });
-            if (ws[dataRef]) ws[dataRef].s = dataStyle;
+        // Estilos
+        const headerRow = worksheet.getRow(1);
+        headerRow.height = 45;
+        headerRow.eachCell((cell) => {
+            cell.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FF1F4E78' } // Dark Blue
+            };
+            cell.font = {
+                bold: true,
+                color: { argb: 'FFFFFFFF' }, // White
+                size: 10
+            };
+            cell.alignment = { wrapText: true, horizontal: 'center', vertical: 'middle' };
+            cell.border = {
+                top: { style: 'thin' },
+                left: { style: 'thin' },
+                bottom: { style: 'thin' },
+                right: { style: 'thin' }
+            };
         });
 
-        ws['!rows'] = [{ hpt: 40 }, { hpt: 25 }];
+        worksheet.getRow(2).eachCell((cell) => {
+            cell.alignment = { wrapText: true, horizontal: 'center', vertical: 'middle' };
+            cell.border = {
+                top: { style: 'thin' },
+                left: { style: 'thin' },
+                bottom: { style: 'thin' },
+                right: { style: 'thin' }
+            };
+        });
 
-        XLSX.utils.book_append_sheet(wb, ws, 'Reporte de Bajas');
-        XLSX.writeFile(wb, `Reporte de Bajas - ${mesCapitalized}.xlsx`);
+        worksheet.columns = [
+            { width: 15 }, { width: 15 }, { width: 8 }, { width: 12 },
+            { width: 30 }, { width: 10 },
+            { width: 15 }, { width: 15 },
+            { width: 12 }, { width: 12 },
+            { width: 15 },
+            { width: 15 }, { width: 15 }, { width: 10 }, { width: 12 },
+            { width: 15 }, { width: 22 }, { width: 25 },
+            { width: 60 }
+        ];
+
+        const buffer = await workbook.xlsx.writeBuffer();
+
+        // --- GUARDAR EN FIRESTORE ---
+        try {
+            await updateDoc(doc(db, 'ceses', s.id), {
+                ...f,
+                lastUpdated: new Date().toISOString()
+            });
+            // Recargar la lista local para que el reporte mensual tenga la data actualizada
+            await loadCesosRegistros();
+        } catch (err) {
+            console.error("Error guardando datos del cese:", err);
+        }
+
+        saveAs(new Blob([buffer]), `Reporte_Baja_${s.name}_${s.lastName}_${mesCapitalized}.xlsx`);
+    };
+
+    const exportarReporteBajasMensualExcel = async () => {
+        if (!cesosFilterMonth) return;
+
+        const filtered = cesosRegistros.filter(s =>
+            s.cessationDate && s.cessationDate.startsWith(cesosFilterMonth)
+        );
+
+        if (filtered.length === 0) {
+            alert("No hay registros para exportar en este mes.");
+            return;
+        }
+
+        const mesLabel = new Date(cesosFilterMonth + '-02').toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+        const mesCapitalized = mesLabel.charAt(0).toUpperCase() + mesLabel.slice(1);
+
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Bajas del Mes');
+
+        const headers = [
+            'TIENDA', 'PUESTO', 'MOD', 'DNI',
+            'NOMBRE DE COLABORADOR', 'SEXO',
+            'FECHA DE INGRESO', 'FECHA DE CESE',
+            'DIAS DESCANSO MEDICO', 'INASISTENCIA',
+            'TARDANZAS (MINUTOS, HORAS)',
+            'HORAS NOCTURNAS', 'HORAS EXTRAS', 'FERIADOS', 'DESCUENTOS',
+            'DESEMPEÑO', 'MOTIVO DE CESE', 'MOTIVO REAL',
+            'COMENTARIO TIENDA'
+        ];
+
+        worksheet.addRow(headers);
+
+        const fmtFecha = (str) => {
+            if (!str) return '';
+            const d = new Date(str + 'T00:00:00');
+            return d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        };
+
+        filtered.forEach(s => {
+            worksheet.addRow([
+                storeName || s.storeId || '',
+                s.position || 'TEAM MEMBER',
+                s.modality === 'Full-Time' ? 'FT' : s.modality === 'Part-Time' ? 'PT' : (s.modality || ''),
+                s.dni || '',
+                `${s.name || ''} ${s.lastName || ''}`.trim(),
+                s.gender || s.sexo || '',
+                fmtFecha(s.joinDate || s.createdAt?.split?.('T')?.[0] || ''),
+                fmtFecha(s.cessationDate),
+                s.diasDescansoMedico || '0',
+                s.inasistencias || '0',
+                s.tardanzas || '0',
+                s.horasNocturnas || '0',
+                s.horasExtras || '0',
+                s.feriados || '0',
+                s.descuentos || '0',
+                s.desempenio || '',
+                s.motivoCese || '',
+                s.motivoReal || '',
+                s.comentario || ''
+            ]);
+        });
+
+        const headerRow = worksheet.getRow(1);
+        headerRow.height = 40;
+        headerRow.eachCell((cell) => {
+            cell.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FF1F4E78' }
+            };
+            cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+            cell.alignment = { wrapText: true, horizontal: 'center', vertical: 'middle' };
+            cell.border = {
+                top: { style: 'thin' }, left: { style: 'thin' },
+                bottom: { style: 'thin' }, right: { style: 'thin' }
+            };
+        });
+
+        worksheet.eachRow((row, rowNumber) => {
+            if (rowNumber > 1) {
+                row.eachCell((cell) => {
+                    cell.border = {
+                        top: { style: 'thin' }, left: { style: 'thin' },
+                        bottom: { style: 'thin' }, right: { style: 'thin' }
+                    };
+                    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+                });
+            }
+        });
+
+        worksheet.columns = [
+            { width: 15 }, { width: 15 }, { width: 8 }, { width: 12 },
+            { width: 30 }, { width: 10 },
+            { width: 15 }, { width: 15 },
+            { width: 12 }, { width: 12 },
+            { width: 15 }, { width: 15 }, { width: 15 }, { width: 10 }, { width: 12 },
+            { width: 15 }, { width: 22 }, { width: 25 }, { width: 40 }
+        ];
+
+        const buffer = await workbook.xlsx.writeBuffer();
+        saveAs(new Blob([buffer]), `Reporte_Bajas_Mensual_${mesCapitalized}.xlsx`);
+    };
+
+    const handleSaveReporteBaja = async () => {
+        if (!reporteBajaColaborador) return;
+        const s = reporteBajaColaborador;
+        const f = reporteBajaForm;
+        try {
+            await updateDoc(doc(db, 'ceses', s.id), {
+                ...f,
+                lastUpdated: new Date().toISOString()
+            });
+            await loadCesosRegistros();
+            alert("Reporte guardado exitosamente en el sistema.");
+        } catch (err) {
+            console.error("Error guardando datos del cese:", err);
+            alert("Error al guardar: " + err.message);
+        }
     };
 
     const handleCessation = async (colab) => {
@@ -556,6 +695,9 @@ function AdminDashboard() {
                     lastName: colab.lastName,
                     modality: colab.modality || '',
                     dni: colab.dni || '',
+                    gender: colab.gender || colab.sexo || '',
+                    position: colab.position || 'TEAM MEMBER',
+                    joinDate: colab.joinDate || colab.createdAt?.split?.('T')?.[0] || '',
                     cessationDate: todayStr,
                     storeId: colab.storeId || '',
                     registeredAt: new Date().toISOString()
@@ -1012,12 +1154,21 @@ function AdminDashboard() {
                                         })}
                                     </select>
                                     {cesosFilterMonth && (
-                                        <button
-                                            onClick={() => setCesosFilterMonth('')}
-                                            className="text-xs text-orange-600 hover:text-orange-800 underline"
-                                        >
-                                            Limpiar filtro
-                                        </button>
+                                        <>
+                                            <button
+                                                onClick={() => setCesosFilterMonth('')}
+                                                className="text-xs text-orange-600 hover:text-orange-800 underline mr-2"
+                                            >
+                                                Limpiar filtro
+                                            </button>
+                                            <button
+                                                onClick={exportarReporteBajasMensualExcel}
+                                                className="flex items-center gap-2 px-3 py-1.5 bg-green-600 text-white text-xs font-bold rounded-lg shadow hover:bg-green-700 hover:scale-105 transform transition-all"
+                                            >
+                                                <Download className="w-3.5 h-3.5" />
+                                                Descargar Reporte Mensual
+                                            </button>
+                                        </>
                                     )}
                                     <button
                                         onClick={loadCesosRegistros}
@@ -1217,12 +1368,21 @@ function AdminDashboard() {
                                     >
                                         Cancelar
                                     </button>
-                                    <button
-                                        onClick={exportarReporteBajaExcel}
-                                        className="flex items-center gap-2 px-6 py-2 bg-gradient-to-r from-green-600 to-green-700 text-white font-bold rounded-lg shadow hover:shadow-lg transition-all text-sm"
-                                    >
-                                        ⬇ Descargar Excel
-                                    </button>
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={handleSaveReporteBaja}
+                                            className="px-4 py-2 bg-blue-100 hover:bg-blue-200 text-blue-700 font-bold rounded-lg transition-colors text-sm flex items-center gap-2"
+                                        >
+                                            <Save className="w-4 h-4" />
+                                            Guardar Cambios
+                                        </button>
+                                        <button
+                                            onClick={exportarReporteBajaExcel}
+                                            className="flex items-center gap-2 px-6 py-2 bg-gradient-to-r from-green-600 to-green-700 text-white font-bold rounded-lg shadow hover:shadow-lg transition-all text-sm"
+                                        >
+                                            ⬇ Descargar Excel
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
