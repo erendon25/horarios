@@ -144,10 +144,19 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
             });
         });
 
-        // === DETECCIÓN DE SOLAPAMIENTO MEJORADA ===
+        // === DETECCIÓN DE SOLAPAMIENTO ===
         const overlapDetection = {};
-        const positionOverlapDetection = {}; // Nueva: detección por posición
-        const turnoChanges = {}; // NUEVO: Detectar cambios de turno
+        const positionOverlapDetection = {};
+        const turnoChanges = {};
+
+        // Pre-computar todos los minutos de inicio por posición para detectar relevos exactos
+        const startMinsByPos = {}; // norm → Set de minutos de inicio
+        assigned.forEach(p => {
+            const norm = normalize(p.position);
+            if (!norm || !p.start) return;
+            startMinsByPos[norm] = startMinsByPos[norm] || new Set();
+            startMinsByPos[norm].add(timeToMin(p.start) % 1440);
+        });
 
         assigned.forEach(p => {
             const norm = normalize(p.position);
@@ -161,12 +170,14 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                 endMin += 1440;
             }
 
-            // Detección GENERAL de solapamiento (para todos)
+            // Detección GENERAL de solapamiento
             const firstBlock = Math.floor(startMin / 15) * 15;
-            const lastBlock = Math.floor((endMin) - 1 / 15) * 15;  // ← CLAVE: ahora sí detecta relevos perfectos
+            // Último bloque inclusivo: si termina exactamente en múltiplo de 15, ese bloque lo incluimos
+            // excepto si hay un relevo exacto (otro turno empieza justo donde éste termina)
+            const endBlock = (endMin % 15 === 0) ? endMin : Math.floor(endMin / 15) * 15;
 
             let currentBlock = firstBlock;
-            while (currentBlock <= lastBlock) {
+            while (currentBlock <= endBlock) {
                 const displayMin = isOvernight ? currentBlock : (currentBlock % 1440);
                 const hour = ABS_MIN_TO_HOUR[displayMin];
 
@@ -176,10 +187,10 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                 currentBlock += 15;
             }
 
-            // Detección ESPECÍFICA por posición (para múltiples personas)
+            // Detección ESPECÍFICA por posición
             positionOverlapDetection[norm] = positionOverlapDetection[norm] || {};
             currentBlock = firstBlock;
-            while (currentBlock <= lastBlock) {
+            while (currentBlock <= endBlock) {
                 const displayMin = isOvernight ? currentBlock : (currentBlock % 1440);
                 const hour = ABS_MIN_TO_HOUR[displayMin];
 
@@ -188,22 +199,23 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                 }
                 currentBlock += 15;
             }
-            if (endMin % 15 === 0) { // Termina exactamente en cambio de hora
+
+            if (endMin % 15 === 0) {
                 const changeHour = ABS_MIN_TO_HOUR[isOvernight ? endMin : (endMin % 1440)];
                 if (changeHour) {
                     turnoChanges[changeHour] = true;
                 }
             }
         });
-        // === PRIMERA PASADA: detectar qué horarios de INICIO existen por posición (para saber si hay relevo exacto) ===
-        const startingTimes = {}; // norm → { 'caja': Set(480, 540, ...) } minutos absolutos de inicio
+
+        // === PRIMERA PASADA: detectar horarios de INICIO por posición ===
+        const startingTimes = {};
         assigned.forEach(p => {
             const norm = normalize(p.position);
             if (!norm || !p.start) return;
             let startMin = timeToMin(p.start);
-            // Para overnight, guardamos el inicio real (puede ser >1440 o < start si cruza medianoche, pero simplificamos)
             startingTimes[norm] = startingTimes[norm] || new Set();
-            startingTimes[norm].add(startMin % 1440); // guardamos solo la hora del día
+            startingTimes[norm].add(startMin % 1440);
         });
 
         // === ASIGNACIONES DEFINITIVAS CON LÓGICA PRECISA ===
@@ -216,10 +228,10 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
             let startMin = timeToMin(p.start);
             let endMin = timeToMin(p.end);
 
-            // Manejo de cruce de medianoche (simple)
+            // Manejo de cruce de medianoche
             if (endMin <= startMin) endMin += 1440;
 
-            // Iterar sobre cada bloque visual disponible en HOURS y ver si está cubierto
+            // Iterar sobre cada bloque visual disponible en HOURS
             HOURS.forEach(hourStr => {
                 let currentBlockMin;
                 if (hourStr.includes(':')) {
@@ -229,15 +241,29 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                     return;
                 }
 
-                // Un bloque (ej 08:00) representa el intervalo [08:00, 08:15)
-                // Está cubierto si el intervalo del turno [start, end) intercepta o cubre este bloque.
-                // Simplificación: si start <= block < end, está cubierto.
+                // Un bloque "08:00" representa el intervalo [08:00, 08:15)
+                // Un turno 08:00-12:00 CUBRE el bloque 08:00 (empieza en esa hora),
+                // el bloque 11:45 (está dentro) y también INCLUYE el bloque 12:00
+                // (marcando que "está presente en ese punto").
+                //
+                // Para evitar doble conteo en relevos exactos (A: 08-12, B: 12-16):
+                // el bloque 12:00 SOLO se cuenta para el turno que INICIA (B), no para el que termina (A).
+                // Esto se logra usando `<= endMin` para pintar, pero marcando el bloque de fin
+                // solo si NO hay otro turno en esa posición que empieza exactamente ahí.
 
-                // Ajustar currentBlockMin para overnight visual si es necesario (ej 25:00)
-                // Pero HOURS ya viene formateado 06:00 ... 26:00
+                const coversBlock = currentBlockMin >= startMin && currentBlockMin <= endMin;
 
-                if (currentBlockMin >= startMin && currentBlockMin < endMin) {
-                    assignedMap[norm][hourStr] = (assignedMap[norm][hourStr] || 0) + 1;
+                if (coversBlock) {
+                    // Si es exactamente el bloque de fin (currentBlockMin === endMin)
+                    // Y hay un relevo exacto (otro turno en esta posición empieza en ese mismo minuto),
+                    // NO lo contamos para evitar doble conteo.
+                    const isExactEnd = currentBlockMin === endMin;
+                    const hasRelayAtEnd = isExactEnd && (startMinsByPos[norm]?.has(endMin % 1440));
+
+                    // Excluir el bloque de fin solo si hay relevo, de lo contrario incluirlo
+                    if (!hasRelayAtEnd) {
+                        assignedMap[norm][hourStr] = (assignedMap[norm][hourStr] || 0) + 1;
+                    }
                 }
             });
         });
@@ -405,8 +431,8 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                                 >
                                     <td
                                         className={`sticky left-0 z-30 bg-white px-2 py-1 font-semibold text-xs border-r border-gray-300 whitespace-nowrap shadow-sm ${row.isExcess
-                                                ? 'text-red-600 bg-red-50 font-bold border-red-200'
-                                                : 'text-gray-800 hover:bg-blue-50'
+                                            ? 'text-red-600 bg-red-50 font-bold border-red-200'
+                                            : 'text-gray-800 hover:bg-blue-50'
                                             }`}
                                     >
                                         <div className="flex items-center gap-1">
@@ -529,8 +555,8 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                                             >
                                                 <td
                                                     className={`sticky left-0 z-30 bg-white px-2 py-1 font-semibold text-xs border-r border-gray-300 whitespace-nowrap shadow-sm ${row.isExcess
-                                                            ? 'text-red-600 bg-red-50 font-bold border-red-200'
-                                                            : 'text-gray-800 hover:bg-blue-50'
+                                                        ? 'text-red-600 bg-red-50 font-bold border-red-200'
+                                                        : 'text-gray-800 hover:bg-blue-50'
                                                         }`}
                                                 >
                                                     <div className="flex items-center gap-1">
