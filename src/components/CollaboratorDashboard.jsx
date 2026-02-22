@@ -69,9 +69,20 @@ const CollaboratorDashboard = () => {
     const fetchRequirements = async () => {
       if (!perfil?.storeId) return;
       const db = getFirestore();
-      const q = query(collection(db, "stores", perfil.storeId, "positioning_requirements"));
-      const snap = await getDocs(q);
-      setStoreRequirements(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      try {
+        const q = query(collection(db, "stores", perfil.storeId, "positioning_requirements"));
+        const snap = await getDocs(q);
+        const positionSet = new Set();
+        snap.docs.forEach(d => {
+          const data = d.data();
+          if (data.positions && Array.isArray(data.positions)) {
+            data.positions.forEach(pos => positionSet.add(pos));
+          }
+        });
+        setStoreRequirements(Array.from(positionSet).sort());
+      } catch (e) {
+        console.error("Error al obtener requerimientos:", e);
+      }
     };
     fetchRequirements();
   }, [perfil?.storeId]);
@@ -155,22 +166,35 @@ const CollaboratorDashboard = () => {
     if (!selectedStaffId || !currentUser) return;
     const db = getFirestore();
     try {
-      // 1. Vincular el perfil de staff con la cuenta de auth
+      // 1. Leer el perfil seleccionado para obtener el storeId
+      const { setDoc, getDoc: getDocument, updateDoc: updateDocument, serverTimestamp } = await import("firebase/firestore");
+      const staffDocRef = doc(db, "staff_profiles", selectedStaffId);
+      const staffSnap = await getDocument(staffDocRef);
+      const staffData = staffSnap.exists() ? staffSnap.data() : {};
+      const staffStoreId = staffData.storeId || "";
+
+      // 2. Vincular el perfil de staff con la cuenta de auth
       await updateDoc(doc(db, "staff_profiles", selectedStaffId), {
         uid: currentUser.uid,
         email: currentUser.email || ""
       });
 
-      // 2. Asegurar que exista el documento de usuario con rol correcto
-      const { setDoc, getDoc: getDocument, serverTimestamp } = await import("firebase/firestore");
+      // 3. Asegurar que exista el documento de usuario con rol y storeId correctos
       const userDocRef = doc(db, "users", currentUser.uid);
       const userSnap = await getDocument(userDocRef);
       if (!userSnap.exists()) {
         await setDoc(userDocRef, {
           email: currentUser.email || "",
           role: "collaborator",
+          storeId: staffStoreId,
           createdAt: serverTimestamp(),
         });
+      } else {
+        // Actualizar storeId en caso de que no lo tenga
+        const existingData = userSnap.data();
+        if (!existingData.storeId && staffStoreId) {
+          await updateDocument(userDocRef, { storeId: staffStoreId });
+        }
       }
 
       window.location.reload();
@@ -454,21 +478,31 @@ const CollaboratorDashboard = () => {
 
             {/* Progress Bar */}
             <div className="mb-6">
-              <div className="flex justify-between items-end mb-2">
-                <span className="text-sm font-bold text-gray-700">Progreso Total</span>
-                <span className="text-sm font-bold text-orange-600">
-                  {perfil.skills?.length || 0} de {storeRequirements.length || 0} posiciones
-                </span>
-              </div>
-              <div className="w-full bg-gray-100 rounded-full h-4 overflow-hidden border border-gray-200 shadow-inner">
-                <div
-                  className="bg-gradient-to-r from-orange-400 to-orange-600 h-full transition-all duration-1000 ease-out shadow-md"
-                  style={{ width: `${Math.min(100, Math.round(((perfil.skills?.length || 0) / (storeRequirements.length || 1)) * 100))}%` }}
-                />
-              </div>
-              <p className="text-[10px] text-gray-400 mt-2 uppercase font-bold tracking-wider">
-                {Math.round(((perfil.skills?.length || 0) / (storeRequirements.length || 1)) * 100)}% de maestría alcanzada
-              </p>
+              {(() => {
+                const masteredCount = perfil.skills?.filter(s => storeRequirements.includes(s)).length || 0;
+                const totalCount = storeRequirements.length || 1;
+                const percent = Math.round((masteredCount / totalCount) * 100);
+
+                return (
+                  <>
+                    <div className="flex justify-between items-end mb-2">
+                      <span className="text-sm font-bold text-gray-700">Progreso Total</span>
+                      <span className="text-sm font-bold text-orange-600">
+                        {masteredCount} de {totalCount} posiciones
+                      </span>
+                    </div>
+                    <div className="w-full bg-gray-100 rounded-full h-4 overflow-hidden border border-gray-200 shadow-inner">
+                      <div
+                        className="bg-gradient-to-r from-orange-400 to-orange-600 h-full transition-all duration-1000 ease-out shadow-md"
+                        style={{ width: `${Math.min(100, percent)}%` }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-gray-400 mt-2 uppercase font-bold tracking-wider">
+                      {Math.min(100, percent)}% de maestría alcanzada
+                    </p>
+                  </>
+                );
+              })()}
             </div>
 
             {/* Lista visual de Skills actuales */}

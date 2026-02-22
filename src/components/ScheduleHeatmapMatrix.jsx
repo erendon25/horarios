@@ -101,6 +101,7 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
     useEffect(() => {
         const need = {};
         const assignedMap = {};
+        const trainerMap = {}; // norm -> hour -> array of isTrainer flags
         const displayNames = new Map();
 
         const normalize = (pos) => pos?.trim().replace(/#\d+$/g, '').replace(/\s+/g, ' ').toLowerCase() || '';
@@ -263,6 +264,11 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                     // Excluir el bloque de fin solo si hay relevo, de lo contrario incluirlo
                     if (!hasRelayAtEnd) {
                         assignedMap[norm][hourStr] = (assignedMap[norm][hourStr] || 0) + 1;
+
+                        // Rastrear si este slot específico es un trainer
+                        trainerMap[norm] = trainerMap[norm] || {};
+                        trainerMap[norm][hourStr] = trainerMap[norm][hourStr] || [];
+                        trainerMap[norm][hourStr].push(p.isTrainer || false);
                     }
                 }
             });
@@ -288,17 +294,18 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                     const cells = HOURS.map(hour => {
                         const req = required[hour] || 0;
                         const ass = assignedHere[hour] || 0;
+                        const isTrainer = trainerMap[norm]?.[hour]?.[slot] || false;
 
                         // Para este slot específico
                         const slotIsRequired = req > slot;
                         const slotIsAssigned = ass > slot;
 
                         if (slotIsRequired && slotIsAssigned) {
-                            return { color: 'bg-blue-500', text: '' };
+                            return { color: isTrainer ? 'bg-orange-500' : 'bg-blue-500', isTrainer, text: '' };
                         } else if (slotIsRequired && !slotIsAssigned) {
                             return { color: 'bg-yellow-300', text: '' };
                         } else if (!slotIsRequired && slotIsAssigned) {
-                            return { color: 'bg-red-500', text: '' };
+                            return { color: isTrainer ? 'bg-orange-500' : 'bg-red-500', isTrainer, text: '' };
                         } else {
                             return { color: 'bg-white', text: '' };
                         }
@@ -317,10 +324,11 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                     for (let extraSlot = maxRequired; extraSlot < maxAssigned; extraSlot++) {
                         const cells = HOURS.map(hour => {
                             const ass = assignedHere[hour] || 0;
+                            const isTrainer = trainerMap[norm]?.[hour]?.[extraSlot] || false;
                             const hasAssignment = ass > extraSlot;
 
                             return hasAssignment ?
-                                { color: 'bg-red-500', text: '' } :
+                                { color: isTrainer ? 'bg-orange-500' : 'bg-red-500', isTrainer, text: '' } :
                                 { color: 'bg-white', text: '' };
                         });
 
@@ -365,6 +373,10 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                     <span className="flex items-center gap-1 px-2 py-0.5 bg-red-500/20 rounded border border-red-400/30">
                         <div className="w-3 h-3 bg-red-500 rounded"></div>
                         <span className="text-red-200">Exceso</span>
+                    </span>
+                    <span className="flex items-center gap-1 px-2 py-0.5 bg-orange-500/20 rounded border border-orange-400/30">
+                        <div className="w-3 h-3 bg-orange-500 rounded"></div>
+                        <span className="text-orange-200">Entrenador</span>
                     </span>
                 </div>
                 <div className="text-center text-[10px] text-gray-400 mt-1.5 italic">
@@ -450,7 +462,7 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                                             key={j}
                                             className={`border border-gray-200 ${cell.color} hover:opacity-80 transition-opacity duration-150`}
                                             style={{ height: '20px', width: '24px' }}
-                                            title={`${HOURS[j]}: ${cell.color.includes('yellow') ? 'Faltante' : cell.color.includes('blue') ? 'Asignado' : cell.color.includes('red') ? 'Exceso' : 'Sin requerimiento'}`}
+                                            title={`${HOURS[j]}: ${cell.isTrainer ? 'Entrenador' : cell.color.includes('yellow') ? 'Faltante' : cell.color.includes('blue') ? 'Asignado' : cell.color.includes('red') ? 'Exceso' : 'Sin requerimiento'}`}
                                         />
                                     ))}
                                 </tr>
@@ -497,6 +509,10 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                                 <span className="flex items-center gap-1.5 px-2 py-1 bg-red-500/20 rounded border border-red-400/30">
                                     <div className="w-3 h-3 bg-red-500 rounded"></div>
                                     <span className="text-red-200">Exceso</span>
+                                </span>
+                                <span className="flex items-center gap-1.5 px-2 py-1 bg-orange-500/20 rounded border border-orange-400/30">
+                                    <div className="w-3 h-3 bg-orange-500 rounded"></div>
+                                    <span className="text-orange-200">Entrenador</span>
                                 </span>
                             </div>
                             <div className="text-center text-[10px] text-gray-400 mt-1.5 italic">
@@ -574,7 +590,7 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                                                         key={j}
                                                         className={`border border-gray-200 ${cell.color} hover:opacity-80 transition-opacity duration-150`}
                                                         style={{ height: '20px', width: '24px' }}
-                                                        title={`${HOURS[j]}: ${cell.color.includes('yellow') ? 'Faltante' : cell.color.includes('blue') ? 'Asignado' : cell.color.includes('red') ? 'Exceso' : 'Sin requerimiento'}`}
+                                                        title={`${HOURS[j]}: ${cell.isTrainer ? 'Entrenador' : cell.color.includes('yellow') ? 'Faltante' : cell.color.includes('blue') ? 'Asignado' : cell.color.includes('red') ? 'Exceso' : 'Sin requerimiento'}`}
                                                     />
                                                 ))}
                                             </tr>

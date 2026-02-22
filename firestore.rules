@@ -130,12 +130,14 @@ service cloud.firestore {
     }
 
     match /stores/{storeId}/positioning_requirements/{docId} {
-      allow read: if isAuthenticated() && (storeId == getUserStoreId());
+      // Cualquier autenticado puede leer (colaboradores lo necesitan para ver/editar skills)
+      allow read: if isAuthenticated();
       allow write: if isSuperAdmin() || (isAdmin() && storeId == getUserStoreId());
     }
 
     match /stores/{storeId}/config/{docId} {
-      allow read: if isAuthenticated() && (storeId == getUserStoreId() || isAdmin() || isTrainer());
+      // Cualquier autenticado puede leer la config (lock schedule, etc.)
+      allow read: if isAuthenticated();
       allow write: if isSuperAdmin() || (isAdmin() && storeId == getUserStoreId());
     }
 

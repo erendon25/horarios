@@ -129,7 +129,16 @@ function AdminDashboard() {
         try {
             const q = query(collection(db, "stores", userData.storeId, "positioning_requirements"));
             const snap = await getDocs(q);
-            setStoreRequirements(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+
+            const positionSet = new Set();
+            snap.docs.forEach(d => {
+                const data = d.data();
+                if (data.positions && Array.isArray(data.positions)) {
+                    data.positions.forEach(pos => positionSet.add(pos));
+                }
+            });
+
+            setStoreRequirements(Array.from(positionSet).sort());
         } catch (e) {
             console.error("Error al obtener requerimientos:", e);
         }
@@ -1849,7 +1858,8 @@ function AdminDashboard() {
                             <div className="p-6 overflow-y-auto flex-1">
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                                     {staff.filter(s => !s.cessationDate).map(s => {
-                                        const mastered = s.skills?.length || 0;
+                                        // Filtramos para contar solo las habilidades que existen en los requerimientos actuales de la tienda
+                                        const mastered = s.skills?.filter(skill => storeRequirements.includes(skill)).length || 0;
                                         const total = storeRequirements.length || 1;
                                         const percent = Math.round((mastered / total) * 100);
 

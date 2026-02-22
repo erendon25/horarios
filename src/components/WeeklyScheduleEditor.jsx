@@ -979,7 +979,12 @@ export default function WeeklyScheduleEditor() {
                 realEnd = `${String(finalH).padStart(2, '0')}:${String(finalM).padStart(2, '0')}`;
             }
 
-            return { position: d?.position, start: realStart, end: realEnd };
+            return {
+                position: d?.position,
+                start: realStart,
+                end: realEnd,
+                isTrainer: p.position === 'ENTRENADOR'
+            };
         })
         .filter(x => x.position && x.start && x.end);
 
@@ -1352,6 +1357,11 @@ export default function WeeklyScheduleEditor() {
                                                                     {p.isTrainee && (
                                                                         <span title="En entrenamiento" className="ml-1.5 text-sm" role="img" aria-label="trainee">
                                                                             🎓
+                                                                        </span>
+                                                                    )}
+                                                                    {p.position === 'ENTRENADOR' && (
+                                                                        <span title="Entrenador / Trainer" className="ml-1.5 px-1.5 py-0.5 bg-orange-100 text-orange-700 text-[10px] font-bold rounded border border-orange-200 inline-block align-middle" style={{ lineHeight: '1' }}>
+                                                                            TRAINER
                                                                         </span>
                                                                     )}
                                                                 </div>
