@@ -87,6 +87,7 @@ export default function WeeklyScheduleEditor() {
     const [modalityFilter, setModalityFilter] = useState('Todos');
     const [positionFilter, setPositionFilter] = useState('Todas');
     const [turnoMap, setTurnoMap] = useState({});
+    const [prevWeekSchedules, setPrevWeekSchedules] = useState({});
     const [tooltipOpen, setTooltipOpen] = useState(null);
     const [tooltipPosition, setTooltipPosition] = useState({ top: 0, left: 0 });
     const [showTurnoModal, setShowTurnoModal] = useState(false);
@@ -832,7 +833,6 @@ export default function WeeklyScheduleEditor() {
             }
 
             // --- Paso 2: Complementar con consulta optimizada (si tiene índice) ---
-            // Cubre el caso de docs recientes que ya tienen weekKey/storeId
             try {
                 const q = query(
                     collection(db, 'schedules'),
@@ -843,19 +843,38 @@ export default function WeeklyScheduleEditor() {
                 console.log('[Horarios] Consulta optimizada:', snap.size, 'docs adicionales');
                 snap.docs.forEach(docSnap => {
                     const sId = docSnap.id.split('_')[0];
-                    if (!merged[sId]) merged[sId] = docSnap.data(); // Solo si no fue ya cargado por ID
+                    if (!merged[sId]) merged[sId] = docSnap.data();
                 });
             } catch (err) {
-                // Índice no existe — no es un error crítico, ya tenemos los datos del paso 1
                 console.warn('[Horarios] Consulta optimizada omitida (sin índice):', err.message);
             }
 
             console.log('[Horarios] Total final:', Object.keys(merged).length, 'horarios');
             setAllSchedules(prev => ({ ...prev, [wk]: merged }));
+
+            // --- Paso 3: Cargar semana anterior si es necesario ---
+            const [y, m, d] = weekStartDate.split('-').map(Number);
+            const monday = new Date(y, m - 1, d);
+            const prevMonday = new Date(monday);
+            prevMonday.setDate(monday.getDate() - 7);
+            const prevWk = getWeekKey(`${prevMonday.getFullYear()}-${String(prevMonday.getMonth() + 1).padStart(2, '0')}-${String(prevMonday.getDate()).padStart(2, '0')}`);
+
+            if (prevWk) {
+                const prevMerged = {};
+                try {
+                    await Promise.all(allStaffIds.map(async (sId) => {
+                        const dSnap = await getDoc(doc(db, 'schedules', `${sId}_${prevWk}`));
+                        if (dSnap.exists()) prevMerged[sId] = dSnap.data();
+                    }));
+                    setPrevWeekSchedules(prevMerged);
+                } catch (err) {
+                    console.error('[Horarios] Error cargando semana anterior:', err);
+                }
+            }
         };
 
         loadAllSchedules();
-    }, [wk, staff, storeId, db]);
+    }, [wk, staff, storeId, db, weekStartDate]);
 
 
 
@@ -1365,32 +1384,57 @@ export default function WeeklyScheduleEditor() {
                                                                         </span>
                                                                     )}
                                                                 </div>
+
+                                                                {/* Fila de Info Compacta: Turno Anterior */}
+                                                                {(() => {
+                                                                    const dayIdx = weekdays.indexOf(selectedDay);
+                                                                    let yesterdayShift = null;
+                                                                    let yesterdayLabel = '';
+
+                                                                    if (dayIdx === 0) {
+                                                                        yesterdayShift = prevWeekSchedules[p.id]?.sunday;
+                                                                        yesterdayLabel = 'Dom (Sem Ant)';
+                                                                    } else {
+                                                                        const yesterdayDay = weekdays[dayIdx - 1];
+                                                                        yesterdayShift = schedules[p.id]?.[yesterdayDay];
+                                                                        yesterdayLabel = weekdayLabels[yesterdayDay].slice(0, 3);
+                                                                    }
+
+                                                                    if (!yesterdayShift) return null;
+
+                                                                    const shiftText = yesterdayShift.off ? 'Libre' : yesterdayShift.feriado ? 'Feriado' : `${yesterdayShift.start}-${yesterdayShift.end}`;
+
+                                                                    return (
+                                                                        <div className="flex items-center gap-1 mt-1">
+                                                                            <span className="text-[9px] font-bold text-gray-400 uppercase">{yesterdayLabel}:</span>
+                                                                            <span className={`text-[9px] font-semibold px-1 py-0.5 rounded ${yesterdayShift.off ? 'bg-gray-100 text-gray-600' : 'bg-blue-50 text-blue-600'}`}>
+                                                                                {shiftText}
+                                                                            </span>
+                                                                        </div>
+                                                                    );
+                                                                })()}
                                                                 {isCeased && (
                                                                     <span className="text-xs text-red-600 font-bold bg-red-100 px-2 py-0.5 rounded mt-1 inline-block">CESADO</span>
                                                                 )}
                                                             </div>
 
                                                             <div className="flex items-center gap-1.5 flex-shrink-0 relative">
-                                                                {/* Ícono de información (tooltip estudio) */}
                                                                 <div className="relative" ref={el => iconRefs.current[p.id] = el}>
                                                                     <FaInfoCircle
-
                                                                         className="text-blue-600 cursor-pointer hover:text-blue-800 transition flex-shrink-0"
                                                                         size={16}
                                                                         onMouseEnter={(e) => {
                                                                             const rect = e.currentTarget.getBoundingClientRect();
-                                                                            const tooltipHeight = 350; // altura aproximada del tooltip
+                                                                            const tooltipHeight = 350;
                                                                             const tooltipWidth = 300;
                                                                             const viewportHeight = window.innerHeight;
                                                                             const viewportWidth = window.innerWidth;
 
-                                                                            // Calcular posición vertical: si no hay espacio abajo, mostrar arriba
                                                                             let top = rect.bottom + 8;
                                                                             if (rect.bottom + tooltipHeight + 8 > viewportHeight) {
                                                                                 top = rect.top - tooltipHeight - 8;
                                                                             }
 
-                                                                            // Calcular posición horizontal: centrar pero ajustar si está cerca de los bordes
                                                                             let left = rect.left + (rect.width / 2);
                                                                             if (left - (tooltipWidth / 2) < 10) {
                                                                                 left = tooltipWidth / 2 + 10;
@@ -1402,7 +1446,6 @@ export default function WeeklyScheduleEditor() {
                                                                             setTooltipOpen(p.id);
                                                                         }}
                                                                         onMouseLeave={() => {
-                                                                            // Pequeño delay para permitir mover el mouse al tooltip
                                                                             setTimeout(() => {
                                                                                 if (tooltipRef.current && !tooltipRef.current.matches(':hover')) {
                                                                                     setTooltipOpen(null);
@@ -1412,7 +1455,6 @@ export default function WeeklyScheduleEditor() {
                                                                     />
                                                                 </div>
 
-                                                                {/* Ícono si NO tiene día libre */}
                                                                 {!tieneDiaLibre && !isCeased && (
                                                                     <FaExclamationCircle
                                                                         title="No tiene día libre asignado esta semana"
@@ -1423,13 +1465,72 @@ export default function WeeklyScheduleEditor() {
                                                             </div>
                                                         </div>
 
-                                                        {/* Mensaje de conflicto debajo del nombre */}
-                                                        {hasConflict && !isCeased && (
-                                                            <div className="text-xs text-orange-800 bg-orange-50 border border-orange-200 px-2 py-1 rounded mt-2 flex items-center gap-1.5 shadow-sm">
-                                                                <AlertCircle className="w-3.5 h-3.5 text-orange-600 flex-shrink-0" />
-                                                                <span className="font-medium text-xs">{formatConflictMessage(hasConflict)}</span>
-                                                            </div>
-                                                        )}
+                                                        {/* CONTENEDOR DE ALERTAS CONSOLIDADO */}
+                                                        {(() => {
+                                                            if (isCeased) return null;
+
+                                                            const alerts = [];
+
+                                                            // 1. Conflicto de Habilidades / Estudio (Original)
+                                                            if (hasConflict) {
+                                                                alerts.push({
+                                                                    type: 'warning',
+                                                                    text: formatConflictMessage(hasConflict),
+                                                                    icon: <AlertCircle className="w-3 h-3" />
+                                                                });
+                                                            }
+
+                                                            // 2. Conflicto de Descanso (Cierre -> Apertura)
+                                                            const dayIdx = weekdays.indexOf(selectedDay);
+                                                            let yesterdayShift = null;
+                                                            if (dayIdx === 0) {
+                                                                yesterdayShift = prevWeekSchedules[p.id]?.sunday;
+                                                            } else {
+                                                                yesterdayShift = schedules[p.id]?.[weekdays[dayIdx - 1]];
+                                                            }
+
+                                                            if (yesterdayShift && !yesterdayShift.off && !yesterdayShift.feriado && !d.off && !d.feriado && yesterdayShift.end && d.start) {
+                                                                const prevEndMin = timeToMinutes(yesterdayShift.end);
+                                                                const currStartMin = timeToMinutes(d.start);
+                                                                let restMins = 0;
+                                                                if (prevEndMin > timeToMinutes("12:00") && currStartMin < timeToMinutes("15:00")) {
+                                                                    const actualPrevEnd = prevEndMin > 1440 ? prevEndMin - 1440 : prevEndMin;
+                                                                    if (prevEndMin < 1440) {
+                                                                        restMins = (1440 - prevEndMin) + currStartMin;
+                                                                    } else {
+                                                                        restMins = currStartMin - actualPrevEnd;
+                                                                    }
+
+                                                                    if (restMins < 660) {
+                                                                        alerts.push({
+                                                                            type: 'danger',
+                                                                            text: 'Descanso Bajo (Cierre/Apertura)',
+                                                                            icon: <Clock className="w-3 h-3" />,
+                                                                            animate: true
+                                                                        });
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            if (alerts.length === 0) return null;
+
+                                                            return (
+                                                                <div className="mt-2 space-y-1">
+                                                                    {alerts.map((alert, idx) => (
+                                                                        <div
+                                                                            key={idx}
+                                                                            className={`text-[10px] flex items-center gap-1 px-1.5 py-0.5 rounded border border-opacity-30 ${alert.type === 'danger'
+                                                                                    ? 'bg-red-50 text-red-700 border-red-200'
+                                                                                    : 'bg-orange-50 text-orange-800 border-orange-200'
+                                                                                } ${alert.animate ? 'animate-pulse' : ''}`}
+                                                                        >
+                                                                            {alert.icon}
+                                                                            <span className="font-bold">{alert.text}</span>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            );
+                                                        })()}
                                                     </td>
                                                     <td className="px-6 py-4 text-center sticky left-[280px] z-10 bg-white group-hover:bg-blue-50" style={{ minWidth: '140px', maxWidth: '140px' }}>
                                                         {(() => {

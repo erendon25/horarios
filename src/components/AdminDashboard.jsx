@@ -393,7 +393,7 @@ function AdminDashboard() {
             lastName: '',
             modality: 'Full-Time',
             isNew: true,
-            position: 'colaborador',
+            position: 'COLABORADOR',
             storeId: userData?.storeId || '',
             sanitaryCardDate: '', // <-- Nuevo campo
         });
@@ -480,7 +480,7 @@ function AdminDashboard() {
                 lastName: editModal.lastName,
                 modality: editModal.modality,
                 dni: editModal.dni || "",
-                position: editModal.position || "colaborador",
+                position: editModal.position || "COLABORADOR",
                 email: editModal.email || "",
                 storeId: userData?.storeId || "",
                 storeName: storeName || "",

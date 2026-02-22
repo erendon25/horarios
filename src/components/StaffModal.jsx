@@ -40,35 +40,38 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
       } else {
         await addDoc(collection(db, 'staff_profiles'), {
           ...form,
-          storeId: userData.storeId,
+          storeId: userData?.storeId,
           status: 'pending',
           createdAt: new Date().toISOString(),
         });
       }
 
-      // Si el colaborador ya tiene cuenta (uid) y lo estamos poniendo como ENTRENADOR,
-      // actualizamos su rol en la colección de usuarios para que tenga permisos
-      if (form.uid || staff?.uid) {
-        const targetUid = form.uid || staff.uid;
-        const userDocRef = doc(db, 'users', targetUid);
-        const userSnap = await getDoc(userDocRef);
+      // Sync role as a secondary operation
+      try {
+        const targetUid = form.uid || staff?.uid;
+        if (targetUid) {
+          const userDocRef = doc(db, 'users', targetUid);
+          const userSnap = await getDoc(userDocRef);
 
-        if (userSnap.exists()) {
-          const currentRole = userSnap.data().role;
-          // Solo cambiamos si no es admin/superadmin
-          if (currentRole !== 'admin' && currentRole !== 'superadmin') {
-            const newRole = form.position === 'ENTRENADOR' ? 'trainer' : 'colaborador';
-            if (currentRole !== newRole) {
-              await updateDoc(userDocRef, { role: newRole });
+          if (userSnap.exists()) {
+            const currentRole = userSnap.data().role;
+            if (currentRole !== 'admin' && currentRole !== 'superadmin') {
+              const newRole = form.position === 'ENTRENADOR' ? 'trainer' : 'collaborator';
+              if (currentRole !== newRole) {
+                await updateDoc(userDocRef, { role: newRole });
+              }
             }
           }
         }
+      } catch (roleErr) {
+        console.warn('Sincronización de rol omitida o fallida:', roleErr);
+        // No lanzamos error para no confundir al usuario ya que el perfil principal se guardó
       }
 
       onSaved();
     } catch (err) {
-      console.error('Error al guardar:', err);
-      alert('Error al guardar el colaborador.');
+      console.error('Error al guardar perfil:', err);
+      alert('Error crítico al guardar los datos del colaborador.');
     } finally {
       setLoading(false);
     }
