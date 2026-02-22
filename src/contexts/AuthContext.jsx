@@ -36,7 +36,7 @@ export function AuthProvider({ children }) {
 
             if (!staffSnap.empty) {
               const staffData = staffSnap.docs[0].data();
-              if (staffData.terminationDate) {
+              if (staffData.cessationDate) {
                 // Normalizamos fecha actual a YYYY-MM-DD local
                 const now = new Date();
                 const year = now.getFullYear();
@@ -45,7 +45,7 @@ export function AuthProvider({ children }) {
                 const todayStr = `${year}-${month}-${day}`;
 
                 // Asegurar formato YYYY-MM-DD para la fecha guardada
-                const [tY, tM, tD] = staffData.terminationDate.split('-').map(Number);
+                const [tY, tM, tD] = staffData.cessationDate.split('-').map(Number);
                 const termStr = `${tY}-${String(tM).padStart(2, '0')}-${String(tD).padStart(2, '0')}`;
 
                 // Si hoy es estrictamente MAYOR que la fecha de cese, bloquear.
@@ -69,9 +69,12 @@ export function AuthProvider({ children }) {
           setUserRole(data.role || null);
           setUserData(data);
         } else {
-          console.log("No se encontró el documento del usuario.");
-          setUserRole(null);
-          setUserData(null);
+          // Documento no existe en 'users' (puede pasar si el registro tuvo
+          // un error de permisos al crear el documento). Tratarlo como
+          // colaborador para que pueda acceder al dashboard y vincular su cuenta.
+          console.log("No se encontró el documento del usuario. Asignando rol 'collaborator' por defecto.");
+          setUserRole('collaborator');
+          setUserData({ role: 'collaborator', email: user.email });
         }
       } else {
         setUserRole(null);

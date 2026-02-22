@@ -1,6 +1,6 @@
 // ✅ StaffModal.jsx
 import { useState } from 'react';
-import { getFirestore, doc, setDoc, addDoc, collection } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, addDoc, collection, getDoc, updateDoc } from 'firebase/firestore';
 
 function StaffModal({ staff = null, userData, onClose, onSaved }) {
   const [form, setForm] = useState({

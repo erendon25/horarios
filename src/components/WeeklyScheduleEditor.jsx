@@ -805,43 +805,53 @@ export default function WeeklyScheduleEditor() {
     }, [storeId, db]);
 
 
-    // Cargar horarios de forma eficiente (Una sola llamada masiva en lugar de listeners individuales)
+    // Cargar horarios por ID de documento directo (100% confiable, sin índice).
+    // La consulta optimizada se usa solo para complementar los resultados.
     useEffect(() => {
         if (!wk || !storeId || staff.length === 0) return;
 
         const loadAllSchedules = async () => {
+            console.log('[Horarios] Iniciando carga → wk:', wk, '| storeId:', storeId, '| staff:', staff.length);
+
+            const merged = {};
+
+            // --- Paso 1: Fetch por ID directo (funciona siempre, sin índice) ---
             try {
-                // Intentamos traer todos los horarios de esta tienda y semana
-                // Nota: Esto asume que guardamos storeId y weekKey en los registros
+                const allStaffSnap = await getDocs(
+                    query(collection(db, 'staff_profiles'), where('storeId', '==', storeId))
+                );
+                const allStaffIds = allStaffSnap.docs.map(d => d.id);
+                console.log('[Horarios] Staff IDs en tienda:', allStaffIds.length);
+                await Promise.all(allStaffIds.map(async (sId) => {
+                    const dSnap = await getDoc(doc(db, 'schedules', `${sId}_${wk}`));
+                    if (dSnap.exists()) merged[sId] = dSnap.data();
+                }));
+                console.log('[Horarios] Por ID directo:', Object.keys(merged).length, 'horarios cargados');
+            } catch (err) {
+                console.error('[Horarios] Error en carga por ID:', err);
+            }
+
+            // --- Paso 2: Complementar con consulta optimizada (si tiene índice) ---
+            // Cubre el caso de docs recientes que ya tienen weekKey/storeId
+            try {
                 const q = query(
                     collection(db, 'schedules'),
                     where('weekKey', '==', wk),
                     where('storeId', '==', storeId)
                 );
                 const snap = await getDocs(q);
-
-                const wkSchedules = {};
-                snap.docs.forEach(doc => {
-                    // El ID es staffId_weekKey, extraemos el staffId
-                    const sId = doc.id.split('_')[0];
-                    wkSchedules[sId] = doc.data();
+                console.log('[Horarios] Consulta optimizada:', snap.size, 'docs adicionales');
+                snap.docs.forEach(docSnap => {
+                    const sId = docSnap.id.split('_')[0];
+                    if (!merged[sId]) merged[sId] = docSnap.data(); // Solo si no fue ya cargado por ID
                 });
-
-                // Si la consulta masiva no trajo nada (datos antiguos sin campos de filtro), 
-                // hacemos fallback a carga individual para no romper la compatibilidad una única vez
-                if (Object.keys(wkSchedules).length === 0) {
-                    const fallbackData = {};
-                    await Promise.all(staff.map(async (s) => {
-                        const dSnap = await getDoc(doc(db, 'schedules', `${s.id}_${wk}`));
-                        if (dSnap.exists()) fallbackData[s.id] = dSnap.data();
-                    }));
-                    setAllSchedules(prev => ({ ...prev, [wk]: fallbackData }));
-                } else {
-                    setAllSchedules(prev => ({ ...prev, [wk]: wkSchedules }));
-                }
             } catch (err) {
-                console.error("Error cargando horarios optimizados:", err);
+                // Índice no existe — no es un error crítico, ya tenemos los datos del paso 1
+                console.warn('[Horarios] Consulta optimizada omitida (sin índice):', err.message);
             }
+
+            console.log('[Horarios] Total final:', Object.keys(merged).length, 'horarios');
+            setAllSchedules(prev => ({ ...prev, [wk]: merged }));
         };
 
         loadAllSchedules();
@@ -1337,6 +1347,11 @@ export default function WeeklyScheduleEditor() {
                                                                     {isBirthday && (
                                                                         <span title="¡Cumpleaños!" className="ml-2 text-xl animate-bounce inline-block" role="img" aria-label="birthday">
                                                                             🎂
+                                                                        </span>
+                                                                    )}
+                                                                    {p.isTrainee && (
+                                                                        <span title="En entrenamiento" className="ml-1.5 text-sm" role="img" aria-label="trainee">
+                                                                            🎓
                                                                         </span>
                                                                     )}
                                                                 </div>

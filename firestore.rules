@@ -33,23 +33,32 @@ service cloud.firestore {
     // PERFILES DE PERSONAL
     // ========================
     match /staff_profiles/{profileId} {
-      // Admin ve solo su tienda. Colaborador ve su perfil para vincularse o consultar.
+      // Cualquier usuario autenticado puede leer perfiles no vinculados (uid == null)
+      // para poder usar el flujo de "Vincular cuenta". Los perfiles vinculados solo los
+      // puede leer el admin de la tienda, el trainer, o el propio colaborador.
       allow read: if isSuperAdmin() || (
         isAuthenticated() && (
           (isAdmin() && resource.data.storeId == getUserStoreId()) ||
           (isTrainer() && resource.data.storeId == getUserStoreId()) ||
           (resource.data.uid == request.auth.uid) ||
-          (resource.data.uid == null)
+          (!('uid' in resource.data)) ||
+          (resource.data.uid == null) ||
+          (resource.data.uid == "")
         )
       );
       // Solo Admin/SuperAdmin de la misma tienda crean o eliminan.
       allow create: if isSuperAdmin() || (isAdmin() && request.resource.data.storeId == getUserStoreId());
       
-      // Update: Admin cambia todo. Trainer solo cambia skills. Usuario su propio perfil.
+      // Update: Admin cambia todo. Trainer solo cambia skills. Usuario su propio perfil o perfil sin vincular.
       allow update: if isSuperAdmin() || 
                     (isAdmin() && resource.data.storeId == getUserStoreId()) || 
                     (isTrainer() && resource.data.storeId == getUserStoreId() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['skills'])) || 
-                    (isAuthenticated() && (resource.data.uid == request.auth.uid || resource.data.uid == null));
+                    (isAuthenticated() && (
+                      resource.data.uid == request.auth.uid ||
+                      resource.data.uid == null ||
+                      resource.data.uid == "" ||
+                      !('uid' in resource.data)
+                    ));
       
       allow delete: if isSuperAdmin() || (isAdmin() && resource.data.storeId == getUserStoreId());
     }
@@ -141,7 +150,9 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin() || isSuperAdmin() || isTrainer());
       allow update: if isSuperAdmin() || (isAdmin() && resource.data.storeId == getUserStoreId()) || (isAuthenticated() && request.auth.uid == userId);
-      allow create, delete: if isSuperAdmin();
+      // create: el propio usuario puede crear su documento al registrarse (request.auth.uid == userId)
+      allow create: if isSuperAdmin() || (isAuthenticated() && request.auth.uid == userId);
+      allow delete: if isSuperAdmin();
     }
 
     // ========================

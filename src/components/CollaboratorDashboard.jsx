@@ -132,17 +132,20 @@ const CollaboratorDashboard = () => {
     const loadAvailableStaff = async () => {
       if (!selectedStore) return;
       const db = getFirestore();
-      const q = query(collection(db, "staff_profiles"),
-        where("storeId", "==", selectedStore));
+      // Traer todos los perfiles de la tienda (las reglas permiten leer perfiles
+      // sin uid para el flujo de vincular). El filtrado de "sin vincular" se hace
+      // en cliente para cubrir uid==null, uid=="" y campo ausente.
+      const q = query(
+        collection(db, "staff_profiles"),
+        where("storeId", "==", selectedStore)
+      );
       const snap = await getDocs(q);
 
       const libres = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
-        // 👇 sin correo ⇒ candidato a vincular
-        .filter(p => !p.uid);
+        .filter(p => !p.uid) // filtra uid==null, uid=="" y campo ausente
+        .sort((a, b) => a.name.localeCompare(b.name, "es"));
 
-      // ordenar alfabéticamente para mayor comodidad
-      libres.sort((a, b) => a.name.localeCompare(b.name, "es"));
       setAvailableStaff(libres);
     };
     loadAvailableStaff();
@@ -151,11 +154,30 @@ const CollaboratorDashboard = () => {
   const vincularCuenta = async () => {
     if (!selectedStaffId || !currentUser) return;
     const db = getFirestore();
-    await updateDoc(doc(db, "staff_profiles", selectedStaffId), {
-      uid: currentUser.uid,
-      email: currentUser.email || ""
-    });
-    window.location.reload();
+    try {
+      // 1. Vincular el perfil de staff con la cuenta de auth
+      await updateDoc(doc(db, "staff_profiles", selectedStaffId), {
+        uid: currentUser.uid,
+        email: currentUser.email || ""
+      });
+
+      // 2. Asegurar que exista el documento de usuario con rol correcto
+      const { setDoc, getDoc: getDocument, serverTimestamp } = await import("firebase/firestore");
+      const userDocRef = doc(db, "users", currentUser.uid);
+      const userSnap = await getDocument(userDocRef);
+      if (!userSnap.exists()) {
+        await setDoc(userDocRef, {
+          email: currentUser.email || "",
+          role: "collaborator",
+          createdAt: serverTimestamp(),
+        });
+      }
+
+      window.location.reload();
+    } catch (err) {
+      console.error("Error al vincular cuenta:", err);
+      alert("Error al vincular la cuenta. Intenta de nuevo.");
+    }
   };
 
 

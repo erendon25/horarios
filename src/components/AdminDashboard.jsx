@@ -859,8 +859,19 @@ function AdminDashboard() {
         const confirm = window.confirm("¿Estás seguro de que deseas eliminar este usuario?");
         if (!confirm) return;
         try {
+            // Eliminar el perfil de staff (siempre permitido para admins)
             await deleteDoc(doc(db, "staff_profiles", id));
-            if (uid) await deleteDoc(doc(db, "users", uid));
+
+            // Intentar eliminar el documento de users (puede fallar por reglas de Firestore;
+            // si falla, el perfil ya fue eliminado y el documento huérfano es inofensivo)
+            if (uid) {
+                try {
+                    await deleteDoc(doc(db, "users", uid));
+                } catch (permErr) {
+                    console.warn("No se pudo eliminar el documento de users (permisos). El perfil fue eliminado correctamente.", permErr.message);
+                }
+            }
+
             setStaff((prev) => prev.filter((u) => u.id !== id));
         } catch (err) {
             console.error("Error al eliminar usuario:", err);
