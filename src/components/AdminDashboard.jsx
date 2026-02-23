@@ -1,5 +1,5 @@
 // AdminDashboard.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import {
@@ -41,6 +41,7 @@ import { db } from "../firebase";
 import StudyScheduleEditor from './StudyScheduleEditor';
 import ModalSelectorDePosiciones from './ModalSelectorDePosiciones';
 import StaffModal from './StaffModal';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 
 
 
@@ -97,6 +98,38 @@ function AdminDashboard() {
         restrictionsEnabled: false,
         reenableDate: ''
     });
+
+    const skillStats = useMemo(() => {
+        const stats = {};
+        const activeStaff = staff.filter(s => {
+            if (s.cessationDate) {
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const cessation = new Date(s.cessationDate + "T00:00:00");
+                return cessation >= today;
+            }
+            return true;
+        });
+
+        const totalActive = activeStaff.length || 1;
+
+        activeStaff.forEach(s => {
+            const abilities = s.skills || [];
+            abilities.forEach(skill => {
+                if (skill) {
+                    stats[skill] = (stats[skill] || 0) + 1;
+                }
+            });
+        });
+
+        return Object.entries(stats)
+            .map(([name, count]) => ({
+                name,
+                count,
+                percentage: Math.round((count / totalActive) * 100)
+            }))
+            .sort((a, b) => b.percentage - a.percentage);
+    }, [staff]);
 
     const fetchScheduleLock = async () => {
         if (!userData?.storeId) return;
@@ -1855,7 +1888,95 @@ function AdminDashboard() {
                                 </button>
                             </div>
 
-                            <div className="p-6 overflow-y-auto flex-1">
+                            <div className="p-6 overflow-y-auto flex-1 bg-gray-50">
+                                {/* Gráfico Analítico de Habilidades */}
+                                <div className="bg-white rounded-xl shadow-sm p-6 mb-10 border border-gray-200">
+                                    <div className="flex items-center gap-3 mb-6">
+                                        <div className="p-2 bg-indigo-100 rounded-lg">
+                                            <BarChart3 className="w-6 h-6 text-indigo-600" />
+                                        </div>
+                                        <div>
+                                            <h4 className="text-lg font-bold text-gray-800 uppercase tracking-tight">Análisis de Capacitación Global</h4>
+                                            <p className="text-xs text-gray-500 uppercase font-semibold">Tasa de dominio por posición (%)</p>
+                                        </div>
+                                    </div>
+
+                                    {skillStats.length > 0 ? (
+                                        <div className="h-[280px] w-full">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <BarChart
+                                                    data={skillStats}
+                                                    layout="vertical"
+                                                    margin={{ top: 0, right: 80, left: 170, bottom: 0 }}
+                                                >
+                                                    <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="#f1f5f9" />
+                                                    <XAxis type="number" domain={[0, 100]} hide />
+                                                    <YAxis
+                                                        dataKey="name"
+                                                        type="category"
+                                                        axisLine={false}
+                                                        tickLine={false}
+                                                        width={160}
+                                                        interval={0}
+                                                        style={{
+                                                            fontSize: '10px',
+                                                            fontWeight: '700',
+                                                            fill: '#334155',
+                                                            textTransform: 'uppercase',
+                                                            letterSpacing: '0.025em'
+                                                        }}
+                                                    />
+                                                    <Tooltip
+                                                        cursor={{ fill: '#f1f5f9', radius: 4 }}
+                                                        content={({ active, payload }) => {
+                                                            if (active && payload && payload.length) {
+                                                                const data = payload[0].payload;
+                                                                return (
+                                                                    <div className="bg-white border-none shadow-xl rounded-xl p-3 text-xs flex flex-col gap-1 border border-gray-100">
+                                                                        <p className="font-bold text-gray-800 uppercase mb-1 border-b pb-1">{data.name}</p>
+                                                                        <div className="flex justify-between items-center gap-4">
+                                                                            <span className="text-gray-500 font-medium">Cobertura:</span>
+                                                                            <span className="text-indigo-600 font-bold">{data.percentage}%</span>
+                                                                        </div>
+                                                                        <div className="flex justify-between items-center gap-4">
+                                                                            <span className="text-gray-500 font-medium">Personal capaz:</span>
+                                                                            <span className="text-gray-800 font-bold">{data.count} pers.</span>
+                                                                        </div>
+                                                                    </div>
+                                                                );
+                                                            }
+                                                            return null;
+                                                        }}
+                                                    />
+                                                    <Bar
+                                                        dataKey="percentage"
+                                                        radius={[0, 6, 6, 0]}
+                                                        barSize={24}
+                                                        label={{
+                                                            position: 'right',
+                                                            formatter: (val) => `${val}%`,
+                                                            style: { fontSize: '11px', fontWeight: '800', fill: '#1e293b', marginLeft: '10px' }
+                                                        }}
+                                                    >
+                                                        {skillStats.map((entry, index) => (
+                                                            <Cell
+                                                                key={`cell-${index}`}
+                                                                fill={['#4f46e5', '#7c3aed', '#c026d3', '#db2777', '#dc2626', '#059669', '#0891b2'][index % 7]}
+                                                                fillOpacity={0.9}
+                                                                className="hover:fill-opacity-100 transition-all duration-300"
+                                                            />
+                                                        ))}
+                                                    </Bar>
+                                                </BarChart>
+                                            </ResponsiveContainer>
+                                        </div>
+                                    ) : (
+                                        <div className="h-[150px] flex items-center justify-center text-gray-400 bg-gray-50 rounded-xl border border-dashed border-gray-200">
+                                            <p className="text-sm font-medium">No hay datos suficientes para el análisis</p>
+                                        </div>
+                                    )}
+                                </div>
+
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                                     {staff.filter(s => !s.cessationDate).map(s => {
                                         // Filtramos para contar solo las habilidades que existen en los requerimientos actuales de la tienda
