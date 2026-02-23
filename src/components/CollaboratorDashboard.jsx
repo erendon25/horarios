@@ -137,7 +137,36 @@ const CollaboratorDashboard = () => {
       const q = query(collection(db, "staff_profiles"), where("uid", "==", currentUser.uid));
       const snapshot = await getDocs(q);
       if (!snapshot.empty) {
-        const perfilData = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
+        let perfilData = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
+
+        // --- PROCESAR CAMBIO DE MODALIDAD PROGRAMADO ---
+        const todayStr = new Date().toISOString().split('T')[0];
+        if (perfilData.modalityChangeDate && perfilData.modalityChangeDate <= todayStr && perfilData.nextModality) {
+          const newModality = perfilData.nextModality;
+          const changeDate = perfilData.modalityChangeDate;
+
+          // Actualizar localmente
+          perfilData = {
+            ...perfilData,
+            modality: newModality,
+            joinDate: changeDate,
+            modalityChangeDate: '',
+            nextModality: '',
+            feriados: 0,
+            pendingHolidays: []
+          };
+
+          // Actualizar en Firebase
+          updateDoc(doc(db, "staff_profiles", perfilData.id), {
+            modality: newModality,
+            joinDate: changeDate,
+            modalityChangeDate: '',
+            nextModality: '',
+            feriados: 0,
+            pendingHolidays: []
+          }).catch(e => console.error("Error al ejecutar cambio de modalidad:", e));
+        }
+
         setPerfil(perfilData);
 
         if (perfilData.storeId) {
@@ -439,10 +468,10 @@ const CollaboratorDashboard = () => {
             </div>
             {/* Carnet Sanitario */}
             <div className={`flex items-center gap-3 p-3 rounded-lg group transition-all duration-200 hover:shadow-sm ${getSanitaryCardStatus() === 'expired' ? 'bg-red-50' :
-                getSanitaryCardStatus() === 'warning' ? 'bg-orange-50' : 'bg-gray-50'
+              getSanitaryCardStatus() === 'warning' ? 'bg-orange-50' : 'bg-gray-50'
               }`}>
               <div className={`w-10 h-10 rounded-full flex items-center justify-center ${getSanitaryCardStatus() === 'expired' ? 'bg-red-100' :
-                  getSanitaryCardStatus() === 'warning' ? 'bg-orange-100' : 'bg-blue-100'
+                getSanitaryCardStatus() === 'warning' ? 'bg-orange-100' : 'bg-blue-100'
                 }`}>
                 {getSanitaryCardStatus() === 'expired' ? <ShieldAlert className="w-5 h-5 text-red-600" /> :
                   getSanitaryCardStatus() === 'warning' ? <AlertTriangle className="w-5 h-5 text-orange-600" /> :
@@ -452,7 +481,7 @@ const CollaboratorDashboard = () => {
                 <p className="text-xs text-gray-500 font-medium">Carnet Sanitario</p>
                 <div className="flex items-center justify-between">
                   <p className={`text-sm font-semibold ${getSanitaryCardStatus() === 'expired' ? 'text-red-700' :
-                      getSanitaryCardStatus() === 'warning' ? 'text-orange-700' : 'text-gray-800'
+                    getSanitaryCardStatus() === 'warning' ? 'text-orange-700' : 'text-gray-800'
                     }`}>
                     {perfil.sanitaryCardDate ? (() => {
                       const [y, m, d] = perfil.sanitaryCardDate.split('-');

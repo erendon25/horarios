@@ -352,12 +352,48 @@ function AdminDashboard() {
                 holidayBalances[hData.staffId] += (hData.type === 'compensado' ? -1 : 1);
             });
 
-            // 4. Enriquecer perfiles
-            const enriched = profiles.map(profile => ({
-                ...profile,
-                study_schedule: studyMap[profile.uid] || {},
-                feriados: (holidayBalances[profile.id] || 0) + (profile.pendingHolidays?.length || 0),
-            }));
+            // 4. Enriquecer perfiles y procesar cambios de modalidad programados que ya se cumplieron
+            const todayStr = new Date().toISOString().split('T')[0];
+            const updatesExec = [];
+
+            const enriched = profiles.map(profile => {
+                let currentProfile = { ...profile };
+
+                // Si hoy es igual o mayor a la fecha de cambio programada
+                if (profile.modalityChangeDate && profile.modalityChangeDate <= todayStr && profile.nextModality) {
+                    const newModality = profile.nextModality;
+                    const changeDate = profile.modalityChangeDate;
+
+                    // Ejecutar el cambio de forma permanente en el objeto local
+                    currentProfile.modality = newModality;
+                    currentProfile.joinDate = changeDate; // El inicio de labores es la fecha del cambio
+                    currentProfile.modalityChangeDate = '';
+                    currentProfile.nextModality = '';
+                    currentProfile.feriados = 0;
+                    currentProfile.pendingHolidays = [];
+
+                    // Programar actualización en Firebase
+                    updatesExec.push(updateDoc(doc(db, 'staff_profiles', profile.id), {
+                        modality: newModality,
+                        joinDate: changeDate,
+                        modalityChangeDate: '',
+                        nextModality: '',
+                        feriados: 0,
+                        pendingHolidays: []
+                    }));
+                }
+
+                return {
+                    ...currentProfile,
+                    study_schedule: studyMap[profile.uid] || {},
+                    feriados: (currentProfile.feriados || 0) + (currentProfile.pendingHolidays?.length || 0),
+                };
+            });
+
+            if (updatesExec.length > 0) {
+                await Promise.all(updatesExec);
+                console.log(`Se ejecutaron ${updatesExec.length} cambios de modalidad programados.`);
+            }
 
             setStaff(enriched);
 
@@ -531,8 +567,31 @@ function AdminDashboard() {
                     if (window.confirm(`Has cambiado la modalidad de ${original.modality} a ${editModal.modality}. El balance de feriados se reseteará a 0 ya que se considera liquidado/pagado. ¿Continuar?`)) {
                         payload.feriados = 0;
                         payload.pendingHolidays = [];
-                        // Nota: Los documentos en feriados_trabajados permanecen como historial, 
-                        // pero el balance del perfil empieza de nuevo.
+
+                        // Nuevo inicio de labores para la nueva modalidad
+                        const todayStr = new Date().toISOString().split('T')[0];
+                        payload.joinDate = todayStr;
+
+                        // Registrar como cese por cambio de modalidad (inmediato)
+                        const docId = `${editModal.id}_mod_immediate_${todayStr}`;
+                        setDoc(doc(db, 'ceses', docId), {
+                            staffId: editModal.id,
+                            name: editModal.name,
+                            lastName: editModal.lastName,
+                            modality: original.modality, // La modalidad anterior
+                            dni: editModal.dni || '',
+                            gender: editModal.gender || editModal.sexo || '',
+                            position: editModal.position || 'TEAM MEMBER',
+                            joinDate: original.joinDate || original.createdAt?.split?.('T')?.[0] || '',
+                            cessationDate: todayStr,
+                            storeId: userData.storeId,
+                            registeredAt: new Date().toISOString(),
+                            isModalityChange: true,
+                            nextModality: editModal.modality,
+                            motivoCese: 'CAMBIO DE MODALIDAD',
+                            motivoReal: 'MEJORA CONTRACTUAL',
+                            migratedFromProfile: true
+                        }).catch(e => console.error("Error registrando cese inmediato:", e));
                     } else {
                         return; // Cancelar guardado si no acepta el reset
                     }
@@ -564,27 +623,60 @@ function AdminDashboard() {
             const migraciones = [];
             staffSnap.docs.forEach(d => {
                 const s = d.data();
-                if (!s.cessationDate) return;
-                const docId = `${d.id}_${s.cessationDate}`;
-                if (existingIds.has(docId)) return;
-                const registro = {
-                    staffId: d.id,
-                    name: s.name || '',
-                    lastName: s.lastName || '',
-                    modality: s.modality || '',
-                    dni: s.dni || '',
-                    gender: s.gender || s.sexo || '',
-                    position: s.position || 'TEAM MEMBER',
-                    joinDate: s.joinDate || s.createdAt?.split?.('T')?.[0] || '',
-                    cessationDate: s.cessationDate,
-                    storeId: userData.storeId, // Forzamos el storeId actual
-                    registeredAt: new Date().toISOString(),
-                    migratedFromProfile: true
-                };
-                migraciones.push(
-                    setDoc(doc(db, 'ceses', docId), registro)
-                        .then(() => lista.push({ id: docId, ...registro }))
-                );
+
+                // --- CASO 1: CESE NORMAL ---
+                if (s.cessationDate) {
+                    const docId = `${d.id}_${s.cessationDate}`;
+                    if (!existingIds.has(docId)) {
+                        const registro = {
+                            staffId: d.id,
+                            name: s.name || '',
+                            lastName: s.lastName || '',
+                            modality: s.modality || '',
+                            dni: s.dni || '',
+                            gender: s.gender || s.sexo || '',
+                            position: s.position || 'TEAM MEMBER',
+                            joinDate: s.joinDate || s.createdAt?.split?.('T')?.[0] || '',
+                            cessationDate: s.cessationDate,
+                            storeId: userData.storeId,
+                            registeredAt: new Date().toISOString(),
+                            migratedFromProfile: true
+                        };
+                        migraciones.push(
+                            setDoc(doc(db, 'ceses', docId), registro)
+                                .then(() => lista.push({ id: docId, ...registro }))
+                        );
+                    }
+                }
+
+                // --- CASO 2: CAMBIO DE MODALIDAD ---
+                if (s.modalityChangeDate && s.nextModality) {
+                    const docId = `${d.id}_mod_${s.modalityChangeDate}`;
+                    if (!existingIds.has(docId)) {
+                        const registro = {
+                            staffId: d.id,
+                            name: s.name || '',
+                            lastName: s.lastName || '',
+                            modality: s.modality || '', // La modalidad QUE DEJA
+                            dni: s.dni || '',
+                            gender: s.gender || s.sexo || '',
+                            position: s.position || 'TEAM MEMBER',
+                            joinDate: s.joinDate || s.createdAt?.split?.('T')?.[0] || '',
+                            cessationDate: s.modalityChangeDate, // Se reporta en esta fecha
+                            storeId: userData.storeId,
+                            registeredAt: new Date().toISOString(),
+                            isModalityChange: true,
+                            nextModality: s.nextModality,
+                            motivoCese: 'CAMBIO DE MODALIDAD',
+                            motivoReal: 'MEJORA CONTRACTUAL',
+                            migratedFromProfile: true
+                        };
+                        migraciones.push(
+                            setDoc(doc(db, 'ceses', docId), registro)
+                                .then(() => lista.push({ id: docId, ...registro }))
+                        );
+                    }
+                }
             });
 
             if (migraciones.length > 0) {
@@ -980,7 +1072,7 @@ function AdminDashboard() {
                                 className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
                                 <Users className="w-4 h-4" />
-                                Consultar Ceses
+                                Consultar Ceses / Cambios
                             </button>
                             <button
                                 onClick={handleLogout}
@@ -1556,7 +1648,7 @@ function AdminDashboard() {
                                 {/* Header */}
                                 <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-orange-500 to-orange-600 flex-shrink-0">
                                     <div>
-                                        <h2 className="text-xl font-bold text-white">Historial de Ceses</h2>
+                                        <h2 className="text-xl font-bold text-white">Historial de Ceses / Cambios</h2>
                                         <p className="text-orange-100 text-sm mt-0.5">
                                             {filtered.length} registro{filtered.length !== 1 ? 's' : ''} encontrado{filtered.length !== 1 ? 's' : ''}
                                             {cesosFilterMonth && ` en ${new Date(cesosFilterMonth + '-02').toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}`}
@@ -1623,7 +1715,7 @@ function AdminDashboard() {
                                         <div className="text-center py-12 text-gray-400">
                                             <Users className="w-12 h-12 mx-auto mb-3 opacity-30" />
                                             <p className="font-medium">
-                                                {cesosFilterMonth ? 'No hay ceses en el mes seleccionado' : 'No hay ceses registrados'}
+                                                {cesosFilterMonth ? 'No hay registros en el mes seleccionado' : 'No hay registros de cese o cambio'}
                                             </p>
                                         </div>
                                     ) : (
@@ -1633,7 +1725,7 @@ function AdminDashboard() {
                                                     <th className="px-4 py-3 text-left rounded-l-lg">Colaborador</th>
                                                     <th className="px-4 py-3 text-left">DNI</th>
                                                     <th className="px-4 py-3 text-left">Modalidad</th>
-                                                    <th className="px-4 py-3 text-left">Fecha de Cese</th>
+                                                    <th className="px-4 py-3 text-left">F. Cese / Cambio</th>
                                                     <th className="px-4 py-3 text-center rounded-r-lg">Estado</th>
                                                 </tr>
                                             </thead>
@@ -1651,7 +1743,13 @@ function AdminDashboard() {
                                                                 >
                                                                     {s.name} {s.lastName}
                                                                 </button>
-                                                                <span className="block text-xs text-gray-400 mt-0.5">Generar reporte</span>
+                                                                {s.isModalityChange ? (
+                                                                    <span className="block text-[10px] font-bold text-blue-600 uppercase mt-0.5 italic">
+                                                                        ⚡ Cambio de Modalidad
+                                                                    </span>
+                                                                ) : (
+                                                                    <span className="block text-xs text-gray-400 mt-0.5">Generar reporte</span>
+                                                                )}
                                                             </td>
                                                             <td className="px-4 py-3 text-gray-500 font-mono text-xs">
                                                                 {s.dni || '—'}
@@ -1667,7 +1765,7 @@ function AdminDashboard() {
                                                                     </span>
                                                                 ) : (
                                                                     <span className="inline-block bg-orange-100 text-orange-700 text-xs font-bold px-3 py-1 rounded-full border border-orange-300">
-                                                                        Cese próximo
+                                                                        {s.isModalityChange ? "Cambio próximo" : "Cese próximo"}
                                                                     </span>
                                                                 )}
                                                             </td>
@@ -1827,7 +1925,9 @@ function AdminDashboard() {
                                 {/* Header */}
                                 <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-yellow-500 to-orange-500 flex-shrink-0">
                                     <div>
-                                        <h2 className="text-xl font-bold text-white">Reporte de Baja</h2>
+                                        <h2 className="text-xl font-bold text-white">
+                                            {s.isModalityChange ? "Reporte de Cambio de Modalidad" : "Reporte de Baja"}
+                                        </h2>
                                         <p className="text-yellow-100 text-sm mt-0.5">{s.name} {s.lastName} · {fmtFecha(s.cessationDate)}</p>
                                     </div>
                                     <button onClick={() => setReporteBajaColaborador(null)} className="text-white hover:text-yellow-200 text-2xl font-bold">&times;</button>
@@ -1844,7 +1944,7 @@ function AdminDashboard() {
                                         <div><span className="text-gray-500 block text-xs">Nombre</span><span className="font-semibold">{s.name} {s.lastName}</span></div>
                                         <div><span className="text-gray-500 block text-xs">Sexo</span><span className="font-semibold">{s.gender || s.sexo || '—'}</span></div>
                                         <div><span className="text-gray-500 block text-xs">Fecha Ingreso</span><span className="font-semibold">{fmtFecha(s.joinDate || s.createdAt?.split?.('T')?.[0])}</span></div>
-                                        <div><span className="text-gray-500 block text-xs">Fecha Cese</span><span className="font-semibold text-red-600">{fmtFecha(s.cessationDate)}</span></div>
+                                        <div><span className="text-gray-500 block text-xs">{s.isModalityChange ? 'Fecha Cambio' : 'Fecha Cese'}</span><span className={`font-semibold ${s.isModalityChange ? 'text-blue-600' : 'text-red-600'}`}>{fmtFecha(s.cessationDate)}</span></div>
                                     </div>
                                 </div>
 
@@ -1884,15 +1984,15 @@ function AdminDashboard() {
                                             </select>
                                         </div>
                                         <div>
-                                            <label className="block text-xs text-gray-500 mb-1">Motivo de Cese</label>
+                                            <label className="block text-xs text-gray-500 mb-1">{s.isModalityChange ? 'Motivo del Cambio' : 'Motivo de Cese'}</label>
                                             <select value={reporteBajaForm.motivoCese} onChange={e => setReporteBajaForm(prev => ({ ...prev, motivoCese: e.target.value }))} className={selectCls}>
-                                                {['RENUNCIA VOLUNTARIA', 'ABANDONO DE TRABAJO', 'DESPIDO', 'TÉRMINO DE CONTRATO'].map(o => <option key={o}>{o}</option>)}
+                                                {['RENUNCIA VOLUNTARIA', 'ABANDONO DE TRABAJO', 'DESPIDO', 'TÉRMINO DE CONTRATO', 'CAMBIO DE MODALIDAD'].map(o => <option key={o}>{o}</option>)}
                                             </select>
                                         </div>
                                         <div>
                                             <label className="block text-xs text-gray-500 mb-1">Motivo Real</label>
                                             <select value={reporteBajaForm.motivoReal} onChange={e => setReporteBajaForm(prev => ({ ...prev, motivoReal: e.target.value }))} className={selectCls}>
-                                                {['MEJORA ECONÓMICA', 'HORARIO DE ESTUDIO', 'SALUD', 'BAJO DESEMPEÑO', 'DESACUERDO CON BENEFICIOS', 'DISTANCIA DE LA TIENDA', 'FALTA GRAVE', 'HORARIO DE CIERRE EXTENDIDO', 'INASISTENCIAS', 'MAL CLIMA LABORAL'].map(o => <option key={o}>{o}</option>)}
+                                                {['MEJORA ECONÓMICA', 'HORARIO DE ESTUDIO', 'SALUD', 'BAJO DESEMPEÑO', 'DESACUERDO CON BENEFICIOS', 'DISTANCIA DE LA TIENDA', 'FALTA GRAVE', 'HORARIO DE CIERRE EXTENDIDO', 'INASISTENCIAS', 'MAL CLIMA LABORAL', 'MEJORA CONTRACTUAL'].map(o => <option key={o}>{o}</option>)}
                                             </select>
                                         </div>
                                     </div>
