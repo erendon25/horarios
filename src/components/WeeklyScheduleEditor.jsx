@@ -1520,8 +1520,8 @@ export default function WeeklyScheduleEditor() {
                                                                         <div
                                                                             key={idx}
                                                                             className={`text-[10px] flex items-center gap-1 px-1.5 py-0.5 rounded border border-opacity-30 ${alert.type === 'danger'
-                                                                                    ? 'bg-red-50 text-red-700 border-red-200'
-                                                                                    : 'bg-orange-50 text-orange-800 border-orange-200'
+                                                                                ? 'bg-red-50 text-red-700 border-red-200'
+                                                                                : 'bg-orange-50 text-orange-800 border-orange-200'
                                                                                 } ${alert.animate ? 'animate-pulse' : ''}`}
                                                                         >
                                                                             {alert.icon}
@@ -1585,7 +1585,7 @@ export default function WeeklyScheduleEditor() {
                                                                 min="0"
                                                                 max="12"
                                                                 step="0.5"
-                                                                value={d.extraHoursPre || ''}
+                                                                value={d.extraHoursPre ?? ''}
                                                                 onChange={e => handleChange(p.id, 'extraHoursPre', e.target.value)}
                                                                 disabled={d.feriado || d.off}
                                                                 placeholder="0"
@@ -1600,7 +1600,7 @@ export default function WeeklyScheduleEditor() {
                                                                 min="0"
                                                                 max="12"
                                                                 step="0.5"
-                                                                value={d.extraHoursPost || d.extraHours || ''}
+                                                                value={d.extraHoursPost ?? d.extraHours ?? ''}
                                                                 onChange={e => handleChange(p.id, 'extraHoursPost', e.target.value)}
                                                                 disabled={d.feriado || d.off}
                                                                 placeholder="0"
@@ -1609,7 +1609,7 @@ export default function WeeklyScheduleEditor() {
                                                         )}
                                                     </td>
                                                     <td className="px-4 py-4 text-center font-medium text-gray-700 text-sm">
-                                                        {isCeased ? '--' : calculateDailyHours(d.start, d.end, d.extraHoursPre, (d.extraHoursPost || d.extraHours))}
+                                                        {isCeased ? '--' : calculateDailyHours(d.start, d.end, d.extraHoursPre, (d.extraHoursPost ?? d.extraHours))}
                                                     </td>
                                                     <td className={`px-4 py-4 text-center font-semibold text-sm ${!horasEnRango && !isCeased ? 'text-red-600' : 'text-green-700'
                                                         }`}>

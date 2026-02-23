@@ -54,22 +54,33 @@ export const exportSchedulePDF = (staff, schedules, weekKey) => {
             if (e?.off) displayTxt = 'DESCANSO';
             else if (e?.feriado) displayTxt = 'FERIADO';
             else if (e?.start && e?.end) {
-                let finalEnd = e.end;
-                let extraToAdd = 0;
+                let currentStart = e.start;
+                let currentEnd = e.end;
 
-                if (e.extraHours && !isNaN(e.extraHours) && Number(e.extraHours) > 0) {
-                    extraToAdd = Number(e.extraHours);
-                    const [eh, em] = e.end.split(':').map(Number);
-                    const totalMins = eh * 60 + em + (extraToAdd * 60);
-                    const newH = Math.floor(totalMins / 60) % 24;
-                    const newM = totalMins % 60;
-                    finalEnd = `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
+                let extraPre = Number(e.extraHoursPre ?? 0);
+                let extraPost = Number(e.extraHoursPost ?? e.extraHours ?? 0);
+
+                if (extraPre > 0) {
+                    const [sh, sm] = e.start.split(':').map(Number);
+                    const totalMins = sh * 60 + sm - (extraPre * 60);
+                    const finalMins = Math.max(0, totalMins);
+                    const newH = Math.floor(finalMins / 60);
+                    const newM = finalMins % 60;
+                    currentStart = `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
                 }
 
-                displayTxt = `${e.start}-${finalEnd}`;
+                if (extraPost > 0) {
+                    const [eh, em] = e.end.split(':').map(Number);
+                    const totalMins = eh * 60 + em + (extraPost * 60);
+                    const newH = Math.floor(totalMins / 60) % 24;
+                    const newM = totalMins % 60;
+                    currentEnd = `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
+                }
+
+                displayTxt = `${currentStart}-${currentEnd}`;
 
                 // Sumar al total
-                tot += hrs(e.start, e.end) + extraToAdd;
+                tot += hrs(e.start, e.end) + extraPre + extraPost;
             }
 
             row.push(displayTxt);
@@ -142,47 +153,46 @@ export const exportGroupedPositionsPDF = async (
         const info = schedules[id]?.[selectedDay];
         if (!info?.position || !info.start || !info.end) return;
 
+        // --- LOGICA DE SUMA DE HORAS EXTRAS (VISUAL) ---
         let [sh, sm] = info.start.split(':').map(Number);
-        const startMin = sh * 60 + sm;
         let [eh, em] = info.end.split(':').map(Number);
 
-        // --- LOGICA DE SUMA DE HORAS EXTRAS (VISUAL) ---
+        let extraPre = Number(info.extraHoursPre ?? 0);
+        let extraPost = Number(info.extraHoursPost ?? info.extraHours ?? 0);
+
+        let finalStartH = sh;
+        let finalStartM = sm;
+
+        if (extraPre > 0) {
+            const totalMins = sh * 60 + sm - (extraPre * 60);
+            const finalMins = Math.max(0, totalMins);
+            finalStartH = Math.floor(finalMins / 60);
+            finalStartM = finalMins % 60;
+        }
+
         let finalEndH = eh;
         let finalEndM = em;
 
-        let extraVal = 0;
-        if (info.extraHours) {
-            // Asegurar que convertimos a número correctamente
-            extraVal = parseFloat(String(info.extraHours));
+        if (extraPost > 0) {
+            const totalMins = eh * 60 + em + (extraPost * 60);
+            finalEndH = Math.floor(totalMins / 60) % 24;
+            finalEndM = totalMins % 60;
         }
 
-        if (!isNaN(extraVal) && extraVal > 0) {
-            const extraMins = extraVal * 60;
-            const originalEndMins = eh * 60 + em;
-            const newEndMins = originalEndMins + extraMins;
+        const finalStartStr = `${String(finalStartH).padStart(2, '0')}:${String(finalStartM).padStart(2, '0')}`;
+        const finalEndStr = `${String(finalEndH).padStart(2, '0')}:${String(finalEndM).padStart(2, '0')}`;
 
-            finalEndH = Math.floor(newEndMins / 60) % 24;
-            finalEndM = newMins % 60;
-        }
-        // -----------------------------------------------
-
+        const startMin = sh * 60 + sm;
         let endMin = finalEndH * 60 + finalEndM;
         if (endMin <= startMin) endMin += 1440;
 
-        // Formatear nueva salida
-        const finalEndStr = `${String(finalEndH).padStart(2, '0')}:${String(finalEndM).padStart(2, '0')}`;
-
         const displayName = name ? name.toUpperCase() : 'SIN NOMBRE';
-
-        // DEBUG: Agregar marca si hay horas extras
         let label = displayName;
-        if (extraVal > 0) {
-            label += ` (+${extraVal}h)`;
-            // console.log(`DEBUG ACTIVE: ${label}`); 
+        if (extraPre + extraPost > 0) {
+            label += ` (+${extraPre + extraPost}h)`;
         }
 
-        // Usar finalEndStr para el horario mostrado
-        const entry = { n: label, mod: modality, h: `${info.start} - ${finalEndStr}` };
+        const entry = { n: label, mod: modality, h: `${finalStartStr} - ${finalEndStr}` };
 
         // Lógica de turno (usando la hora base para categorizar, o la extendida? 
         // Usualmente mañna/tarde se define por el INICIO o bloqe principal.
@@ -304,7 +314,7 @@ export const exportGroupedPositionsPDF = async (
 
             autoTable(pdf, {
                 startY: currentY,
-                margin: { left: xPos },
+                margin: { top: 95, left: xPos },
                 tableWidth: colWidth,
                 theme: 'grid',
                 head: [[pos.toUpperCase()]],
@@ -329,8 +339,7 @@ export const exportGroupedPositionsPDF = async (
                     fillColor: accentColor
                 },
                 didDrawPage: (data) => {
-                    // Solo dibujar header/footer en la primera llamada de página automática si no es la inicial nuestra
-                    // Pero como manejamos addPage manual, mejor desactivar el header hook estándar y usar el nuestro
+                    addHeader(t);
                 }
             });
 
@@ -386,8 +395,8 @@ export const exportExtraHoursReport = async (staff, schedules, weekKey) => {
             const info = schedule[day];
             if (!info) return;
 
-            const extraPre = info.extraHoursPre ? Number(info.extraHoursPre) : 0;
-            const extraPost = info.extraHoursPost ? Number(info.extraHoursPost) : (info.extraHours ? Number(info.extraHours) : 0);
+            const extraPre = (info.extraHoursPre !== undefined && info.extraHoursPre !== null) ? Number(info.extraHoursPre) : 0;
+            const extraPost = (info.extraHoursPost !== undefined && info.extraHoursPost !== null) ? Number(info.extraHoursPost) : (info.extraHours ? Number(info.extraHours) : 0);
             const totalExtra = extraPre + extraPost;
 
             if (totalExtra > 0 && info.start && info.end) {
@@ -457,6 +466,7 @@ export const exportExtraHoursReport = async (staff, schedules, weekKey) => {
 
         autoTable(pdf, {
             startY: currentY,
+            margin: { top: 95 },
             head: [['Colaborador', 'Día', 'Turno (+HE)', 'Horas Extras']],
             body: data.map(d => [
                 d.name.toUpperCase(),
@@ -468,7 +478,6 @@ export const exportExtraHoursReport = async (staff, schedules, weekKey) => {
             styles: { fontSize: 10, cellPadding: 5 },
             headStyles: { fillColor: [41, 128, 185], textColor: 255, fontStyle: 'bold' },
             didDrawPage: (data) => {
-                // Hook para header en cada página nueva generada por la tabla
                 addHeader(data);
             }
         });
