@@ -6,7 +6,7 @@ import {
     getWorkedHolidaysByUid,
     getNightHoursByUid,
 } from "../services/scheduleService";
-import { FaCheck, FaTimes, FaCalendarAlt, FaFilePdf, FaEdit, FaTrash, FaUnlink } from "react-icons/fa";
+import { FaCheck, FaTimes, FaCalendarAlt, FaFilePdf, FaEdit, FaTrash, FaUnlink, FaLockOpen } from "react-icons/fa";
 import {
     Users,
     Clock,
@@ -519,6 +519,7 @@ function AdminDashboard() {
                 storeName: storeName || "",
                 study_schedule: editModal.study_schedule || {},
                 sanitaryCardDate: editModal.sanitaryCardDate || "",
+                sanitaryCardUnlock: editModal.sanitaryCardUnlock || false,
             };
 
             if (editModal.isNew) {
@@ -1051,51 +1052,73 @@ function AdminDashboard() {
                 )}
 
                 {/* Stats Cards */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
                     {/* Total Plantilla */}
-                    <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl shadow-lg p-6 text-white transform hover:scale-105 transition-all duration-200">
+                    <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl shadow-lg p-5 text-white transform hover:scale-105 transition-all duration-200">
                         <div className="flex items-center justify-between">
                             <div>
-                                <p className="text-blue-100 text-sm font-medium mb-1">Total Plantilla</p>
-                                <p className="text-3xl font-bold">{fullTimeCount + partTimeCount}</p>
+                                <p className="text-blue-100 text-[10px] font-medium mb-1 uppercase tracking-wider">Total Plantilla</p>
+                                <p className="text-2xl font-bold">{fullTimeCount + partTimeCount}</p>
                             </div>
-                            <Users className="w-12 h-12 text-blue-200" />
+                            <Users className="w-8 h-8 text-blue-200" />
                         </div>
                     </div>
                     {/* Full-Time */}
-                    <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-xl shadow-lg p-6 text-white transform hover:scale-105 transition-all duration-200">
+                    <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-xl shadow-lg p-5 text-white transform hover:scale-105 transition-all duration-200">
                         <div className="flex items-center justify-between">
                             <div>
-                                <p className="text-green-100 text-sm font-medium mb-1">Full-Time</p>
-                                <p className="text-3xl font-bold">{fullTimeCount}</p>
+                                <p className="text-green-100 text-[10px] font-medium mb-1 uppercase tracking-wider">Full-Time</p>
+                                <p className="text-2xl font-bold">{fullTimeCount}</p>
                             </div>
-                            <UserCheck className="w-12 h-12 text-green-200" />
+                            <UserCheck className="w-8 h-8 text-green-200" />
                         </div>
                     </div>
                     {/* Part-Time */}
-                    <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl shadow-lg p-6 text-white transform hover:scale-105 transition-all duration-200">
+                    <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl shadow-lg p-5 text-white transform hover:scale-105 transition-all duration-200">
                         <div className="flex items-center justify-between">
                             <div>
-                                <p className="text-purple-100 text-sm font-medium mb-1">Part-Time</p>
-                                <p className="text-3xl font-bold">{partTimeCount}</p>
+                                <p className="text-purple-100 text-[10px] font-medium mb-1 uppercase tracking-wider">Part-Time</p>
+                                <p className="text-2xl font-bold">{partTimeCount}</p>
                             </div>
-                            <Clock className="w-12 h-12 text-purple-200" />
+                            <Clock className="w-8 h-8 text-purple-200" />
                         </div>
                     </div>
                     {/* Trainees */}
-                    <div className="bg-gradient-to-br from-orange-400 to-orange-500 rounded-xl shadow-lg p-6 text-white transform hover:scale-105 transition-all duration-200">
+                    <div className="bg-gradient-to-br from-orange-400 to-orange-500 rounded-xl shadow-lg p-5 text-white transform hover:scale-105 transition-all duration-200">
                         <div className="flex items-start justify-between">
                             <div className="flex-1">
-                                <p className="text-orange-100 text-sm font-medium mb-1">🎓 Entrenamiento</p>
-                                <p className="text-3xl font-bold">{traineeCount}</p>
+                                <p className="text-orange-100 text-[10px] font-medium mb-1 uppercase tracking-wider">🎓 Entrenamiento</p>
+                                <p className="text-2xl font-bold">{traineeCount}</p>
                                 {traineeCount > 0 && (
-                                    <div className="flex gap-3 mt-2 text-xs text-orange-100">
-                                        <span className="bg-white/20 px-2 py-0.5 rounded-full">FT: {traineeFTCount}</span>
-                                        <span className="bg-white/20 px-2 py-0.5 rounded-full">PT: {traineePTCount}</span>
+                                    <div className="flex gap-2 mt-1 text-[9px] text-orange-100">
+                                        <span className="bg-white/20 px-1.5 py-0.5 rounded-full">FT: {traineeFTCount}</span>
+                                        <span className="bg-white/20 px-1.5 py-0.5 rounded-full">PT: {traineePTCount}</span>
                                     </div>
                                 )}
                             </div>
-                            <UserCheck className="w-12 h-12 text-orange-200 flex-shrink-0" />
+                            <UserCheck className="w-8 h-8 text-orange-200 flex-shrink-0" />
+                        </div>
+                    </div>
+                    {/* Carnets de Sanidad */}
+                    <div
+                        onClick={exportCarnetExpiringPDF}
+                        className="bg-gradient-to-br from-red-500 to-red-600 rounded-xl shadow-lg p-5 text-white transform hover:scale-105 transition-all duration-200 cursor-pointer"
+                    >
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <p className="text-red-100 text-[10px] font-medium mb-1 uppercase tracking-wider">Carnets Críticos</p>
+                                <p className="text-2xl font-bold">
+                                    {staff.filter(s => {
+                                        if (!s.sanitaryCardDate) return false;
+                                        const expiry = new Date(s.sanitaryCardDate + 'T00:00:00');
+                                        const now = new Date();
+                                        now.setHours(0, 0, 0, 0);
+                                        return expiry < now;
+                                    }).length}
+                                </p>
+                                <p className="text-[9px] text-red-200 mt-1 uppercase font-bold">Vencidos hoy</p>
+                            </div>
+                            <AlertCircle className="w-8 h-8 text-red-200" />
                         </div>
                     </div>
                 </div>
@@ -1165,6 +1188,7 @@ function AdminDashboard() {
                                         <th className="px-8 py-5 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider min-w-[140px]">Modalidad</th>
                                         <th className="px-6 py-5 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Rol</th>
                                         <th className="px-6 py-5 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Vinculado</th>
+                                        <th className="px-6 py-5 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Carnet Sanidad</th>
                                         <th className="px-6 py-5 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Estado</th>
                                         <th className="px-6 py-5 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Acciones</th>
                                     </tr>
@@ -1259,6 +1283,45 @@ function AdminDashboard() {
                                                     >
                                                         Asignar posiciones
                                                     </button>
+                                                </div>
+                                            </td>
+                                            {/* Carnet Sanidad */}
+                                            <td className="px-6 py-5">
+                                                <div className="flex flex-col gap-1">
+                                                    {colab.sanitaryCardDate ? (
+                                                        <>
+                                                            <div className="flex items-center gap-2">
+                                                                <span className={`text-xs font-bold px-2 py-1 rounded-full ${(() => {
+                                                                    const expiry = new Date(colab.sanitaryCardDate + 'T00:00:00');
+                                                                    const now = new Date(); now.setHours(0, 0, 0, 0);
+                                                                    if (expiry < now) return "bg-red-100 text-red-700 border border-red-200";
+                                                                    const diff = (expiry - now) / (1000 * 60 * 60 * 24);
+                                                                    if (diff <= 15) return "bg-orange-100 text-orange-700 border border-orange-200";
+                                                                    return "bg-green-100 text-green-700 border border-green-200";
+                                                                })()
+                                                                    }`}>
+                                                                    {new Date(colab.sanitaryCardDate + 'T00:00:00').toLocaleDateString('es-ES')}
+                                                                </span>
+                                                                {colab.sanitaryCardUnlock && (
+                                                                    <FaLockOpen className="text-green-500 text-xs" title="Acceso desbloqueado manualmente" />
+                                                                )}
+                                                            </div>
+                                                            {(() => {
+                                                                const expiry = new Date(colab.sanitaryCardDate + 'T00:00:00');
+                                                                const now = new Date(); now.setHours(0, 0, 0, 0);
+                                                                if (expiry < now) {
+                                                                    return <span className="text-[10px] font-bold text-red-600 uppercase">Vencido</span>;
+                                                                }
+                                                                const diff = (expiry - now) / (1000 * 60 * 60 * 24);
+                                                                if (diff <= 15) {
+                                                                    return <span className="text-[10px] font-bold text-orange-600 uppercase">Vence pronto</span>;
+                                                                }
+                                                                return null;
+                                                            })()}
+                                                        </>
+                                                    ) : (
+                                                        <span className="text-xs text-gray-400 italic">No registrado</span>
+                                                    )}
                                                 </div>
                                             </td>
                                             {/* Columna Estado / Cesar */}

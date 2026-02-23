@@ -21,7 +21,10 @@ import {
   Save,
   PlusCircle,
   Award,
-  Lock
+  Lock,
+  AlertTriangle,
+  ShieldAlert,
+  ShieldCheck
 } from "lucide-react";
 import { MOTIVATIONAL_QUOTES } from "../constants/quotes";
 import ModalSelectorDePosiciones from "./ModalSelectorDePosiciones";
@@ -46,9 +49,31 @@ const CollaboratorDashboard = () => {
   const [storeRequirements, setStoreRequirements] = useState([]);
 
   const isRestricted = () => {
+    if (isHealthCardBlocked()) return true;
     if (!lockSettings.restrictionsEnabled) return false;
     const today = new Date().toISOString().split('T')[0];
     return today < lockSettings.reenableDate;
+  };
+
+  const getSanitaryCardStatus = () => {
+    if (!perfil?.sanitaryCardDate) return 'none';
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const expiry = new Date(perfil.sanitaryCardDate + 'T00:00:00');
+
+    if (today > expiry) return 'expired';
+
+    const diffTime = expiry.getTime() - today.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+    if (diffDays <= 15) return 'warning';
+    return 'valid';
+  };
+
+  const isHealthCardBlocked = () => {
+    const status = getSanitaryCardStatus();
+    if (status === 'expired' && !perfil?.sanitaryCardUnlock) return true;
+    return false;
   };
 
   const isTrainer = perfil?.position === 'ENTRENADOR';
@@ -412,11 +437,76 @@ const CollaboratorDashboard = () => {
                 )}
               </div>
             </div>
+            {/* Carnet Sanitario */}
+            <div className={`flex items-center gap-3 p-3 rounded-lg group transition-all duration-200 hover:shadow-sm ${getSanitaryCardStatus() === 'expired' ? 'bg-red-50' :
+                getSanitaryCardStatus() === 'warning' ? 'bg-orange-50' : 'bg-gray-50'
+              }`}>
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center ${getSanitaryCardStatus() === 'expired' ? 'bg-red-100' :
+                  getSanitaryCardStatus() === 'warning' ? 'bg-orange-100' : 'bg-blue-100'
+                }`}>
+                {getSanitaryCardStatus() === 'expired' ? <ShieldAlert className="w-5 h-5 text-red-600" /> :
+                  getSanitaryCardStatus() === 'warning' ? <AlertTriangle className="w-5 h-5 text-orange-600" /> :
+                    <ShieldCheck className="w-5 h-5 text-blue-600" />}
+              </div>
+              <div className="flex-1">
+                <p className="text-xs text-gray-500 font-medium">Carnet Sanitario</p>
+                <div className="flex items-center justify-between">
+                  <p className={`text-sm font-semibold ${getSanitaryCardStatus() === 'expired' ? 'text-red-700' :
+                      getSanitaryCardStatus() === 'warning' ? 'text-orange-700' : 'text-gray-800'
+                    }`}>
+                    {perfil.sanitaryCardDate ? (() => {
+                      const [y, m, d] = perfil.sanitaryCardDate.split('-');
+                      return `${d}/${m}/${y}`;
+                    })() : <span className="text-gray-400 italic font-normal">No registrado</span>}
+                  </p>
+                  {perfil.sanitaryCardUnlock && (
+                    <Lock className="w-3 h-3 text-green-500" title="Desbloqueado por Admin" />
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
+        {/* Notificaciones de Carnet Sanitario */}
+        {getSanitaryCardStatus() === 'expired' && !perfil?.sanitaryCardUnlock && (
+          <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-6 rounded-r-xl flex items-center gap-3 shadow-md">
+            <ShieldAlert className="w-8 h-8 text-red-600" />
+            <div>
+              <p className="text-red-800 font-bold text-lg">⚠️ ACCESO RESTRINGIDO</p>
+              <p className="text-sm text-red-700">
+                Tu carnet de sanidad ha vencido. Por seguridad y normativa, <b>no puedes ingresar disponibilidades</b> hasta que tramites tu nuevo carnet y sea validado por administración.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {getSanitaryCardStatus() === 'expired' && perfil?.sanitaryCardUnlock && (
+          <div className="bg-green-50 border-l-4 border-green-500 p-4 mb-6 rounded-r-xl flex items-center gap-3 shadow-md">
+            <ShieldCheck className="w-8 h-8 text-green-600" />
+            <div>
+              <p className="text-green-800 font-bold">Carnet Vencido - Acceso Permitido</p>
+              <p className="text-sm text-green-700">
+                Tu carnet está vencido, pero la administración ha habilitado temporalmente tu acceso. Por favor, regulariza tu situación lo antes posible.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {getSanitaryCardStatus() === 'warning' && (
+          <div className="bg-orange-50 border-l-4 border-orange-400 p-4 mb-6 rounded-r-xl flex items-center gap-3 shadow-md">
+            <AlertTriangle className="w-8 h-8 text-orange-600 animate-bounce" />
+            <div>
+              <p className="text-orange-800 font-bold">Próximo Vencimiento</p>
+              <p className="text-sm text-orange-700">
+                Tu carnet de sanidad vence en menos de 15 días. Recuerda iniciar los trámites de renovación para evitar el bloqueo de acceso.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Bloqueo de Cambios Warning */}
-        {isRestricted() && (
+        {isRestricted() && !isHealthCardBlocked() && (
           <div className="bg-orange-50 border-l-4 border-orange-400 p-4 mb-6 rounded-r-xl flex items-center gap-3 shadow-sm">
             <Lock className="w-6 h-6 text-orange-600 animate-pulse" />
             <div>

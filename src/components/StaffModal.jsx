@@ -17,6 +17,7 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
     modalityChangeDate: staff?.modalityChangeDate || '',
     nextModality: staff?.nextModality || '',
     position: staff?.position || 'COLABORADOR',
+    sanitaryCardUnlock: staff?.sanitaryCardUnlock || false,
   });
   const [loading, setLoading] = useState(false);
   const db = getFirestore();
@@ -176,10 +177,28 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
             </select>
           </div>
 
-          {/* Carnet sanitario */}
           <div>
             <label className={labelCls}>Fecha de vencimiento del carnet sanitario</label>
             <input type="date" name="sanitaryCardDate" value={form.sanitaryCardDate} onChange={handleChange} className={inputCls} />
+          </div>
+
+          {/* Desbloqueo manual de carnet sanitario */}
+          <div
+            onClick={() => setForm(prev => ({ ...prev, sanitaryCardUnlock: !prev.sanitaryCardUnlock }))}
+            className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all select-none ${form.sanitaryCardUnlock
+              ? 'border-green-400 bg-green-50'
+              : 'border-gray-200 bg-gray-50 hover:border-gray-300'
+              }`}
+          >
+            <div className={`w-10 h-6 rounded-full relative transition-colors ${form.sanitaryCardUnlock ? 'bg-green-500' : 'bg-gray-300'}`}>
+              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all ${form.sanitaryCardUnlock ? 'left-5' : 'left-1'}`} />
+            </div>
+            <div>
+              <p className={`text-sm font-semibold ${form.sanitaryCardUnlock ? 'text-green-700' : 'text-gray-600'}`}>
+                🔓 Desbloquear ingreso de disponibilidad
+              </p>
+              <p className="text-xs text-gray-400 mt-0.5">Permite ingresar disponibilidad aunque el carnet esté vencido</p>
+            </div>
           </div>
 
           {/* Fecha de cese — solo si NO es trainee */}
