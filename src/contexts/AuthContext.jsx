@@ -1,6 +1,13 @@
 // src/contexts/AuthContext.jsx
 import React, { useContext, useEffect, useState } from "react";
-import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, createUserWithEmailAndPassword } from "firebase/auth";
+import { 
+  getAuth, 
+  onAuthStateChanged, 
+  signInWithEmailAndPassword, 
+  signOut, 
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail
+} from "firebase/auth";
 import { getFirestore, doc, getDoc } from "firebase/firestore";
 
 const AuthContext = React.createContext();
@@ -102,6 +109,11 @@ export function AuthProvider({ children }) {
     return createUserWithEmailAndPassword(auth, email, password);
   };
 
+  const resetPassword = (email) => {
+    const auth = getAuth();
+    return sendPasswordResetEmail(auth, email);
+  };
+
   const value = {
     currentUser,
     userRole,
@@ -109,6 +121,7 @@ export function AuthProvider({ children }) {
     login,
     logout,
     register,
+    resetPassword,
   };
 
   return <AuthContext.Provider value={value}>{!loading && children}</AuthContext.Provider>;
