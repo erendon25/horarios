@@ -816,12 +816,14 @@ export default function WeeklyScheduleEditor() {
 
             const merged = {};
 
+            let allStaffIds = [];
+
             // --- Paso 1: Fetch por ID directo (funciona siempre, sin índice) ---
             try {
                 const allStaffSnap = await getDocs(
                     query(collection(db, 'staff_profiles'), where('storeId', '==', storeId))
                 );
-                const allStaffIds = allStaffSnap.docs.map(d => d.id);
+                allStaffIds = allStaffSnap.docs.map(d => d.id);
                 console.log('[Horarios] Staff IDs en tienda:', allStaffIds.length);
                 await Promise.all(allStaffIds.map(async (sId) => {
                     const dSnap = await getDoc(doc(db, 'schedules', `${sId}_${wk}`));
@@ -905,7 +907,10 @@ export default function WeeklyScheduleEditor() {
     // 2. Filtrar activeStaff según inputs de la UI (Modalidad, Posición)
     // Usamos activeStaff como base para que los cesados no aparezcan en la tabla ni en los filtros
     const filteredStaff = activeStaff.filter(person => {
-        if (modalityFilter !== 'Todos' && person.modality !== modalityFilter) return false;
+        const dateStr = getSelectedDateStr();
+        const effModality = getEffectiveModality(person, dateStr);
+
+        if (modalityFilter !== 'Todos' && effModality !== modalityFilter) return false;
 
         if (positionFilter !== 'Todas') {
             const assignedPos = schedules[person.id]?.[selectedDay]?.position?.toLowerCase() || '';
@@ -1307,6 +1312,9 @@ export default function WeeklyScheduleEditor() {
                                     </thead>
                                     <tbody className="bg-white divide-y divide-gray-200">
                                         {filteredStaff.map(p => {
+                                            const currentDateStr = getSelectedDateStr();
+                                            const effModality = getEffectiveModality(p, currentDateStr);
+
                                             const d = schedules[p.id]?.[selectedDay] || {};
                                             const hasConflict = detectScheduleConflict(p, selectedDay, d);
                                             const horas = calculateWeeklyHours(p.id);
@@ -1315,7 +1323,7 @@ export default function WeeklyScheduleEditor() {
                                                 schedules[p.id]?.[day]?.off === true
                                             );
                                             // Cálculo de rango correcto de horas según modalidad
-                                            const esFullTime = p.modality?.toLowerCase() === 'full-time';
+                                            const esFullTime = effModality?.toLowerCase() === 'full-time';
                                             const horasMin = esFullTime ? 48 * 60 : 24 * 60;  // 45h FT, 24h PT
                                             const horasMax = esFullTime ? 48 * 60 : 24 * 60;  // Máximo razonable (evita abusos)
                                             const horasEnRango = horas.total >= horasMin && horas.total <= horasMax;
