@@ -493,8 +493,8 @@ export default function WeeklyScheduleEditor() {
         weekdays.forEach(day => {
             const daySchedule = schedules[staffId][day];
 
-            // Si no hay horario o es día libre/feriado, saltar
-            if (!daySchedule || daySchedule.off || daySchedule.feriado) return;
+            // Si no hay horario o es día libre, saltar
+            if (!daySchedule || daySchedule.off) return;
             if (!daySchedule.start || !daySchedule.end) return;
 
             const dateStr = getDateStrForDay(day);

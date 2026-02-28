@@ -38,21 +38,44 @@ export const exportSchedulePDF = (staff, schedules, weekKey) => {
     const pdf = new jsPDF('landscape', 'pt', 'a4');
     const head = ['Nombre', 'Modalidad', ...DAYS.map((d, i) => `${DAY_LABELS[d]}\n${weekDates[i]}`), 'Total Hrs'];
 
-    const ordered = [...staff.filter(p => p.modality === 'Full-Time'),
-    ...staff.filter(p => p.modality === 'Part-Time'),
-    ...staff.filter(p => !['Full-Time', 'Part-Time'].includes(p.modality))];
+    const getEffectiveModality = (person, dStr) => {
+        if (!person || !person.modalityChangeDate || !person.nextModality || !dStr) {
+            return person?.modality || '';
+        }
+        if (dStr >= person.modalityChangeDate) return person.nextModality;
+        return person.modality;
+    };
+
+    const ordered = [...staff].sort((a, b) => {
+        const modA = getEffectiveModality(a, dateStr);
+        const modB = getEffectiveModality(b, dateStr);
+        if (modA === 'Full-Time' && modB !== 'Full-Time') return -1;
+        if (modA !== 'Full-Time' && modB === 'Full-Time') return 1;
+        if (modA === 'Part-Time' && modB !== 'Part-Time') return -1;
+        if (modA !== 'Part-Time' && modB === 'Part-Time') return 1;
+        return 0;
+    });
 
     const body = ordered.map(p => {
         let tot = 0;
+        let daysWorkedFT = 0;
+        const effModality = getEffectiveModality(p, dateStr);
+        const isFullTime = (effModality || '').toLowerCase() === 'full-time';
         const nombre = p.name ? p.name.toUpperCase() : 'SIN NOMBRE';
-        const row = [nombre, p.modality || '--'];
+        const row = [nombre, effModality || '--'];
         DAYS.forEach(d => {
             const e = schedules[p.id]?.[d];
 
             // Lógica para mostrar horario extendido si hay horas extras
             let displayTxt = 'S/A';
             if (e?.off) displayTxt = 'DESCANSO';
-            else if (e?.feriado) displayTxt = 'FERIADO';
+            else if (e?.feriado) {
+                displayTxt = 'FERIADO';
+                if (e.start && e.end) {
+                    tot += hrs(e.start, e.end);
+                    if (isFullTime) daysWorkedFT++;
+                }
+            }
             else if (e?.start && e?.end) {
                 let currentStart = e.start;
                 let currentEnd = e.end;
@@ -81,11 +104,12 @@ export const exportSchedulePDF = (staff, schedules, weekKey) => {
 
                 // Sumar al total
                 tot += hrs(e.start, e.end) + extraPre + extraPost;
+                if (isFullTime) daysWorkedFT++;
             }
 
             row.push(displayTxt);
         });
-        if (p.modality === 'Full-Time') tot -= 4.5; // Ajuste FT (si aplica)
+        if (isFullTime) tot -= (daysWorkedFT * 0.75); // Ajuste FT 45 min por día trabajado
         row.push(tot.toFixed(2));
         return row;
     });
