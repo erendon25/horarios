@@ -86,6 +86,7 @@ export default function WeeklyScheduleEditor() {
     const [weekStartDate, setWeekStartDate] = useState('');
     const [modalityFilter, setModalityFilter] = useState('Todos');
     const [positionFilter, setPositionFilter] = useState('Todas');
+    const [excludeTraineesFilter, setExcludeTraineesFilter] = useState(false);
     const [turnoMap, setTurnoMap] = useState({});
     const [prevWeekSchedules, setPrevWeekSchedules] = useState({});
     const [tooltipOpen, setTooltipOpen] = useState(null);
@@ -100,6 +101,11 @@ export default function WeeklyScheduleEditor() {
     const [searchTerm, setSearchTerm] = useState('');
     const [dirtyStaff, setDirtyStaff] = useState(new Set());
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+    const [showExportModal, setShowExportModal] = useState(false);
+    const [exportOptions, setExportOptions] = useState({
+        excludeTrainees: false,
+        showPositions: false
+    });
 
     const wk = getWeekKey(weekStartDate);
     const schedules = wk ? allSchedules[wk] || {} : {};
@@ -922,6 +928,8 @@ export default function WeeklyScheduleEditor() {
             if (!fullName.includes(searchTerm.toLowerCase())) return false;
         }
 
+        if (excludeTraineesFilter && person.isTrainee) return false;
+
         return true;
     });
 
@@ -1152,6 +1160,16 @@ export default function WeeklyScheduleEditor() {
                                     {positions.map(pos => <option key={pos}>{pos}</option>)}
                                 </select>
 
+                                <button
+                                    onClick={() => setExcludeTraineesFilter(!excludeTraineesFilter)}
+                                    className={`px-4 py-2 border rounded-lg font-medium transition-all flex items-center gap-2 ${excludeTraineesFilter
+                                            ? 'bg-blue-600 border-blue-600 text-white shadow-md'
+                                            : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                                        }`}
+                                >
+                                    {excludeTraineesFilter ? 'Solo Tienda' : 'Ver Todos'}
+                                </button>
+
                                 <div className="relative flex-1 min-w-[200px]">
                                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                                         <Search className="h-4 w-4 text-gray-400" />
@@ -1213,7 +1231,7 @@ export default function WeeklyScheduleEditor() {
                             </button>
 
                             <button
-                                onClick={() => exportSchedulePDF(activeStaff, schedules, wk)}
+                                onClick={() => setShowExportModal(true)}
                                 className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
                                 <FileText className="w-5 h-5" />
@@ -1854,6 +1872,69 @@ export default function WeeklyScheduleEditor() {
                                 >
                                     <Download className="w-4 h-4" />
                                     Descargar
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {showExportModal && (
+                    <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+                        <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 animate-in fade-in zoom-in duration-300">
+                            <div className="flex items-center gap-3 mb-6">
+                                <div className="p-3 bg-blue-100 rounded-xl">
+                                    <FileText className="w-6 h-6 text-blue-600" />
+                                </div>
+                                <h3 className="text-2xl font-bold text-gray-800">Opciones de Impresión</h3>
+                            </div>
+
+                            <p className="text-gray-600 mb-6 font-medium">
+                                Selecciona las opciones para la exportación del horario semanal.
+                            </p>
+
+                            <div className="space-y-5 mb-8">
+                                <label className={`flex items-start gap-4 p-5 border-2 rounded-2xl cursor-pointer transition-all ${exportOptions.excludeTrainees ? 'border-blue-500 bg-blue-50' : 'border-gray-100 hover:border-gray-200 bg-gray-50'}`}>
+                                    <input
+                                        type="checkbox"
+                                        className="w-6 h-6 mt-1 text-blue-600 rounded-lg border-gray-300 focus:ring-blue-500 cursor-pointer"
+                                        checked={exportOptions.excludeTrainees}
+                                        onChange={e => setExportOptions({ ...exportOptions, excludeTrainees: e.target.checked })}
+                                    />
+                                    <div className="select-none">
+                                        <p className="font-extrabold text-gray-900 text-lg">Solo Personal de Tienda</p>
+                                        <p className="text-sm text-gray-600 leading-relaxed font-medium">Excluye automáticamente a colaboradores en entrenamiento (Trainees).</p>
+                                    </div>
+                                </label>
+
+                                <label className={`flex items-start gap-4 p-5 border-2 rounded-2xl cursor-pointer transition-all ${exportOptions.showPositions ? 'border-purple-500 bg-purple-50' : 'border-gray-100 hover:border-gray-200 bg-gray-50'}`}>
+                                    <input
+                                        type="checkbox"
+                                        className="w-6 h-6 mt-1 text-purple-600 rounded-lg border-gray-300 focus:ring-purple-500 cursor-pointer"
+                                        checked={exportOptions.showPositions}
+                                        onChange={e => setExportOptions({ ...exportOptions, showPositions: e.target.checked })}
+                                    />
+                                    <div className="select-none">
+                                        <p className="font-extrabold text-gray-900 text-lg">Incluir Posiciones</p>
+                                        <p className="text-sm text-gray-600 leading-relaxed font-medium">Muestra el cargo/posición asignado debajo de cada turno.</p>
+                                    </div>
+                                </label>
+                            </div>
+
+                            <div className="flex gap-4">
+                                <button
+                                    onClick={() => setShowExportModal(false)}
+                                    className="flex-1 px-4 py-3.5 border border-gray-300 rounded-xl text-gray-700 font-bold hover:bg-gray-50 transition-colors"
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        exportSchedulePDF(activeStaff, schedules, wk, exportOptions.excludeTrainees, exportOptions.showPositions);
+                                        setShowExportModal(false);
+                                    }}
+                                    className="flex-1 px-4 py-3.5 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl font-bold shadow-lg hover:shadow-xl transform hover:scale-[1.02] active:scale-[0.98] transition-all"
+                                >
+                                    Generar PDF
                                 </button>
                             </div>
                         </div>
