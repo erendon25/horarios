@@ -1163,9 +1163,9 @@ export default function WeeklyScheduleEditor() {
                                     onChange={e => setModalityFilter(e.target.value)}
                                     className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white font-medium"
                                 >
-                                    <option>Todos</option>
-                                    <option>Full-Time</option>
-                                    <option>Part-Time</option>
+                                    <option value="Todos">Modalidad</option>
+                                    <option value="Full-Time">Full-Time</option>
+                                    <option value="Part-Time">Part-Time</option>
                                 </select>
 
                                 <select
@@ -1173,8 +1173,8 @@ export default function WeeklyScheduleEditor() {
                                     onChange={e => setPositionFilter(e.target.value)}
                                     className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white font-medium"
                                 >
-                                    <option>Todas</option>
-                                    {positions.map(pos => <option key={pos}>{pos}</option>)}
+                                    <option value="Todas">Posiciones</option>
+                                    {positions.map(pos => <option key={pos} value={pos}>{pos}</option>)}
                                 </select>
 
                                 {positionFilter !== 'Todas' && (
@@ -1183,10 +1183,10 @@ export default function WeeklyScheduleEditor() {
                                         onChange={e => setAptitudeFilter(e.target.value)}
                                         className="px-4 py-2 border border-emerald-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all bg-emerald-50 text-emerald-800 font-bold text-xs"
                                     >
-                                        <option value="Todos">Cualquier Aptitud</option>
-                                        <option value="Certificados">Solo Certificados (90%+)</option>
-                                        <option value="En Proceso">En Proceso (1-89%)</option>
-                                        <option value="No Capacitados">No Capacitados (0%)</option>
+                                        <option value="Todos">Filtrar por Aptitud...</option>
+                                        <option value="Certificados">Solo Certificados (Expertos)</option>
+                                        <option value="En Proceso">En Formación (Aprendices)</option>
+                                        <option value="No Capacitados">Sin Capacitación (Nuevos)</option>
                                     </select>
                                 )}
 
