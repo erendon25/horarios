@@ -17,6 +17,8 @@ import StudyScheduleEditor from './components/StudyScheduleEditor';
 import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import SuperAdminDashboard from './components/SuperAdminDashboard';
+import TrainingApp from './components/Training/TrainingApp';
+
 
 <ToastContainer />
 
@@ -109,6 +111,12 @@ function AppRouter() {
           </PrivateRoute>
         }
       />
+
+      <Route path="/entrenamiento" element={
+        <PrivateRoute role="admin">
+          <TrainingApp />
+        </PrivateRoute>
+      } />
     </Routes>
   );
 }

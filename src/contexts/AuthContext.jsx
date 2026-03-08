@@ -1,10 +1,10 @@
 // src/contexts/AuthContext.jsx
 import React, { useContext, useEffect, useState } from "react";
-import { 
-  getAuth, 
-  onAuthStateChanged, 
-  signInWithEmailAndPassword, 
-  signOut, 
+import {
+  getAuth,
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signOut,
   createUserWithEmailAndPassword,
   sendPasswordResetEmail
 } from "firebase/auth";
@@ -25,70 +25,64 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     const auth = getAuth();
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setCurrentUser(user);
+      try {
+        setCurrentUser(user);
 
-      if (user) {
-        const db = getFirestore();
-        const docRef = doc(db, "users", user.uid);
-        const docSnap = await getDoc(docRef);
+        if (user) {
+          const db = getFirestore();
+          const docRef = doc(db, "users", user.uid);
+          const docSnap = await getDoc(docRef);
 
-        if (docSnap.exists()) {
-          const data = docSnap.data();
+          if (docSnap.exists()) {
+            const data = docSnap.data();
 
-          // Check for termination in staff_profiles
-          try {
-            const { collection, query, where, getDocs } = await import("firebase/firestore"); // Dynamic import to avoid top-level changes if possible, or just add imports
-            const staffQuery = query(collection(db, "staff_profiles"), where("uid", "==", user.uid));
-            const staffSnap = await getDocs(staffQuery);
+            // Check for termination in staff_profiles
+            try {
+              const { collection, query, where, getDocs } = await import("firebase/firestore");
+              const staffQuery = query(collection(db, "staff_profiles"), where("uid", "==", user.uid));
+              const staffSnap = await getDocs(staffQuery);
 
-            if (!staffSnap.empty) {
-              const staffData = staffSnap.docs[0].data();
-              if (staffData.cessationDate) {
-                // Normalizamos fecha actual a YYYY-MM-DD local
-                const now = new Date();
-                const year = now.getFullYear();
-                const month = String(now.getMonth() + 1).padStart(2, '0');
-                const day = String(now.getDate()).padStart(2, '0');
-                const todayStr = `${year}-${month}-${day}`;
+              if (!staffSnap.empty) {
+                const staffData = staffSnap.docs[0].data();
+                if (staffData.cessationDate) {
+                  const now = new Date();
+                  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+                  const cessationDate = staffData.cessationDate.split('T')[0]; // Format YYYY-MM-DD
 
-                // Asegurar formato YYYY-MM-DD para la fecha guardada
-                const [tY, tM, tD] = staffData.cessationDate.split('-').map(Number);
-                const termStr = `${tY}-${String(tM).padStart(2, '0')}-${String(tD).padStart(2, '0')}`;
-
-                // Si hoy es estrictamente MAYOR que la fecha de cese, bloquear.
-                // Ejemplo: Hoy=2024-02-09, Cese=2024-02-08 -> '2024-02-09' > '2024-02-08' -> TRUE (Bloqueado)
-                // Ejemplo: Hoy=2024-02-08, Cese=2024-02-08 -> FALSE (Permitido)
-                if (todayStr > termStr) {
-                  console.log(`Usuario cesado. Fecha cese: ${termStr}, Hoy: ${todayStr}. Cerrando sesión...`);
-                  await signOut(auth);
-                  alert("Tu acceso ha sido revocado debido a cese de actividades.");
-                  setUserRole(null);
-                  setUserData(null);
-                  setLoading(false);
-                  return;
+                  if (todayStr > cessationDate) {
+                    console.log(`Usuario cesado. Cerrando sesión...`);
+                    await signOut(auth);
+                    alert("Tu acceso ha sido revocado debido a cese de actividades.");
+                    setUserRole(null);
+                    setUserData(null);
+                    return;
+                  }
                 }
               }
+            } catch (err) {
+              if (err.name !== 'AbortError') {
+                console.error("Error verificando cese:", err);
+              }
             }
-          } catch (err) {
-            console.error("Error verificando cese:", err);
+
+            setUserRole(data.role || null);
+            setUserData(data);
+          } else {
+            console.log("No se encontró el documento del usuario. Asignando rol 'collaborator'.");
+            setUserRole('collaborator');
+            setUserData({ role: 'collaborator', email: user.email });
           }
-
-          setUserRole(data.role || null);
-          setUserData(data);
         } else {
-          // Documento no existe en 'users' (puede pasar si el registro tuvo
-          // un error de permisos al crear el documento). Tratarlo como
-          // colaborador para que pueda acceder al dashboard y vincular su cuenta.
-          console.log("No se encontró el documento del usuario. Asignando rol 'collaborator' por defecto.");
-          setUserRole('collaborator');
-          setUserData({ role: 'collaborator', email: user.email });
+          setUserRole(null);
+          setUserData(null);
         }
-      } else {
-        setUserRole(null);
-        setUserData(null);
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          console.error("Auth state update error:", error);
+        }
+      } finally {
+        setLoading(false);
       }
-
-      setLoading(false);
     });
 
     return unsubscribe;

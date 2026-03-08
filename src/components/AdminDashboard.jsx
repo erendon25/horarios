@@ -24,7 +24,8 @@ import {
     Save,
     Award,
     BarChart3,
-    Calculator
+    Calculator,
+    ClipboardCheck
 } from "lucide-react";
 import {
     doc,
@@ -1249,6 +1250,13 @@ function AdminDashboard() {
                         >
                             <Award className="w-5 h-5 text-orange-500" />
                             Ver Avances
+                        </button>
+                        <button
+                            onClick={() => navigate("/entrenamiento")}
+                            className="flex items-center gap-2 px-5 py-2.5 bg-orange-500 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium whitespace-nowrap"
+                        >
+                            <ClipboardCheck className="w-5 h-5" />
+                            Validador
                         </button>
                         <button
                             onClick={handleAddStaff}

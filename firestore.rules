@@ -158,6 +158,18 @@ service cloud.firestore {
     }
 
     // ========================
+    // EVALUACIONES DE ENTRENAMIENTO
+    // ========================
+    match /training_evaluations/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isSuperAdmin() || (
+        isAuthenticated() && (
+          isAdmin() || isTrainer()
+        )
+      );
+    }
+
+    // ========================
     // REGLA POR DEFECTO
     // ========================
     match /{document=**} {
