@@ -17,7 +17,7 @@ const hrs = (s, e) => {
     let t = (eh + em / 60) - (sh + sm / 60); if (t < 0) t += 24; return Math.round(t * 100) / 100;
 };
 
-export const exportSchedulePDF = (staff, schedules, weekKey) => {
+export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = false, showPositions = false) => {
     // Extraer la fecha de inicio del weekKey (formato: "2024-01-15_to_2024-01-21")
     const dateStr = weekKey.split('_to_')[0];
 
@@ -46,7 +46,13 @@ export const exportSchedulePDF = (staff, schedules, weekKey) => {
         return person.modality;
     };
 
-    const ordered = [...staff].sort((a, b) => {
+    // Filtrar personal de entrenamiento si se solicita
+    let filteredStaff = [...staff];
+    if (excludeTrainees) {
+        filteredStaff = filteredStaff.filter(p => !p.isTrainee);
+    }
+
+    const ordered = filteredStaff.sort((a, b) => {
         const modA = getEffectiveModality(a, dateStr);
         const modB = getEffectiveModality(b, dateStr);
         if (modA === 'Full-Time' && modB !== 'Full-Time') return -1;
@@ -61,7 +67,7 @@ export const exportSchedulePDF = (staff, schedules, weekKey) => {
         let daysWorkedFT = 0;
         const effModality = getEffectiveModality(p, dateStr);
         const isFullTime = (effModality || '').toLowerCase() === 'full-time';
-        const nombre = p.name ? p.name.toUpperCase() : 'SIN NOMBRE';
+        const nombre = p.name ? `${p.name} ${p.lastName || ''}`.toUpperCase() : 'SIN NOMBRE';
         const row = [nombre, effModality || '--'];
         DAYS.forEach(d => {
             const e = schedules[p.id]?.[d];
@@ -102,6 +108,11 @@ export const exportSchedulePDF = (staff, schedules, weekKey) => {
 
                 displayTxt = `${currentStart}-${currentEnd}`;
 
+                // Agregar posición si se solicita
+                if (showPositions && e.position) {
+                    displayTxt += `\n(${e.position})`;
+                }
+
                 // Sumar al total
                 tot += hrs(e.start, e.end) + extraPre + extraPost;
                 if (isFullTime) daysWorkedFT++;
@@ -117,15 +128,23 @@ export const exportSchedulePDF = (staff, schedules, weekKey) => {
     autoTable(pdf, {
         head: [head],
         body,
-        margin: { top: 30 },
-        styles: { fontSize: 6.5, cellPadding: 1.5 },
+        margin: { top: 40 },
+        styles: { fontSize: showPositions ? 6 : 6.5, cellPadding: 2, overflow: 'linebreak' },
         headStyles: { fillColor: [44, 62, 80], textColor: 255 },
-        didDrawPage: () => { pdf.setFontSize(9); pdf.text('HORARIOS SEMANALES', 40, 22); }
+        didDrawPage: () => {
+            pdf.setFontSize(10);
+            pdf.text(`HORARIOS SEMANALES - ${excludeTrainees ? 'PERSONAL DE TIENDA' : 'TODO EL PERSONAL'}`, 40, 25);
+            if (showPositions) {
+                pdf.setFontSize(8);
+                pdf.text(`Semana: ${weekKey}`, 40, 35);
+            }
+        }
     });
 
     const end = new Date(start.getTime() + 6 * 864e5);
-    pdf.save(`horarios_${fmt(start)}_${fmt(end)}.pdf`);
+    pdf.save(`horarios_${excludeTrainees ? 'tienda_' : ''}${fmt(start)}_${fmt(end)}.pdf`);
 };
+
 
 const getBase64ImageFromURL = (url) => {
     return new Promise((resolve) => {

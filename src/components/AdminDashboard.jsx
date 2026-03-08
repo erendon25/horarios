@@ -23,7 +23,8 @@ import {
     Download,
     Save,
     Award,
-    BarChart3
+    BarChart3,
+    Calculator
 } from "lucide-react";
 import {
     doc,
@@ -42,6 +43,7 @@ import StudyScheduleEditor from './StudyScheduleEditor';
 import ModalSelectorDePosiciones from './ModalSelectorDePosiciones';
 import StaffModal from './StaffModal';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import VHLConsultation from './VHLConsultation';
 
 
 
@@ -98,6 +100,7 @@ function AdminDashboard() {
         restrictionsEnabled: false,
         reenableDate: ''
     });
+    const [showVHLModal, setShowVHLModal] = useState(false);
 
     const skillStats = useMemo(() => {
         const stats = {};
@@ -1255,6 +1258,13 @@ function AdminDashboard() {
                             Agregar Personal
                         </button>
                         <button
+                            onClick={() => setShowVHLModal(true)}
+                            className="flex items-center gap-2 px-5 py-2.5 bg-white border border-blue-200 text-blue-600 rounded-lg shadow-sm hover:shadow-md transform hover:scale-105 transition-all duration-200 font-medium whitespace-nowrap"
+                        >
+                            <Calculator className="w-5 h-5 text-blue-500" />
+                            Consulta VHL/THL
+                        </button>
+                        <button
                             onClick={fetchAllStaffProfiles}
                             className="flex items-center gap-2 px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg shadow-sm hover:shadow-md transform hover:scale-105 transition-all duration-200 font-medium whitespace-nowrap"
                         >
@@ -2198,6 +2208,13 @@ function AdminDashboard() {
                             </div>
                         </div>
                     </div>
+                )}
+
+                {showVHLModal && (
+                    <VHLConsultation
+                        storeId={userData?.storeId}
+                        onClose={() => setShowVHLModal(false)}
+                    />
                 )}
             </div>
         </div>
