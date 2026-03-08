@@ -101,6 +101,7 @@ export default function WeeklyScheduleEditor() {
     const [searchTerm, setSearchTerm] = useState('');
     const [dirtyStaff, setDirtyStaff] = useState(new Set());
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+    const [aptitudeFilter, setAptitudeFilter] = useState('Todos'); // 'Todos', 'Certificados', 'En Proceso', 'No Capacitados'
     const [showExportModal, setShowExportModal] = useState(false);
     const [exportOptions, setExportOptions] = useState({
         excludeTrainees: false,
@@ -919,8 +920,24 @@ export default function WeeklyScheduleEditor() {
         if (modalityFilter !== 'Todos' && effModality !== modalityFilter) return false;
 
         if (positionFilter !== 'Todas') {
-            const assignedPos = schedules[person.id]?.[selectedDay]?.position?.toLowerCase() || '';
-            if (assignedPos !== positionFilter.toLowerCase()) return false;
+            const posKey = positionFilter.toUpperCase();
+            const assignedPos = (schedules[person.id]?.[selectedDay]?.position || '').toUpperCase();
+
+            // Si el filtro de aptitud es 'Todos', mantenemos el comportamiento original: filtrar por ASIGNACIÓN
+            // PERO si el filtro de aptitud está activo, queremos ver quién TIENE la habilidad para esa posición
+            if (aptitudeFilter === 'Todos') {
+                if (assignedPos !== posKey) return false;
+            } else {
+                const isCertified = person.skills?.some(s => s.toUpperCase() === posKey);
+                const score = person.trainingScores?.[posKey] || 0;
+                const inTraining = score > 0 && score < 90;
+
+                if (aptitudeFilter === 'Certificados' && !isCertified) return false;
+                if (aptitudeFilter === 'En Proceso' && !inTraining) return false;
+                if (aptitudeFilter === 'No Capacitados' && (isCertified || inTraining)) return false;
+
+                // Si llegamos aquí, la persona cumple con el nivel de aptitud requerido para la posición seleccionada
+            }
         }
 
         if (searchTerm) {
@@ -1160,11 +1177,24 @@ export default function WeeklyScheduleEditor() {
                                     {positions.map(pos => <option key={pos}>{pos}</option>)}
                                 </select>
 
+                                {positionFilter !== 'Todas' && (
+                                    <select
+                                        value={aptitudeFilter}
+                                        onChange={e => setAptitudeFilter(e.target.value)}
+                                        className="px-4 py-2 border border-emerald-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all bg-emerald-50 text-emerald-800 font-bold text-xs"
+                                    >
+                                        <option value="Todos">Cualquier Aptitud</option>
+                                        <option value="Certificados">Solo Certificados (90%+)</option>
+                                        <option value="En Proceso">En Proceso (1-89%)</option>
+                                        <option value="No Capacitados">No Capacitados (0%)</option>
+                                    </select>
+                                )}
+
                                 <button
                                     onClick={() => setExcludeTraineesFilter(!excludeTraineesFilter)}
                                     className={`px-4 py-2 border rounded-lg font-medium transition-all flex items-center gap-2 ${excludeTraineesFilter
-                                            ? 'bg-blue-600 border-blue-600 text-white shadow-md'
-                                            : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                                        ? 'bg-blue-600 border-blue-600 text-white shadow-md'
+                                        : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
                                         }`}
                                 >
                                     {excludeTraineesFilter ? 'Solo Tienda' : 'Ver Todos'}
@@ -1409,6 +1439,27 @@ export default function WeeklyScheduleEditor() {
                                                                             TRAINER
                                                                         </span>
                                                                     )}
+
+                                                                    {positionFilter !== 'Todas' && (() => {
+                                                                        const posKey = positionFilter.toUpperCase();
+                                                                        const isCertified = p.skills?.some(s => s.toUpperCase() === posKey);
+                                                                        const score = p.trainingScores?.[posKey];
+
+                                                                        if (isCertified) {
+                                                                            return (
+                                                                                <span title={`Certificado en ${positionFilter}`} className="ml-1.5 px-1.5 py-0.5 bg-green-100 text-green-700 text-[10px] font-bold rounded border border-green-200 inline-block align-middle" style={{ lineHeight: '1' }}>
+                                                                                    CERTIFICADO
+                                                                                </span>
+                                                                            );
+                                                                        } else if (score && score > 0) {
+                                                                            return (
+                                                                                <span title={`En entrenamiento para ${positionFilter}: ${score}%`} className="ml-1.5 px-1.5 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-bold rounded border border-amber-200 inline-block align-middle" style={{ lineHeight: '1' }}>
+                                                                                    {score}%
+                                                                                </span>
+                                                                            );
+                                                                        }
+                                                                        return null;
+                                                                    })()}
                                                                 </div>
 
                                                                 {/* Fila de Info Compacta: Turno Anterior */}

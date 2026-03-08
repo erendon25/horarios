@@ -150,7 +150,8 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
             const updates = {
                 lastEvaluationDate: new Date().toISOString().split('T')[0],
                 lastEvaluationScore: score,
-                lastStationEvaluated: selectedStation
+                lastStationEvaluated: selectedStation,
+                [`trainingScores.${selectedStation.toUpperCase()}`]: score
             };
 
             // If score >= 90, update skills
