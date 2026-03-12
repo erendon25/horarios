@@ -15,10 +15,46 @@ const TrainingApp = () => {
     const [lastEvaluationData, setLastEvaluationData] = useState(null);
     const [loadingHistory, setLoadingHistory] = useState(false);
     const [indexErrorUrl, setIndexErrorUrl] = useState(null);
+    const [drafts, setDrafts] = useState([]);
+    const [loadingDrafts, setLoadingDrafts] = useState(false);
 
     const canEdit = userData?.role === 'admin' || userData?.role === 'trainer' || userData?.role === 'superadmin';
 
+    const fetchDrafts = React.useCallback(async () => {
+        if (!userData?.storeId) return;
+        setLoadingDrafts(true);
+        try {
+            const q = query(
+                collection(db, 'training_evaluations'),
+                where('storeId', '==', userData.storeId),
+                where('status', '==', 'draft')
+            );
+            const querySnapshot = await getDocs(q);
+            const draftsData = querySnapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            }));
+            setDrafts(draftsData);
+        } catch (error) {
+            console.error("Error fetching drafts:", error);
+        } finally {
+            setLoadingDrafts(false);
+        }
+    }, [userData?.storeId]);
+
+    React.useEffect(() => {
+        if (view === 'dashboard') {
+            fetchDrafts();
+        }
+    }, [view, fetchDrafts]);
+
     const handleStartEvaluation = () => {
+        setLastEvaluationData(null);
+        setView('form');
+    };
+
+    const handleSelectDraft = (draft) => {
+        setLastEvaluationData(draft);
         setView('form');
     };
 
@@ -26,11 +62,13 @@ const TrainingApp = () => {
         console.log('Guardando evaluación:', data);
         setLastEvaluationData({ ...data, area: activeArea });
         setView('result');
+        fetchDrafts(); // Refresh drafts list
     };
 
     const handleBackToDashboard = () => {
         setView('dashboard');
         setLastEvaluationData(null);
+        fetchDrafts();
     };
 
     const handleSelectCollaborator = async (collaborator) => {
@@ -129,6 +167,9 @@ const TrainingApp = () => {
                     onAreaChange={setActiveArea}
                     onSelectCollaborator={handleSelectCollaborator}
                     onShowStats={() => setView('stats')}
+                    drafts={drafts}
+                    loadingDrafts={loadingDrafts}
+                    onSelectDraft={handleSelectDraft}
                 />
             )}
 

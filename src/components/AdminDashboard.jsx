@@ -1065,6 +1065,20 @@ function AdminDashboard() {
                                 Horarios
                             </button>
                             <button
+                                onClick={() => navigate("/entrenamiento")}
+                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <ClipboardCheck className="w-4 h-4" />
+                                Validador
+                            </button>
+                            <button
+                                onClick={() => setShowVHLModal(true)}
+                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-indigo-500 to-indigo-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <Calculator className="w-4 h-4" />
+                                Consulta VHL/THL
+                            </button>
+                            <button
                                 onClick={exportCarnetExpiringPDF}
                                 className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
@@ -1252,25 +1266,11 @@ function AdminDashboard() {
                             Ver Avances
                         </button>
                         <button
-                            onClick={() => navigate("/entrenamiento")}
-                            className="flex items-center gap-2 px-5 py-2.5 bg-orange-500 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium whitespace-nowrap"
-                        >
-                            <ClipboardCheck className="w-5 h-5" />
-                            Validador
-                        </button>
-                        <button
                             onClick={handleAddStaff}
                             className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium whitespace-nowrap"
                         >
                             <Plus className="w-5 h-5" />
                             Agregar Personal
-                        </button>
-                        <button
-                            onClick={() => setShowVHLModal(true)}
-                            className="flex items-center gap-2 px-5 py-2.5 bg-white border border-blue-200 text-blue-600 rounded-lg shadow-sm hover:shadow-md transform hover:scale-105 transition-all duration-200 font-medium whitespace-nowrap"
-                        >
-                            <Calculator className="w-5 h-5 text-blue-500" />
-                            Consulta VHL/THL
                         </button>
                         <button
                             onClick={fetchAllStaffProfiles}

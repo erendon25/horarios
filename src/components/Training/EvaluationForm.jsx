@@ -37,7 +37,7 @@ import {
 
 const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null }) => {
     const { userData, currentUser } = useAuth();
-    const [step, setStep] = useState(1);
+    const [step, setStep] = useState(initialData?.step || 1);
     const [selectedCollab, setSelectedCollab] = useState(initialData?.collaboratorId || null);
     const [selectedStation, setSelectedStation] = useState(initialData?.station || '');
     const [responses, setResponses] = useState(initialData?.responses || {});
@@ -127,12 +127,13 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                 responses,
                 feedback,
                 generalFindings,
+                status: 'completed',
                 timestamp: serverTimestamp(),
                 date: initialData?.date || new Date().toISOString().split('T')[0],
                 // Simple representation of signatures
                 collabSignature: sigPadCollab.current?.isEmpty() ? (initialData?.collabSignature || null) : sigPadCollab.current.toDataURL(),
                 trainerSignature: sigPadTrainer.current?.isEmpty() ? (initialData?.trainerSignature || null) : sigPadTrainer.current.toDataURL(),
-                isEdited: !!initialData?.id
+                isEdited: !!initialData?.id && initialData?.status === 'completed'
             };
 
             let evalId;
@@ -171,6 +172,47 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
         }
     };
 
+    const handleSaveDraft = async () => {
+        if (!selectedCollab) {
+            alert("Selecciona al menos un colaborador para guardar el borrador.");
+            return;
+        }
+        setSaving(true);
+        try {
+            const selectedCollabData = collaborators.find(c => c.id === selectedCollab);
+            
+            const draftData = {
+                collaboratorId: selectedCollab,
+                collaboratorName: initialData?.collaboratorName || (selectedCollabData ? `${selectedCollabData.name} ${selectedCollabData.lastName || ''}`.trim() : 'Colaborador'),
+                trainerId: currentUser.uid,
+                trainerName: `${userData.name || 'Trainer'} ${userData.lastName || ''}`.trim(),
+                storeId: userData.storeId,
+                area,
+                station: selectedStation,
+                step,
+                responses,
+                feedback,
+                generalFindings,
+                status: 'draft',
+                lastUpdated: serverTimestamp(),
+                date: initialData?.date || new Date().toISOString().split('T')[0],
+            };
+
+            if (initialData?.id) {
+                await updateDoc(doc(db, 'training_evaluations', initialData.id), draftData);
+            } else {
+                await addDoc(collection(db, 'training_evaluations'), draftData);
+            }
+
+            onCancel(); // Return to dashboard
+        } catch (error) {
+            console.error("Error saving draft:", error);
+            alert("Error al guardar el borrador.");
+        } finally {
+            setSaving(false);
+        }
+    };
+
     const handleToggle = (pointId, value) => {
         setResponses(prev => ({ ...prev, [pointId]: value }));
     };
@@ -179,9 +221,10 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
         setFeedback(prev => ({ ...prev, [pointId]: text }));
     };
 
-    const renderPoint = (point) => {
-        const isCompliant = responses[point.id] === true;
-        const isNotCompliant = responses[point.id] === false;
+    const renderPoint = (point, sectionId) => {
+        const uniqueId = `${sectionId}_${point.id}`;
+        const isCompliant = responses[uniqueId] === true;
+        const isNotCompliant = responses[uniqueId] === false;
 
         return (
             <div key={point.id} className="bg-white p-6 rounded-[32px] border border-gray-100 shadow-xl shadow-gray-200/40 mb-6 transition-all hover:shadow-orange-500/10">
@@ -189,7 +232,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
 
                 <div className="flex gap-4 mb-4">
                     <button
-                        onClick={() => handleToggle(point.id, true)}
+                        onClick={() => handleToggle(uniqueId, true)}
                         className={`flex-1 py-3.5 rounded-[20px] flex items-center justify-center gap-3 font-black text-[10px] uppercase tracking-widest transition-all border-2 ${isCompliant
                             ? 'bg-green-500 border-green-500 text-white shadow-xl shadow-green-500/30 active:scale-95'
                             : 'bg-white border-gray-50 text-gray-400 hover:border-gray-200'
@@ -199,7 +242,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                         CUMPLE
                     </button>
                     <button
-                        onClick={() => handleToggle(point.id, false)}
+                        onClick={() => handleToggle(uniqueId, false)}
                         className={`flex-1 py-3.5 rounded-[20px] flex items-center justify-center gap-3 font-black text-[10px] uppercase tracking-widest transition-all border-2 ${isNotCompliant
                             ? 'bg-rose-500 border-rose-500 text-white shadow-xl shadow-rose-500/30 active:scale-95'
                             : 'bg-white border-gray-50 text-gray-400 hover:border-gray-200'
@@ -210,14 +253,14 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                     </button>
                 </div>
 
-                {(isNotCompliant || feedback[point.id]) && (
+                {(isNotCompliant || feedback[uniqueId]) && (
                     <div className="mt-4 animate-in slide-in-from-top duration-300">
                         <textarea
                             placeholder="Anota observaciones o hallazgos aquí..."
                             className="w-full p-4 text-[11px] bg-slate-50 border border-gray-100 rounded-2xl outline-none focus:bg-white focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 transition-all font-bold text-slate-700 shadow-inner"
                             rows="2"
-                            value={feedback[point.id] || ''}
-                            onChange={(e) => handleFeedbackChange(point.id, e.target.value)}
+                            value={feedback[uniqueId] || ''}
+                            onChange={(e) => handleFeedbackChange(uniqueId, e.target.value)}
                         />
                     </div>
                 )}
@@ -342,7 +385,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                                         <h4 className="text-[10px] font-black text-orange-500 uppercase tracking-[0.3em] bg-orange-50 px-4 py-2 rounded-full">{section.title}</h4>
                                         <div className="h-px flex-1 bg-gradient-to-l from-transparent to-gray-100"></div>
                                     </div>
-                                    {section.points.map(renderPoint)}
+                                    {section.points.map(p => renderPoint(p, section.id))}
                                 </div>
                             ))}
                         </div>
@@ -357,7 +400,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                         </div>
                         <div className="space-y-6">
                             {stations[selectedStation].points.length > 0 ? (
-                                stations[selectedStation].points.map(renderPoint)
+                                stations[selectedStation].points.map(p => renderPoint(p, selectedStation))
                             ) : (
                                 <div className="p-12 text-center bg-white rounded-[40px] border-2 border-dashed border-gray-100 italic text-gray-300 font-bold">
                                     Contenido en proceso de digitalización...
@@ -375,7 +418,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                         </div>
                         <div className="space-y-6">
                             {isService ? (
-                                KNOWLEDGE_POINTS?.map(renderPoint) || <p className="text-center text-gray-400">No hay puntos registrados</p>
+                                KNOWLEDGE_POINTS?.map(p => renderPoint(p, 'knowledge')) || <p className="text-center text-gray-400">No hay puntos registrados</p>
                             ) : (
                                 <div className="p-12 text-center bg-white rounded-[48px] border-2 shadow-inner border-gray-50 overflow-hidden relative">
                                     <div className="relative z-10">
@@ -464,6 +507,15 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                         <ChevronLeft size={18} strokeWidth={3} />
                         Anterior
                     </button>
+                    {step < 5 && (
+                        <button
+                            onClick={handleSaveDraft}
+                            className="flex-1 py-5 px-8 rounded-[24px] font-black uppercase tracking-[0.2em] text-[10px] flex items-center justify-center gap-3 border-2 border-orange-100 bg-orange-50 text-orange-600 transition-all hover:bg-orange-100 shadow-xl shadow-orange-500/10 active:scale-95"
+                        >
+                            <Save size={18} strokeWidth={3} />
+                            Guardar Borrador
+                        </button>
+                    )}
                     <button
                         onClick={() => {
                             if (step < 5) setStep(step + 1);

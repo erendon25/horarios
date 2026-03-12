@@ -15,7 +15,7 @@ import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { SERVICE_STATIONS, PRODUCTION_STATIONS } from '../../constants/trainingPoints';
 
-const TrainingDashboard = ({ onStartEvaluation, activeArea, onAreaChange, onSelectCollaborator, onShowStats }) => {
+const TrainingDashboard = ({ onStartEvaluation, activeArea, onAreaChange, onSelectCollaborator, onShowStats, drafts = [], loadingDrafts = false, onSelectDraft }) => {
     const { userData } = useAuth();
     const [searchTerm, setSearchTerm] = useState('');
     const [filter, setFilter] = useState('all');
@@ -127,6 +127,48 @@ const TrainingDashboard = ({ onStartEvaluation, activeArea, onAreaChange, onSele
                     </button>
                 </div>
             </div>
+
+            {/* Drafts Section */}
+            {drafts.length > 0 && (
+                <div className="px-6 mt-8 animate-in fade-in slide-in-from-top duration-700">
+                    <div className="flex items-center justify-between mb-4 px-2">
+                        <h2 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] flex items-center gap-2">
+                            <Clock size={14} className="text-orange-500" />
+                            Borradores Pendientes
+                        </h2>
+                        <span className="px-2 py-0.5 bg-orange-100 text-orange-600 text-[9px] font-black rounded-full uppercase tracking-widest">
+                            {drafts.length} {drafts.length === 1 ? 'pendiente' : 'pendientes'}
+                        </span>
+                    </div>
+                    <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide -mx-2 px-2">
+                        {drafts.map((draft) => (
+                            <button
+                                key={draft.id}
+                                onClick={() => onSelectDraft?.(draft)}
+                                className="shrink-0 w-64 bg-white p-5 rounded-[32px] border border-orange-100 shadow-xl shadow-orange-500/5 hover:shadow-orange-500/15 transition-all group text-left relative overflow-hidden active:scale-95"
+                            >
+                                <div className="flex items-center gap-4 mb-3">
+                                    <div className="w-10 h-10 bg-orange-50 rounded-2xl flex items-center justify-center text-orange-500 font-bold text-sm">
+                                        {draft.collaboratorName?.charAt(0) || 'C'}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <h4 className="text-sm font-black text-slate-900 truncate tracking-tight">{draft.collaboratorName}</h4>
+                                        <p className="text-[9px] text-gray-400 font-bold uppercase tracking-widest truncate">
+                                            {draft.station?.toUpperCase() || 'Sin estación'}
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-50">
+                                    <span className="text-[9px] font-black text-orange-500 uppercase tracking-widest">
+                                        Paso {draft.step || 1} de 5
+                                    </span>
+                                    <ChevronRight size={16} className="text-orange-300 group-hover:translate-x-1 transition-transform" />
+                                </div>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* Search and Stats */}
             <div className="px-6 mt-8 flex-1 flex flex-col min-h-0">
