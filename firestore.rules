@@ -170,6 +170,26 @@ service cloud.firestore {
     }
 
     // ========================
+    // SOLICITUDES DE HORARIO
+    // ========================
+    match /schedule_requests/{docId} {
+      allow read: if isSuperAdmin() || (
+        isAuthenticated() && (
+          (isAdmin() && resource.data.storeId == getUserStoreId()) ||
+          (isTrainer() && resource.data.storeId == getUserStoreId()) ||
+          (resource.data.uid == request.auth.uid)
+        )
+      );
+      allow create: if isAuthenticated() && (
+        isSuperAdmin() || 
+        isAdmin() || 
+        (request.resource.data.uid == request.auth.uid)
+      );
+      allow update: if isSuperAdmin() || (isAdmin() && resource.data.storeId == getUserStoreId());
+      allow delete: if isSuperAdmin() || (isAdmin() && resource.data.storeId == getUserStoreId());
+    }
+
+    // ========================
     // REGLA POR DEFECTO
     // ========================
     match /{document=**} {

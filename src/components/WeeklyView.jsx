@@ -1,7 +1,7 @@
 
 import React, { useEffect, useState } from 'react';
-import { getFirestore, doc, onSnapshot } from 'firebase/firestore';
-import { Calendar, Clock, MapPin, Coffee, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
+import { getFirestore, doc, onSnapshot, query, collection, where } from 'firebase/firestore';
+import { Calendar, Clock, MapPin, Coffee, AlertCircle, ChevronLeft, ChevronRight, ClipboardList, X } from 'lucide-react';
 
 const weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const weekdayLabels = {
@@ -33,6 +33,9 @@ const getWeekKey = (s) => {
 export default function WeeklyView({ perfilId }) {
     const [weekStartDate, setWeekStartDate] = useState('');
     const [schedule, setSchedule] = useState({});
+    const [approvedRequests, setApprovedRequests] = useState([]);
+    const [allRequests, setAllRequests] = useState([]);
+    const [showRequestsModal, setShowRequestsModal] = useState(false);
     const db = getFirestore();
 
     // Helper para formatear fecha local a YYYY-MM-DD sin conversión a UTC
@@ -68,6 +71,43 @@ export default function WeeklyView({ perfilId }) {
         });
 
         return () => unsub();
+    }, [perfilId, weekStartDate, db]);
+
+    // Escuchar solicitudes aprobadas
+    useEffect(() => {
+        if (!perfilId || !weekStartDate) return;
+        const startStr = weekStartDate;
+        const [y, m, d] = weekStartDate.split('-').map(Number);
+        const end = new Date(y, m - 1, d + 6);
+        const endStr = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`;
+
+        const q = query(
+            collection(db, 'schedule_requests'),
+            where('staffId', '==', perfilId),
+            where('status', '==', 'approved'),
+            where('date', '>=', startStr),
+            where('date', '<=', endStr)
+        );
+
+        const unsub = onSnapshot(q, (snap) => {
+            const reqs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setApprovedRequests(reqs);
+        });
+
+        // Escuchar todas las solicitudes para el modal (opcionalmente filtrado por semana o general)
+        const qAll = query(
+            collection(db, 'schedule_requests'),
+            where('staffId', '==', perfilId)
+        );
+        const unsubAll = onSnapshot(qAll, (snap) => {
+            const reqs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setAllRequests(reqs.sort((a, b) => b.createdAt?.toMillis() - a.createdAt?.toMillis()));
+        });
+
+        return () => {
+            unsub();
+            unsubAll();
+        };
     }, [perfilId, weekStartDate, db]);
 
     // Calcular totales
@@ -106,10 +146,19 @@ export default function WeeklyView({ perfilId }) {
         <div className="bg-white rounded-xl shadow-lg p-6 mb-6 border border-gray-100">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
                 <div>
-                    <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-                        <Calendar className="w-5 h-5 text-blue-600" />
-                        Mi Horario Semanal
-                    </h2>
+                    <div className="flex items-center gap-3">
+                        <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                            <Calendar className="w-5 h-5 text-blue-600" />
+                            Mi Horario Semanal
+                        </h2>
+                        <button
+                            onClick={() => setShowRequestsModal(true)}
+                            className="bg-orange-50 text-orange-600 px-3 py-1 rounded-full text-xs font-bold border border-orange-200 hover:bg-orange-100 transition-colors flex items-center gap-1"
+                        >
+                            <ClipboardList className="w-3 h-3" />
+                            Ver Mis Solicitudes
+                        </button>
+                    </div>
                     <p className="text-sm text-gray-500 mt-1">Revisa tus turnos y posiciones asignadas</p>
                 </div>
 
@@ -289,6 +338,81 @@ export default function WeeklyView({ perfilId }) {
                             </tr>
                         </tfoot>
                     </table>
+                </div>
+            )}
+
+            {/* Solicitudes Aprobadas */}
+            {approvedRequests.length > 0 && (
+                <div className="mt-6 animate-fadeIn">
+                    <h3 className="text-sm font-bold text-orange-600 uppercase tracking-widest flex items-center gap-2 mb-3">
+                        <ClipboardList className="w-4 h-4" />
+                        Tus Solicitudes Aprobadas para esta Semana
+                    </h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                        {approvedRequests.map(req => (
+                            <div key={req.id} className="bg-orange-50 border border-orange-100 rounded-xl p-3 shadow-sm">
+                                <div className="flex justify-between items-start mb-2">
+                                    <span className="text-xs font-bold text-orange-800 bg-orange-200 px-2 py-0.5 rounded-full">
+                                        {weekdayLabels[weekdays[new Date(req.date + 'T00:00:00').getDay() === 0 ? 6 : new Date(req.date + 'T00:00:00').getDay() - 1]]} {req.date.split('-').reverse().slice(0, 2).join('/')}
+                                    </span>
+                                    <span className="text-[10px] font-extrabold text-orange-600 uppercase">
+                                        {req.shiftType === 'rango' ? 'Rango' : req.shiftType}
+                                    </span>
+                                </div>
+                                {req.shiftType === 'rango' && (
+                                    <p className="text-xs font-bold text-orange-900 mb-1 flex items-center gap-1">
+                                        <Clock className="w-3 h-3" />
+                                        {req.startTime} - {req.endTime}
+                                    </p>
+                                )}
+                                <p className="text-xs text-gray-600 italic">"{req.reason}"</p>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* Modal de Solicitudes para el Colaborador */}
+            {showRequestsModal && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setShowRequestsModal(false)}>
+                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in duration-300" onClick={e => e.stopPropagation()}>
+                        <div className="bg-gradient-to-r from-orange-500 to-red-600 px-8 py-5 flex justify-between items-center text-white">
+                            <h3 className="text-lg font-bold flex items-center gap-2">
+                                <ClipboardList className="w-5 h-5" />
+                                Historial de Solicitudes
+                            </h3>
+                            <button onClick={() => setShowRequestsModal(false)} className="p-1 hover:bg-white/20 rounded-lg transition-colors">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="p-6 max-h-[70vh] overflow-y-auto">
+                            {allRequests.length === 0 ? (
+                                <div className="text-center py-10 text-gray-400">
+                                    <AlertCircle className="w-10 h-10 mx-auto mb-2 opacity-20" />
+                                    <p>No tienes solicitudes registradas.</p>
+                                </div>
+                            ) : (
+                                <div className="space-y-4">
+                                    {allRequests.map(req => (
+                                        <div key={req.id} className="border-2 border-gray-50 rounded-2xl p-4 hover:border-orange-100 transition-all">
+                                            <div className="flex justify-between items-start mb-2">
+                                                <div>
+                                                    <p className="font-bold text-gray-800">{weekdayLabels[weekdays[new Date(req.date + 'T00:00:00').getDay() === 0 ? 6 : new Date(req.date + 'T00:00:00').getDay() - 1]]} {req.date.split('-').reverse().join('/')}</p>
+                                                    <p className="text-xs text-blue-600 font-bold uppercase">{req.shiftType} {req.shiftType === 'rango' && `(${req.startTime} - ${req.endTime})`}</p>
+                                                </div>
+                                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${req.status === 'pending' ? 'bg-orange-100 text-orange-600' : req.status === 'approved' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                                                    {req.status === 'pending' ? 'Pendiente' : req.status === 'approved' ? 'Aprobada' : 'Rechazada'}
+                                                </span>
+                                            </div>
+                                            <div className="bg-gray-50 p-3 rounded-xl">
+                                                <p className="text-xs text-gray-600 italic leading-relaxed">"{req.reason}"</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
                 </div>
             )}
         </div>

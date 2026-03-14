@@ -24,7 +24,8 @@ import {
     Home,
     ChevronLeft,
     ChevronRight,
-    Search
+    Search,
+    ClipboardList
 } from 'lucide-react';
 import { HOURS } from './ScheduleHeatmapMatrix';
 import ModalSelectorDePosiciones from './ModalSelectorDePosiciones';
@@ -97,6 +98,8 @@ export default function WeeklyScheduleEditor() {
     const [scheduleAttempt, setScheduleAttempt] = useState(0);
     const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'success' | 'error'
     const [storeId, setStoreId] = useState('');
+    const [approvedRequests, setApprovedRequests] = useState([]);
+    const [showApprovedRequestsModal, setShowApprovedRequestsModal] = useState(false);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
     const [dirtyStaff, setDirtyStaff] = useState(new Set());
@@ -212,6 +215,30 @@ export default function WeeklyScheduleEditor() {
 
         loadAllRequirements();
     }, [storeId]);
+
+    // === CARGA SOLICITUDES APROBADAS ===
+    useEffect(() => {
+        if (!storeId || !wk) return;
+
+        const db = getFirestore();
+        const startStr = wk.split('_to_')[0];
+        const endStr = wk.split('_to_')[1];
+
+        const q = query(
+            collection(db, 'schedule_requests'),
+            where('storeId', '==', storeId),
+            where('status', '==', 'approved'),
+            where('date', '>=', startStr),
+            where('date', '<=', endStr)
+        );
+
+        const unsub = onSnapshot(q, (snap) => {
+            const reqs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setApprovedRequests(reqs);
+        });
+
+        return () => unsub();
+    }, [storeId, wk]);
 
     const saveSchedules = async () => {
         if (dirtyStaff.size === 0) {
@@ -337,13 +364,30 @@ export default function WeeklyScheduleEditor() {
         }
 
         // Detectar conflictos de horario
+        const shiftStart = timeToMinutes(shift.start);
+        let shiftEndRaw = timeToMinutes(shift.end);
+        
+        // Manejar cruce de medianoche
+        const isOvernight = shiftEndRaw <= shiftStart;
+        const shiftEnd = isOvernight ? shiftEndRaw + (24 * 60) : shiftEndRaw;
+
         for (const block of studyBlocks) {
             const blockStart = timeToMinutes(block.start);
             const blockEnd = timeToMinutes(block.end);
-            const shiftStart = timeToMinutes(shift.start);
-            const shiftEnd = timeToMinutes(shift.end);
 
-            if (shiftStart < blockEnd && shiftEnd > blockStart) {
+            // Caso 1: Traslape en el día actual
+            const overlapCurrent = shiftStart < blockEnd && Math.min(shiftEnd, 1440) > blockStart;
+            
+            // Caso 2: Traslape después de medianoche (si el turno es overnight)
+            let overlapNext = false;
+            if (isOvernight) {
+                // Aquí deberíamos idealmente revisar el horario de estudio del DÍA SIGUIENTE,
+                // pero por simplicidad y según el requerimiento, validamos contra el bloque si choca con la parte post-medianoche
+                // (Nota: la mayoría de los estudios son diurnos, el riesgo mayor es el inicio del turno)
+                overlapNext = (shiftEnd > 1440) && (shiftEnd - 1440 > blockStart);
+            }
+
+            if (overlapCurrent || overlapNext) {
                 return 'conflicto';
             }
         }
@@ -1308,6 +1352,14 @@ export default function WeeklyScheduleEditor() {
                                 <Users className="w-5 h-5" />
                                 Generar Horario
                             </button>
+
+                            <button
+                                onClick={() => setShowApprovedRequestsModal(true)}
+                                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <ClipboardList className="w-5 h-5" />
+                                Solicitudes ({approvedRequests.length})
+                            </button>
                         </div>
                     </div>
 
@@ -1638,7 +1690,9 @@ export default function WeeklyScheduleEditor() {
                                                                 value={d.start || ''}
                                                                 onChange={e => handleChange(p.id, 'start', e.target.value)}
                                                                 disabled={d.feriado || d.off}
-                                                                className={`w-full px-2 py-2 border rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${hasConflict ? 'border-orange-500 bg-orange-50' : 'border-gray-300'
+                                                                className={`w-full px-2 py-2 border-2 rounded-lg text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${hasConflict 
+                                                                    ? 'border-red-500 bg-red-100 text-red-900 animate-pulse ring-2 ring-red-200' 
+                                                                    : 'border-gray-300'
                                                                     } disabled:bg-gray-100 disabled:cursor-not-allowed`}
                                                             />
                                                         )}
@@ -1650,7 +1704,9 @@ export default function WeeklyScheduleEditor() {
                                                                 value={d.end || ''}
                                                                 onChange={e => handleChange(p.id, 'end', e.target.value)}
                                                                 disabled={d.feriado || d.off}
-                                                                className={`w-full px-2 py-2 border rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${hasConflict ? 'border-orange-500 bg-orange-50' : 'border-gray-300'
+                                                                className={`w-full px-2 py-2 border-2 rounded-lg text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${hasConflict 
+                                                                    ? 'border-red-500 bg-red-100 text-red-900 animate-pulse ring-2 ring-red-200' 
+                                                                    : 'border-gray-300'
                                                                     } disabled:bg-gray-100 disabled:cursor-not-allowed`}
                                                             />
                                                         )}
@@ -1830,6 +1886,35 @@ export default function WeeklyScheduleEditor() {
                                         })}
                                     </div>
 
+                                    {/* Solicitudes Aprobadas */}
+                                    {(() => {
+                                        const personRequests = approvedRequests.filter(r => r.staffId === person.id);
+                                        if (personRequests.length === 0) return null;
+
+                                        return (
+                                            <div className="mt-3 pt-2 border-t border-gray-200">
+                                                <strong className="block mb-1.5 text-[10px] font-bold text-orange-600 uppercase tracking-wider flex items-center gap-1">
+                                                    <ClipboardList className="w-3 h-3" />
+                                                    Solicitudes Aprobadas
+                                                </strong>
+                                                <div className="space-y-1.5">
+                                                    {personRequests.map(req => (
+                                                        <div key={req.id} className="bg-orange-50 border border-orange-100 rounded p-1.5 text-[10px]">
+                                                            <div className="flex justify-between items-center mb-0.5">
+                                                                <span className="font-bold text-orange-800">{weekdayLabels[req.date ? weekdays[new Date(req.date + 'T00:00:00').getDay() === 0 ? 6 : new Date(req.date + 'T00:00:00').getDay() - 1] : '']} {req.date?.split('-').reverse().slice(0, 2).join('/')}</span>
+                                                                <span className="bg-orange-200 text-orange-900 px-1 rounded font-extrabold uppercase text-[8px]">{req.shiftType}</span>
+                                                            </div>
+                                                            {req.shiftType === 'rango' && (
+                                                                <p className="text-orange-900 font-bold mb-0.5">{req.startTime} - {req.endTime}</p>
+                                                            )}
+                                                            <p className="text-gray-600 italic">"{req.reason}"</p>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
+
                                     {/* Resumen compacto */}
                                     <div className="mt-2 pt-1.5 border-t border-gray-200 flex justify-between text-xs font-semibold">
                                         <span className="text-green-700">
@@ -1986,6 +2071,69 @@ export default function WeeklyScheduleEditor() {
                                     className="flex-1 px-4 py-3.5 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl font-bold shadow-lg hover:shadow-xl transform hover:scale-[1.02] active:scale-[0.98] transition-all"
                                 >
                                     Generar PDF
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                {/* Modal de Solicitudes Aprobadas */}
+                {showApprovedRequestsModal && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+                        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden animate-fadeIn">
+                            <div className="bg-gradient-to-r from-orange-500 to-orange-600 p-4 flex justify-between items-center text-white">
+                                <h3 className="text-lg font-bold flex items-center gap-2">
+                                    <ClipboardList className="w-5 h-5" />
+                                    Solicitudes para esta Semana
+                                </h3>
+                                <button onClick={() => setShowApprovedRequestsModal(false)} className="p-1 hover:bg-white/20 rounded-lg transition-colors">
+                                    <X className="w-5 h-5" />
+                                </button>
+                            </div>
+                            <div className="p-6 max-h-[70vh] overflow-y-auto">
+                                {approvedRequests.length === 0 ? (
+                                    <div className="text-center py-10 text-gray-400">
+                                        <AlertCircle className="w-10 h-10 mx-auto mb-2 opacity-20" />
+                                        <p>No hay solicitudes aprobadas para esta semana.</p>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-4">
+                                        {approvedRequests.map(req => {
+                                            const person = staff.find(s => s.id === req.staffId);
+                                            return (
+                                                <div key={req.id} className="border-2 border-gray-50 rounded-2xl p-4 hover:border-orange-100 transition-all flex items-start gap-4">
+                                                    <div className="w-10 h-10 bg-orange-50 rounded-full flex items-center justify-center shrink-0">
+                                                        <Users className="w-5 h-5 text-orange-600" />
+                                                    </div>
+                                                    <div className="flex-1">
+                                                        <div className="flex justify-between items-start">
+                                                            <div>
+                                                                <p className="font-bold text-gray-800">{person ? `${person.name} ${person.lastName}` : 'Cargando...'}</p>
+                                                                <p className="text-xs text-gray-500 capitalize">{weekdayLabels[req.date ? weekdays[new Date(req.date + 'T00:00:00').getDay() === 0 ? 6 : new Date(req.date + 'T00:00:00').getDay() - 1] : 'monday']} {req.date?.split('-').reverse().join('/')}</p>
+                                                            </div>
+                                                            <span className="text-[10px] font-bold bg-green-100 text-green-600 px-2 py-0.5 rounded-full uppercase">APROBADA</span>
+                                                        </div>
+                                                        <p className="text-xs text-blue-600 font-bold mt-1 uppercase">
+                                                            {req.shiftType === 'apertura' && 'Apertura'}
+                                                            {req.shiftType === 'medio' && 'Medio'}
+                                                            {req.shiftType === 'cierre' && 'Cierre'}
+                                                            {req.shiftType === 'rango' && `Rango Especial (${req.startTime} - ${req.endTime})`}
+                                                        </p>
+                                                        <div className="mt-2 bg-gray-50 p-3 rounded-xl">
+                                                            <p className="text-xs text-gray-600 italic leading-relaxed font-medium">"{req.reason}"</p>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                            <div className="p-4 bg-gray-50 border-t flex justify-end">
+                                <button
+                                    onClick={() => setShowApprovedRequestsModal(false)}
+                                    className="px-6 py-2 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-100 transition-all shadow-sm"
+                                >
+                                    Cerrar
                                 </button>
                             </div>
                         </div>

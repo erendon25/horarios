@@ -4,6 +4,7 @@ import { useAuth } from "../contexts/AuthContext";
 // import ExtraHoursForm from "./ExtraHoursForm"; // ELIMINADO
 import HolidayForm from "./HolidayForm";
 import StudyScheduleForm from "./StudyScheduleForm";
+import ScheduleRequestForm from "./ScheduleRequestForm";
 import WeeklyView from "./WeeklyView";
 import {
   BookOpen,
@@ -24,7 +25,8 @@ import {
   Lock,
   AlertTriangle,
   ShieldAlert,
-  ShieldCheck
+  ShieldCheck,
+  ClipboardList
 } from "lucide-react";
 import { MOTIVATIONAL_QUOTES } from "../constants/quotes";
 import ModalSelectorDePosiciones from "./ModalSelectorDePosiciones";
@@ -568,6 +570,16 @@ const CollaboratorDashboard = () => {
             <span className="font-semibold text-lg">Registrar Feriados</span>
             <span className="text-sm opacity-90">{isRestricted() ? 'Cambios inhabilitados' : 'Indica días festivos trabajados'}</span>
           </button>
+
+          <button
+            onClick={() => !isRestricted() && setModalType("request")}
+            className={`${isRestricted() ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-orange-500 to-red-600 text-white transform hover:scale-105'} p-6 rounded-xl shadow-md transition-all duration-200 flex flex-col items-center gap-3 md:col-span-2`}
+            disabled={isRestricted()}
+          >
+            <ClipboardList className="w-8 h-8" />
+            <span className="font-semibold text-lg">Solicitar Horario Específico</span>
+            <span className="text-sm opacity-90">{isRestricted() ? 'Cambios inhabilitados' : 'Solicita un turno o rango horario especial'}</span>
+          </button>
         </div>
 
         {/* --- SECCIÓN DE HABILIDADES Y PROGRESO (Para todos) --- */}
@@ -712,10 +724,12 @@ const CollaboratorDashboard = () => {
                   {modalType === "feriados" && <Calendar className="w-5 h-5" />}
                   {modalType === "skills" && <Award className="w-5 h-5" />}
                   {modalType === "trainer_skills" && <Award className="w-5 h-5" />}
+                  {modalType === "request" && <ClipboardList className="w-5 h-5" />}
                   {modalType === "study" && "Editar horarios de estudio"}
                   {modalType === "feriados" && "Registrar feriado"}
                   {modalType === "skills" && "Mis Habilidades"}
                   {modalType === "trainer_skills" && `Gestionar: ${selectedTrainerStaff?.name}`}
+                  {modalType === "request" && "Solicitar Horario"}
                 </h3>
                 <button
                   onClick={closeModal}
@@ -728,6 +742,7 @@ const CollaboratorDashboard = () => {
               <div className="p-6">
                 {modalType === "study" && <StudyScheduleForm onSuccess={closeModal} />}
                 {modalType === "feriados" && <HolidayForm />}
+                {modalType === "request" && <ScheduleRequestForm perfil={perfil} onSuccess={closeModal} />}
                 {modalType === "skills" && (
                   <ModalSelectorDePosiciones
                     docId={perfil.id}

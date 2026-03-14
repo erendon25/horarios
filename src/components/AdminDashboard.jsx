@@ -37,7 +37,8 @@ import {
     query,
     where,
     getDoc,
-    setDoc
+    setDoc,
+    onSnapshot
 } from "firebase/firestore";
 import { db } from "../firebase";
 import StudyScheduleEditor from './StudyScheduleEditor';
@@ -45,6 +46,8 @@ import ModalSelectorDePosiciones from './ModalSelectorDePosiciones';
 import StaffModal from './StaffModal';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import VHLConsultation from './VHLConsultation';
+import ScheduleRequestsManager from './ScheduleRequestsManager';
+import { Bell, ClipboardList } from "lucide-react";
 
 
 
@@ -102,6 +105,8 @@ function AdminDashboard() {
         reenableDate: ''
     });
     const [showVHLModal, setShowVHLModal] = useState(false);
+    const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
+    const [showRequestsModal, setShowRequestsModal] = useState(false);
 
     const skillStats = useMemo(() => {
         const stats = {};
@@ -441,6 +446,17 @@ function AdminDashboard() {
             fetchAllStaffProfiles();
             fetchScheduleLock();
             fetchStoreRequirements();
+
+            // Notify listener for pending requests
+            const q = query(
+                collection(db, 'schedule_requests'),
+                where('storeId', '==', userData.storeId),
+                where('status', '==', 'pending')
+            );
+            const unsub = onSnapshot(q, (snap) => {
+                setPendingRequestsCount(snap.size);
+            });
+            return () => unsub();
         }
     }, [userData]);
 
@@ -1091,6 +1107,18 @@ function AdminDashboard() {
                             >
                                 <Users className="w-4 h-4" />
                                 Consultar Ceses / Cambios
+                            </button>
+                            <button
+                                onClick={() => setShowRequestsModal(true)}
+                                className="relative flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-orange-600 to-red-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <ClipboardList className="w-4 h-4" />
+                                Solicitudes
+                                {pendingRequestsCount > 0 && (
+                                    <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full border-2 border-white animate-bounce">
+                                        {pendingRequestsCount}
+                                    </span>
+                                )}
                             </button>
                             <button
                                 onClick={handleLogout}
@@ -2225,6 +2253,28 @@ function AdminDashboard() {
                     />
                 )}
             </div>
+            {/* Modal de Solicitudes */}
+            {showRequestsModal && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setShowRequestsModal(false)}>
+                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in duration-300" onClick={e => e.stopPropagation()}>
+                        <div className="bg-gradient-to-r from-gray-800 to-gray-900 px-8 py-6 flex justify-between items-center">
+                            <h3 className="text-xl font-bold text-white flex items-center gap-3">
+                                <ClipboardList className="w-6 h-6 text-orange-400" />
+                                Gestión de Solicitudes de Horario
+                            </h3>
+                            <button
+                                onClick={() => setShowRequestsModal(false)}
+                                className="p-2 hover:bg-white/10 rounded-xl transition-colors"
+                            >
+                                <X className="w-6 h-6 text-white" />
+                            </button>
+                        </div>
+                        <div className="p-8">
+                            <ScheduleRequestsManager storeId={userData?.storeId} />
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
