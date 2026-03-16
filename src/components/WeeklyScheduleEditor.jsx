@@ -1388,8 +1388,8 @@ export default function WeeklyScheduleEditor() {
                                 <table className="w-full text-sm">
                                     <thead className="bg-gradient-to-r from-gray-700 to-gray-800 text-white">
                                         <tr>
-                                            <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider sticky left-0 z-10 bg-gradient-to-r from-gray-700 to-gray-800" style={{ minWidth: '280px', maxWidth: '280px' }}>Nombre</th>
-                                            <th className="px-6 py-4 text-center text-xs font-semibold uppercase tracking-wider sticky left-[280px] z-10 bg-gradient-to-r from-gray-700 to-gray-800" style={{ minWidth: '140px', maxWidth: '140px' }}>Modalidad</th>
+                                            <th className="px-4 md:px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider md:sticky md:left-0 z-10 bg-gradient-to-r from-gray-700 to-gray-800 min-w-[150px] max-w-[150px] md:min-w-[280px] md:max-w-[280px]">Nombre</th>
+                                            <th className="px-4 md:px-6 py-4 text-center text-xs font-semibold uppercase tracking-wider md:sticky md:left-[280px] z-10 bg-gradient-to-r from-gray-700 to-gray-800 min-w-[100px] max-w-[100px] md:min-w-[140px] md:max-w-[140px]">Modalidad</th>
                                             <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Entrada</th>
                                             <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Salida</th>
                                             <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider" title="Horas Extras Antes">HE Ant</th>
@@ -1464,7 +1464,7 @@ export default function WeeklyScheduleEditor() {
 
                                             return (
                                                 <tr key={p.id} className={`hover:bg-blue-50 transition-colors duration-150 group ${isCeased ? 'bg-red-50' : ''}`}>
-                                                    <td className="px-6 py-4 relative sticky left-0 z-10 bg-white group-hover:bg-blue-50" style={{ minWidth: '280px', maxWidth: '280px' }}>
+                                                    <td className="px-4 md:px-6 py-4 relative md:sticky md:left-0 z-10 bg-white group-hover:bg-blue-50 min-w-[150px] max-w-[150px] md:min-w-[280px] md:max-w-[280px]">
                                                         <div className="flex items-start gap-2">
                                                             <div className="flex-1 min-w-0 pr-2">
                                                                 <div
@@ -1661,7 +1661,7 @@ export default function WeeklyScheduleEditor() {
                                                             );
                                                         })()}
                                                     </td>
-                                                    <td className="px-6 py-4 text-center sticky left-[280px] z-10 bg-white group-hover:bg-blue-50" style={{ minWidth: '140px', maxWidth: '140px' }}>
+                                                    <td className="px-4 md:px-6 py-4 text-center md:sticky md:left-[280px] z-10 bg-white group-hover:bg-blue-50 min-w-[100px] max-w-[100px] md:min-w-[140px] md:max-w-[140px]">
                                                         {(() => {
                                                             const dateStr = getSelectedDateStr();
                                                             const effModality = getEffectiveModality(p, dateStr);
