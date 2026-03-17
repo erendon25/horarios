@@ -32,8 +32,18 @@ const TrainingDashboard = ({ onStartEvaluation, activeArea, onAreaChange, onSele
                     where('storeId', '==', userData.storeId)
                 );
                 const querySnapshot = await getDocs(q);
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+
                 const staffData = querySnapshot.docs.map(doc => {
                     const data = doc.data();
+
+                    const endDateStr = data.isTrainee ? data.trainingEndDate : (data.cessationDate || data.terminationDate);
+                    if (endDateStr) {
+                        const endDate = new Date(endDateStr + 'T00:00:00');
+                        if (endDate < today) return null;
+                    }
+
                     // Normalize skills to unique uppercase keys
                     const rawSkills = data.skills || [];
                     const normalizedSkills = [...new Set(rawSkills.map(s => s.toUpperCase()))];
@@ -56,7 +66,7 @@ const TrainingDashboard = ({ onStartEvaluation, activeArea, onAreaChange, onSele
                         skills: normalizedSkills, // Use normalized for consistency
                         area: activeArea
                     };
-                });
+                }).filter(Boolean);
                 setCollaborators(staffData);
             } catch (error) {
                 console.error("Error fetching staff:", error);

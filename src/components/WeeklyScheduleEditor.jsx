@@ -936,18 +936,19 @@ export default function WeeklyScheduleEditor() {
     // 1. Filtrar primero por Cese (Active Staff)
     // Esto asegura que activeStaff solo contenga empleados activos para esta semana
     const activeStaff = staff.filter(person => {
-        // Logic de Ceses: Si la fecha de cese es ANTERIOR al inicio de la semana, ocultar.
-        if (person.terminationDate && weekStartDate) {
+        // Logic de Ceses y Entrenamiento: Si la fecha ha pasado antes del inicio de la semana, ocultar.
+        if (weekStartDate) {
             try {
                 const [y, m, d] = weekStartDate.split('-').map(Number);
                 const weekStart = new Date(y, m - 1, d);
 
-                // Parse termination date manually
-                const [tY, tM, tD] = person.terminationDate.split('-').map(Number);
-                const termDate = new Date(tY, tM - 1, tD);
-
-                if (isNaN(termDate.getTime())) return true;
-                if (termDate < weekStart) return false;
+                const endDateStr = person.isTrainee ? person.trainingEndDate : (person.cessationDate || person.terminationDate);
+                
+                if (endDateStr) {
+                    const [tY, tM, tD] = endDateStr.split('-').map(Number);
+                    const endDate = new Date(tY, tM - 1, tD);
+                    if (!isNaN(endDate.getTime()) && endDate < weekStart) return false;
+                }
             } catch (e) {
                 return true;
             }
@@ -1431,13 +1432,14 @@ export default function WeeklyScheduleEditor() {
 
                                             // Lógica de Cese Diario
                                             let isCeased = false;
-                                            if (p.terminationDate && weekStartDate) {
+                                            const endDateStr = p.isTrainee ? p.trainingEndDate : (p.cessationDate || p.terminationDate);
+                                            if (endDateStr && weekStartDate) {
                                                 const [y, m, d] = weekStartDate.split('-').map(Number);
                                                 const dayIndex = weekdays.indexOf(selectedDay);
                                                 const currentDate = new Date(y, m - 1, d + dayIndex);
                                                 // Ajustar a medianoche para comparar fechas
                                                 currentDate.setHours(0, 0, 0, 0);
-                                                const termDate = new Date(p.terminationDate + 'T00:00:00');
+                                                const termDate = new Date(endDateStr + 'T00:00:00');
                                                 termDate.setHours(0, 0, 0, 0);
 
                                                 if (currentDate > termDate) {

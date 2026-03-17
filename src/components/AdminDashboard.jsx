@@ -1036,9 +1036,10 @@ function AdminDashboard() {
 
     const filteredStaff = staff.filter(s => {
         const today = new Date(); today.setHours(0, 0, 0, 0);
-        // Ocultar trainees cuyo entrenamiento ya terminó
-        if (s.isTrainee && s.trainingEndDate) {
-            const endDate = new Date(s.trainingEndDate + 'T00:00:00');
+        // Ocultar personal (trainees o regulares) cuyo plazo ha terminado
+        const endDateStr = s.isTrainee ? s.trainingEndDate : (s.cessationDate || s.terminationDate);
+        if (endDateStr) {
+            const endDate = new Date(endDateStr + 'T00:00:00');
             if (endDate < today) return false;
         }
         const matchesModality = modalityFilter === "Todos"
