@@ -1075,6 +1075,13 @@ function AdminDashboard() {
                                 Requerimientos
                             </button>
                             <button
+                                onClick={() => navigate("/admin/ventas")}
+                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <BarChart3 className="w-4 h-4" />
+                                Ventas
+                            </button>
+                            <button
                                 onClick={() => navigate("/admin/generate-schedules")}
                                 className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >

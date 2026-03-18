@@ -12,7 +12,7 @@ const weekdayLabels = {
     sunday: 'Domingo'
 };
 
-export const HOURS = Array.from({ length: 81 }, (_, i) => {
+export const HOURS = Array.from({ length: 77 }, (_, i) => {
     const totalMinutes = 360 + i * 15; // 06:00 = 360 minutos
     const totalHours = Math.floor(totalMinutes / 60);
     const m = totalMinutes % 60;
@@ -127,9 +127,25 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
         // === REQUERIMIENTOS ===
         const positions = Array.isArray(requirements.positions) ? requirements.positions : [];
         const compressed = requirements.matrix || {};
+        
+        // Cada llave en el compressed es un index (0... 20). En PositionRequirements ahora arranca a las 08:00.
+        // Pero el mapa de calor (HOURS) empieza a las 06:00. Hay 2 horas de diferencia (8 intervalos de 15 mins).
+        // Rellenamos con 8 ceros primero para alinear, y luego expandimos repitiendo el valor 4 veces.
         const expanded = Object.keys(compressed)
             .sort((a, b) => Number(a) - Number(b))
-            .map(k => Object.values(compressed[k]));
+            .map(k => {
+                const sourceRow = compressed[k]; 
+                const fullRow = [];
+                
+                // Alineación de 06:00 a 08:00
+                for(let i = 0; i < 8; i++) fullRow.push(0);
+
+                for(let i=0; i<21; i++) {
+                   const qty = sourceRow[i] || 0;
+                   fullRow.push(qty, qty, qty, qty);
+                }
+                return fullRow.slice(0, HOURS.length);
+            });
 
         positions.forEach((pos, i) => {
             const norm = normalize(pos);

@@ -141,6 +141,12 @@ service cloud.firestore {
       allow write: if isSuperAdmin() || (isAdmin() && storeId == getUserStoreId());
     }
 
+    match /stores/{storeId}/sales_config/{docId} {
+      // Cualquier autenticado puede leer la configuración de ventas de la tienda
+      allow read: if isAuthenticated();
+      allow write: if isSuperAdmin() || (isAdmin() && storeId == getUserStoreId());
+    }
+
     match /positioning_requirements/{docId} {
       allow read: if isAuthenticated();
       allow write: if isSuperAdmin() || isAdmin();

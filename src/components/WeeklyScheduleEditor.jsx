@@ -154,6 +154,32 @@ export default function WeeklyScheduleEditor() {
         ].join('-');
     };
 
+    const [salesConfig, setSalesConfig] = useState({});
+
+    // === CARGA DATOS DE VENTA DIARIA PARA VHL/THL ===
+    useEffect(() => {
+        if (!storeId || !weekStartDate || !selectedDay) return;
+        const fetchSales = async () => {
+            try {
+                const dateStr = getSelectedDateStr();
+                if (!dateStr) return;
+                const [y, m, d] = dateStr.split('-');
+                const monthStr = `${y}-${m}`;
+                const docRef = doc(db, 'stores', storeId, 'sales_config', monthStr);
+                const snap = await getDoc(docRef);
+                if (snap.exists()) {
+                    const data = snap.data().monthlyData || {};
+                    setSalesConfig(data[Number(d)] || { vta: 0, txs: 0 });
+                } else {
+                    setSalesConfig({ vta: 0, txs: 0 });
+                }
+            } catch (e) {
+                console.error("Error loading sales config:", e);
+            }
+        };
+        fetchSales();
+    }, [storeId, weekStartDate, selectedDay]);
+
     // === OBTENER storeId del usuario ===
     useEffect(() => {
         if (!currentUser) return;
@@ -1808,10 +1834,78 @@ export default function WeeklyScheduleEditor() {
                     {/* Heatmap */}
                     <div className="w-full lg:w-5/12">
                         <div className="bg-white rounded-xl shadow-md p-3 sticky top-24">
-                            <h3 className="text-base font-bold text-gray-800 mb-2 flex items-center gap-2">
-                                <Clock className="w-4 h-4" />
-                                Mapa de Calor - {weekdayLabels[selectedDay]}
-                            </h3>
+                            <div className="mb-3">
+                                <h3 className="text-base font-bold text-gray-800 flex items-center gap-2">
+                                    <Clock className="w-4 h-4" />
+                                    Mapa de Calor - {weekdayLabels[selectedDay]}
+                                </h3>
+                                {(() => {
+                                    // Calcular métricas reales (VHL/THL)
+                                    let totalMinutes = 0;
+                                    let totalMinutesWithExtras = 0;
+                                    
+                                    activeStaff.forEach(p => {
+                                        const daySchedule = schedules[p.id]?.[selectedDay];
+                                        if (daySchedule && !daySchedule.off && !daySchedule.feriado && daySchedule.start && daySchedule.end) {
+                                            const s = timeToMinutes(daySchedule.start);
+                                            let e = timeToMinutes(daySchedule.end);
+                                            if (e <= s) e += 24 * 60;
+                                            
+                                            const baseMin = (e - s);
+                                            totalMinutes += baseMin;
+                                            
+                                            const pre = parseFloat(String(daySchedule.extraHoursPre || 0).replace(',', '.')) || 0;
+                                            const post = parseFloat(String((daySchedule.extraHoursPost ?? daySchedule.extraHours) || 0).replace(',', '.')) || 0;
+                                            
+                                            totalMinutesWithExtras += baseMin + (pre * 60) + (post * 60);
+                                        }
+                                    });
+                                    
+                                    const totalHours = totalMinutes / 60;
+                                    const totalHoursWithExtras = totalMinutesWithExtras / 60;
+                                    
+                                    const vta = Number(salesConfig.vta) || 0;
+                                    const txs = Number(salesConfig.txs) || 0;
+                                    
+                                    const vhl = totalHours > 0 ? (vta / totalHours).toFixed(1) : "0.0";
+                                    const thl = totalHours > 0 ? (txs / totalHours).toFixed(1) : "0.0";
+                                    
+                                    const vhlExt = totalHoursWithExtras > 0 ? (vta / totalHoursWithExtras).toFixed(1) : "0.0";
+                                    const thlExt = totalHoursWithExtras > 0 ? (txs / totalHoursWithExtras).toFixed(1) : "0.0";
+
+                                    return (
+                                        <div className="flex items-center justify-between gap-2 mt-2 bg-gray-50 p-2.5 rounded-lg border border-gray-200 shadow-sm flex-wrap">
+                                            <div className="flex flex-col gap-0.5 border-r border-gray-200 pr-3 w-1/4">
+                                                <span className="text-gray-500 text-[9px] uppercase font-bold tracking-wider">Ventas / TRX</span>
+                                                <span className="font-bold text-green-600 text-xs">
+                                                    S/ {Math.round(vta)} / {Math.round(txs)}
+                                                </span>
+                                            </div>
+                                            <div className="flex flex-col gap-0.5 border-r border-gray-200 pr-3 flex-1">
+                                                <span className="text-gray-500 text-[9px] uppercase font-bold tracking-wider">Total HH <span className="text-orange-500 lowercase opacity-80">(c/extras)</span></span>
+                                                <span className="font-bold text-indigo-600 text-xs">
+                                                    {Math.round(totalHours * 10) / 10}h 
+                                                    {totalHoursWithExtras > totalHours && <span className="text-orange-500 ml-1">({Math.round(totalHoursWithExtras * 10) / 10}h)</span>}
+                                                </span>
+                                            </div>
+                                            <div className="flex flex-col gap-0.5 border-r border-gray-200 pr-3 flex-1">
+                                                <span className="text-gray-500 text-[9px] uppercase font-bold tracking-wider">VHL <span className="text-orange-500 lowercase opacity-80">(c/extras)</span></span>
+                                                <span className="font-bold text-blue-600 text-xs">
+                                                    S/ {vhl} 
+                                                    {totalHoursWithExtras > totalHours && <span className="text-orange-500 ml-1">(S/ {vhlExt})</span>}
+                                                </span>
+                                            </div>
+                                            <div className="flex flex-col gap-0.5 flex-1">
+                                                <span className="text-gray-500 text-[9px] uppercase font-bold tracking-wider">THL <span className="text-orange-500 lowercase opacity-80">(c/extras)</span></span>
+                                                <span className="font-bold text-purple-600 text-xs">
+                                                    {thl} 
+                                                    {totalHoursWithExtras > totalHours && <span className="text-orange-500 ml-1">({thlExt})</span>}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
+                            </div>
                             <div className="h-[calc(100vh-280px)] overflow-auto">
                                 <ScheduleHeatmapMatrix
                                     key={selectedDay}

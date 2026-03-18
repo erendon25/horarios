@@ -9,8 +9,11 @@ import {
 import { useParams, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { collection, getDocs, query, where } from 'firebase/firestore';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { 
     Calendar, 
+    Download,
     Save, 
     Trash2, 
     Copy, 
@@ -29,8 +32,8 @@ import {
     Settings
 } from 'lucide-react';
 
-export const hours = Array.from({ length: 81 }, (_, i) => {
-    const totalMinutes = 360 + i * 15; // 06:00 = 360 minutos
+export const hours = Array.from({ length: 21 }, (_, i) => {
+    const totalMinutes = 480 + i * 60; // 08:00 = 480 minutos. Como en excel arranca a las 08:00.
     const h = Math.floor(totalMinutes / 60);
     const m = totalMinutes % 60;
     return `${String(h % 24).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
@@ -70,15 +73,27 @@ export default function PositionRequirements() {
     const [selectedDays, setSelectedDays] = useState([]);
     const [storeId, setStoreId] = useState('');
     const [loading, setLoading] = useState(true);
+    const [isSaving, setIsSaving] = useState(false);
 
     const isDragging = useRef(false);
-    const dragMode = useRef('add');// ←←← AÑADE ESTO AQUÍ ↓↓↓
-    const [staffCount, setStaffCount] = useState(null); // null = cargando, número = real
+    const dragMode = useRef('add');
+    const [staffCount, setStaffCount] = useState(null); 
     const [stats, setStats] = useState({
         totalPersonHours: 0,
         maxConcurrent: 0,
         fullTimeNeeded: 0
     });
+    
+    // ======== VENTAS ========
+    const [salesConfig, setSalesConfig] = useState({ vta: 0, txs: 0, hourlyParts: {} });
+    const [weekStartDate, setWeekStartDate] = useState(() => {
+        const d = new Date();
+        const startDiff = d.getDate() - d.getDay() + (d.getDay() === 0 ? -6 : 1); 
+        const monday = new Date(d.setDate(startDiff));
+        return `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, '0')}-${String(monday.getDate()).padStart(2, '0')}`;
+    });
+    // ========================
+
     const tableScrollRef = useRef(null);
     const scrollDragging = useRef(false);
     const scrollStartX = useRef(0);
@@ -230,7 +245,60 @@ export default function PositionRequirements() {
         fetchData();
     }, [day, storeId]);
 
+    // ==================== CARGA CONFIGURACIÓN DE VENTAS ====================
+    useEffect(() => {
+        if (!storeId || !weekStartDate || !day) return;
+
+        const fetchSales = async () => {
+            const shiftDays = { monday: 0, tuesday: 1, wednesday: 2, thursday: 3, friday: 4, saturday: 5, sunday: 6 };
+            const [baseY, baseM, baseD] = weekStartDate.split('-');
+            const targetDate = new Date(baseY, parseInt(baseM) - 1, parseInt(baseD));
+            
+            // Sumamos los días que hayan pasado desde el lunes
+            targetDate.setDate(targetDate.getDate() + (shiftDays[day] || 0));
+
+            const currentMonth = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}`;
+            const numericDay = targetDate.getDate().toString();
+
+            try {
+                const docRef = doc(db, 'stores', storeId, 'sales_config', currentMonth);
+                const snap = await getDoc(docRef);
+
+                if (snap.exists()) {
+                    const data = snap.data();
+                    const monthData = data.monthlyData || {};
+                    const hourlyParts = data.hourlyParticipation || {};
+                    const dailyHourlyParts = data.dailyHourlyParts || {};
+                    
+                    const dayData = monthData[numericDay] || {};
+                    
+                    const yr = targetDate.getFullYear();
+                    const mo = String(targetDate.getMonth() + 1).padStart(2, '0');
+                    const da = String(targetDate.getDate()).padStart(2, '0');
+                    const targetDateStr = `${yr}-${mo}-${da}`;
+
+                    const specificHourlyParts = dailyHourlyParts[targetDateStr] || hourlyParts;
+
+                    setSalesConfig({
+                        vta: Number(dayData.vta || 0),
+                        txs: Number(dayData.txs || 0),
+                        hourlyParts: specificHourlyParts
+                    });
+                } else {
+                    setSalesConfig({ vta: 0, txs: 0, hourlyParts: {} });
+                }
+            } catch (e) {
+                console.error("Error loading sales", e);
+            }
+        };
+
+        fetchSales();
+    }, [storeId, weekStartDate, day]);
+
+
     // ==================== FUNCIONES DE EDICIÓN ====================
+    const lastHoveredCell = useRef({ row: -1, col: -1 });
+
     const mutateCell = (row, col, type) => {
         setMatrix(prev => prev.map((r, i) =>
             i === row ? r.map((v, j) => j === col ? (type === 'add' ? v + 1 : Math.max(0, v - 1)) : v) : r
@@ -241,25 +309,34 @@ export default function PositionRequirements() {
         if (e.buttons !== 1) return;
         isDragging.current = true;
         dragMode.current = e.ctrlKey || e.metaKey ? 'subtract' : 'add';
+        lastHoveredCell.current = { row, col };
         updateCell(row, col, dragMode.current);
     };
 
     const onCellMouseEnter = (row, col) => {
-        if (isDragging.current) {
-            updateCell(row, col, dragMode.current);
-        }
+        if (!isDragging.current) return;
+        if (lastHoveredCell.current.row === row && lastHoveredCell.current.col === col) return;
+        
+        lastHoveredCell.current = { row, col };
+        updateCell(row, col, dragMode.current);
     };
+
     const updateCell = (row, col, mode) => {
         setMatrix(prev => {
             const newMatrix = [...prev];
             newMatrix[row] = [...(newMatrix[row] || Array(hours.length).fill(0))];
             const current = newMatrix[row][col] || 0;
+            // Para pintar sumas 1. Para borrar bajas a 0 directamente si está pintado, o restas 1 (si quieres borrado parcial)
+            // Aquí lo dejaremos sumando o restando 1 siempre
             newMatrix[row][col] = mode === 'add' ? current + 1 : Math.max(0, current - 1);
             return newMatrix;
         });
     };
 
-    const onMouseUp = () => { isDragging.current = false; };
+    const onMouseUp = () => { 
+        isDragging.current = false; 
+        lastHoveredCell.current = { row: -1, col: -1 };
+    };
 
     useEffect(() => {
         window.addEventListener('mouseup', onMouseUp);
@@ -288,11 +365,112 @@ export default function PositionRequirements() {
         }
     };
 
+    // ==================== EXPORTAR A PDF (Estilo Excel) ====================
+    const exportToPDF = () => {
+        if (positions.length === 0) return alert('No hay posiciones para exportar');
+
+        // Formato personalizado para asegurar el ancho total de 81 columnas sin interrupción.
+        const doc = new jsPDF({
+            orientation: 'landscape',
+            unit: 'pt',
+            format: [1450, 800] 
+        });
+
+        doc.setFontSize(22);
+        doc.text(`PLANIFICACIÓN DIARIA - ${weekdayLabels[day].toUpperCase()}`, 30, 35);
+
+        // Header: Una sola fila con "POSICIÓN / HORA" y los nombres de las horas en :00
+        const headRow = [
+            { content: 'POSICIÓN / HORA', styles: { halign: 'center' } }
+        ];
+        hours.forEach((h, i) => {
+            headRow.push({
+                content: h.replace(/^0/, ''),
+                styles: { halign: 'center', cellPadding: 1, fontSize: 8 }
+            });
+        });
+        headRow.push({ content: 'TOTAL', styles: { halign: 'center' } });
+
+        // Body: Índices, nombres, matriz y sumas por fila
+        const bodyData = positions.map((pos, r) => {
+            const rowSum = matrix[r].reduce((a, b) => a + (b || 0), 0);
+            return [
+                `${r + 1} ${pos.toUpperCase()}`,
+                ...hours.map((_, c) => matrix[r]?.[c] || ''),
+                rowSum > 0 ? rowSum : ''
+            ];
+        });
+
+        // Foot: Subtotales por cada columna de los 15 mins (Total Personal)
+        const colSums = hours.map((_, c) => matrix.reduce((sum, row) => sum + (row[c] || 0), 0));
+        const totalAll = colSums.reduce((a, b) => a + b, 0);
+
+        const footRow = [
+            'TOTAL',
+            ...colSums.map(s => s > 0 ? s : ''),
+            totalAll
+        ];
+
+        // Anchos y estilos específicos de cada columna para que sea una matriz cuadrada
+        const colStyles = {
+            0: { halign: 'right', cellWidth: 150, fillColor: [255, 255, 255], fontStyle: 'bold' }
+        };
+        for(let i = 1; i <= hours.length; i++) {
+            colStyles[i] = { halign: 'center', cellWidth: 14 };
+        }
+        colStyles[hours.length + 1] = { halign: 'center', cellWidth: 40, fontStyle: 'bold' };
+
+        autoTable(doc, {
+            head: [headRow],
+            body: bodyData,
+            foot: [footRow],
+            startY: 50,
+            theme: 'grid',
+            styles: {
+                fontSize: 8,
+                cellPadding: 2,
+                lineColor: [180, 180, 180],
+                lineWidth: 0.5
+            },
+            columnStyles: colStyles,
+            headStyles: {
+                fillColor: [0, 0, 0], // Fondo de encabezado negro
+                textColor: [255, 255, 255],
+            },
+            footStyles: {
+                fillColor: [255, 255, 180], // Color amarillo suave estilo total summary excel
+                textColor: [0, 0, 0],
+                fontStyle: 'bold',
+                halign: 'center'
+            },
+            didParseCell: function(data) {
+                // Modificar celdas internas para aplicar los bloques rojos
+                if (data.section === 'body') {
+                    if (data.column.index > 0 && data.column.index <= hours.length) {
+                        const val = data.cell.raw;
+                        if (val > 0) {
+                            data.cell.styles.fillColor = [204, 0, 0]; // Bloque rojo vibrante
+                            data.cell.styles.textColor = [255, 255, 255]; // Texto en blanco brillante
+                        } else {
+                            data.cell.styles.textColor = [255, 255, 255]; // Ocultar el texto 0 en celdas vacías
+                        }
+                    } else if (data.column.index === 0) {
+                        data.cell.styles.textColor = [0, 0, 0];
+                    }
+                }
+            },
+            margin: { top: 20, left: 20, right: 20 }
+        });
+
+        doc.save(`Requerimientos_${weekdayLabels[day]}_ExcelFormato.pdf`);
+    };
+
     // ==================== GUARDADO ====================
     const save = async () => {
         if (positions.length === 0) return alert('Agrega al menos una posición');
 
         const compressed = compressMatrix(matrix);
+        setIsSaving(true);
 
         try {
             const docRef = doc(db, 'stores', storeId, 'positioning_requirements', day);
@@ -305,6 +483,8 @@ export default function PositionRequirements() {
         } catch (e) {
             console.error(e);
             alert('Error al guardar');
+        } finally {
+            setIsSaving(false);
         }
     };
 
@@ -317,16 +497,24 @@ export default function PositionRequirements() {
         if (selectedDays.length === 0) return;
 
         const compressed = compressMatrix(matrix);
+        setIsSaving(true);
 
-        const promises = selectedDays.map(d => {
-            const ref = doc(db, 'stores', storeId, 'positioning_requirements', d);
-            return setDoc(ref, { positions, matrix: compressed }, { merge: true });
-        });
+        try {
+            const promises = selectedDays.map(d => {
+                const ref = doc(db, 'stores', storeId, 'positioning_requirements', d);
+                return setDoc(ref, { positions, matrix: compressed }, { merge: true });
+            });
 
-        await Promise.all(promises);
-        alert('Duplicado correctamente');
-        setShowDuplicate(false);
-        setSelectedDays([]);
+            await Promise.all(promises);
+            alert('Duplicado correctamente');
+            setShowDuplicate(false);
+            setSelectedDays([]);
+        } catch (e) {
+            console.error(e);
+            alert('Error al duplicar');
+        } finally {
+            setIsSaving(false);
+        }
     };
 
         // ==================== CARGA CONTEO DE EMPLEADOS REALES ====================
@@ -388,7 +576,20 @@ export default function PositionRequirements() {
     }
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 select-none">
+        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 select-none relative">
+            {/* Pantalla de carga superpuesta al guardar */}
+            {isSaving && (
+                <div className="fixed inset-0 bg-black/50 z-[100] flex flex-col items-center justify-center backdrop-blur-sm transition-all opacity-100">
+                    <div className="bg-white p-8 rounded-2xl shadow-2xl flex flex-col items-center gap-4 transform transition-all scale-100">
+                         <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent"></div>
+                         <div className="text-center">
+                             <p className="text-gray-800 font-extrabold text-xl">Guardando cambios...</p>
+                             <p className="text-gray-500 text-sm mt-1">Por favor, espera un momento</p>
+                         </div>
+                    </div>
+                </div>
+            )}
+
             {/* Header con navegación */}
             <div className="bg-white shadow-md border-b border-gray-200 sticky top-0 z-40">
                 <div className="max-w-full mx-auto px-4 sm:px-6 lg:px-8 py-4">
@@ -433,21 +634,49 @@ export default function PositionRequirements() {
                 {/* SELECTOR DE DÍA Y BOTONES */}
                 <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
                     <div className="flex flex-wrap items-center gap-4">
-                        <div className="flex items-center gap-3">
+                        <div className="flex flex-wrap items-center gap-3">
                             <Calendar className="w-5 h-5 text-gray-500" />
-                            <label className="font-semibold text-gray-700">Día:</label>
+                            <label className="font-semibold text-gray-700">Día de la semana:</label>
                             <select
                                 value={day}
                                 onChange={e => setDay(e.target.value)}
-                                className="border-2 border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white font-medium"
+                                className="border-2 border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white font-medium shadow-sm"
                             >
                                 {weekdays.map(d => (
                                     <option key={d} value={d}>{weekdayLabels[d]}</option>
                                 ))}
                             </select>
+
+                            <div className="hidden sm:block w-px h-8 bg-gray-300 mx-2"></div>
+                            
+                            <label className="font-semibold text-gray-700">El Lunes de esta semana fue el día:</label>
+                            <input
+                                type="date"
+                                value={weekStartDate}
+                                onChange={e => setWeekStartDate(e.target.value)}
+                                className="border-2 border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white font-medium shadow-sm text-blue-800"
+                            />
+                            
+                            <div className="ml-2 px-3 py-1 bg-blue-50 border border-blue-200 text-blue-800 text-xs font-bold rounded-full">
+                                {(() => {
+                                    if (!weekStartDate) return '';
+                                    const shiftDays = { monday: 0, tuesday: 1, wednesday: 2, thursday: 3, friday: 4, saturday: 5, sunday: 6 };
+                                    const [baseY, baseM, baseD] = weekStartDate.split('-');
+                                    const targetDate = new Date(baseY, parseInt(baseM) - 1, parseInt(baseD));
+                                    targetDate.setDate(targetDate.getDate() + (shiftDays[day] || 0));
+                                    return `Ventas del: ${targetDate.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' })}`;
+                                })()}
+                            </div>
                         </div>
 
                         <div className="flex flex-wrap gap-3 ml-auto">
+                            <button
+                                onClick={exportToPDF}
+                                className="flex items-center gap-2 bg-gradient-to-r from-teal-500 to-teal-600 text-white px-5 py-2.5 rounded-lg font-semibold shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200"
+                            >
+                                <Download className="w-4 h-4" />
+                                Descargar PDF
+                            </button>
                             <button 
                                 onClick={save} 
                                 className="flex items-center gap-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white px-5 py-2.5 rounded-lg font-semibold shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200"
@@ -574,25 +803,84 @@ export default function PositionRequirements() {
                             WebkitOverflowScrolling: 'touch'
                         }}
                     >
-                        <table className="table-fixed" style={{ minWidth: '100%', width: 'max-content' }}>
+                        {/* MÉTRICAS SUPERIORES (Estilo Excel) */}
+                        <div className="min-w-max border-b-[3px] border-black bg-white sticky top-0 z-30 shadow-[0_4px_6px_-1px_rgba(0,0,0,0.1)]">
+                            {/* Fila TOTAL HH */}
+                            <div className="flex">
+                                <div className="w-[140px] px-3 py-1 text-right text-xs font-bold text-gray-800 border-r border-gray-300">TOTAL HH</div>
+                                {hours.map((_, col) => {
+                                    const sumHr = matrix.reduce((acc, row) => acc + (row[col] || 0), 0);
+                                    return <div key={col} className="w-[60px] text-center text-xs font-bold text-gray-800 border-r border-gray-200 py-1">{sumHr}</div>;
+                                })}
+                                <div className="w-[60px] text-center text-xs font-black py-1">
+                                    {matrix.reduce((tAcc, row) => tAcc + row.reduce((cAcc, c) => cAcc + (c||0), 0), 0)}
+                                </div>
+                            </div>
+                            {/* Fila VTA */}
+                            <div className="flex">
+                                <div className="w-[140px] px-3 py-1 text-right text-xs font-bold text-gray-800 border-r border-gray-300">VTA</div>
+                                {hours.map((h, col) => {
+                                    const prc = Number(salesConfig.hourlyParts[h] || 0) / 100;
+                                    const vtaHr = Math.round(salesConfig.vta * prc);
+                                    return <div key={col} className="w-[60px] text-center text-[11px] text-gray-700 border-r border-gray-200 py-1">S/{vtaHr}</div>;
+                                })}
+                                <div className="w-[60px] text-center text-xs font-bold py-1 bg-blue-50/50">S/ {Math.round(salesConfig.vta)}</div>
+                            </div>
+                            {/* Fila TXS */}
+                            <div className="flex">
+                                <div className="w-[140px] px-3 py-1 text-right text-xs font-bold text-gray-800 border-r border-gray-300">TXS</div>
+                                {hours.map((h, col) => {
+                                    const prc = Number(salesConfig.hourlyParts[h] || 0) / 100;
+                                    const txsHr = Math.round(salesConfig.txs * prc);
+                                    return <div key={col} className="w-[60px] text-center text-xs text-gray-700 border-r border-gray-200 py-1">{txsHr}</div>;
+                                })}
+                                <div className="w-[60px] text-center text-xs font-bold py-1 bg-gray-50">{Math.round(salesConfig.txs)}</div>
+                            </div>
+                            {/* Fila VHL */}
+                            <div className="flex">
+                                <div className="w-[140px] px-3 py-1 text-right text-xs font-bold text-gray-800 border-r border-gray-300">VHL</div>
+                                {hours.map((h, col) => {
+                                    const prc = Number(salesConfig.hourlyParts[h] || 0) / 100;
+                                    const vtaHr = salesConfig.vta * prc;
+                                    const sumHr = matrix.reduce((acc, row) => acc + (row[col] || 0), 0);
+                                    const vhl = sumHr > 0 ? (vtaHr / sumHr).toFixed(1) : "0.0";
+                                    return <div key={col} className="w-[60px] text-center text-xs text-gray-700 border-r border-gray-200 py-1">{vhl}</div>;
+                                })}
+                                <div className="w-[60px]"></div>
+                            </div>
+                            {/* Fila THL */}
+                            <div className="flex border-b border-gray-300">
+                                <div className="w-[140px] px-3 py-1 text-right text-xs font-bold text-gray-800 border-r border-gray-300">THL</div>
+                                {hours.map((h, col) => {
+                                    const prc = Number(salesConfig.hourlyParts[h] || 0) / 100;
+                                    const txsHr = salesConfig.txs * prc;
+                                    const sumHr = matrix.reduce((acc, row) => acc + (row[col] || 0), 0);
+                                    const thl = sumHr > 0 ? (txsHr / sumHr).toFixed(1) : "0.0";
+                                    return <div key={col} className="w-[60px] text-center text-xs text-gray-700 border-r border-gray-200 py-1">{thl}</div>;
+                                })}
+                                <div className="w-[60px]"></div>
+                            </div>
+                        </div>
+
+                        <table className="table-fixed mt-0" style={{ minWidth: '100%', width: 'max-content' }}>
                             <colgroup>
                                 <col style={{ width: '140px' }} />
                                 {hours.map((_, i) => (
-                                    <col key={i} style={{ width: '26px' }} />
+                                    <col key={i} style={{ width: '60px' }} />
                                 ))}
                                 <col style={{ width: '60px' }} />
                             </colgroup>
-                            <thead className="sticky top-0 bg-gray-100 z-10">
+                            <thead className="bg-[#000000]">
                                 <tr>
-                                    <th className="border border-gray-300 px-3 py-1.5 text-gray-800 font-bold text-xs sticky left-0 z-20 bg-gray-100">
+                                    <th className="border-r border-gray-600 px-3 py-2 text-white font-bold text-xs sticky left-0 z-20 bg-black">
                                         Posición
                                     </th>
                                     {hours.map((h, i) => (
-                                        <th key={i} className="border border-gray-300 px-1 py-1 text-gray-700 font-semibold text-[10px] whitespace-nowrap bg-gray-50" style={{ width: '26px' }}>
+                                        <th key={i} className="border-r border-gray-600 px-1 py-2 text-yellow-500 font-bold text-xs text-center">
                                             {h.replace(/^0/, '')}
                                         </th>
                                     ))}
-                                    <th className="border border-gray-300 px-2 py-1.5 text-gray-800 font-bold text-xs bg-gray-100">Acción</th>
+                                    <th className="border-l border-gray-600 px-2 py-2 text-white font-bold text-xs">Acción</th>
                                 </tr>
                             </thead>
                             <tbody className="bg-white">
@@ -621,12 +909,11 @@ export default function PositionRequirements() {
                                                     key={c}
                                                     onMouseDown={e => onCellMouseDown(r, c, e)}
                                                     onMouseEnter={() => onCellMouseEnter(r, c)}
-                                                    className={`border border-gray-200 text-center cursor-pointer transition-all ${
+                                                    className={`border border-gray-300 border-dotted text-center text-sm font-bold cursor-pointer transition-all ${
                                                         matrix[r]?.[c] > 0 
-                                                            ? 'bg-gradient-to-br from-orange-400 to-orange-500 text-white font-bold shadow-sm' 
-                                                            : 'hover:bg-blue-100'
+                                                            ? 'bg-[#cc0000] text-white shadow-none'
+                                                            : 'text-transparent hover:bg-blue-100 hover:text-blue-300'
                                                     }`}
-                                                    style={{ width: '26px', height: '20px', fontSize: '11px' }}
                                                     title={matrix[r]?.[c] > 0 ? `${matrix[r][c]} persona(s) - Click para aumentar, Ctrl+Click para disminuir` : 'Click para agregar, Ctrl+Click para quitar'}
                                                 >
                                                     {matrix[r]?.[c] || ''}
@@ -656,31 +943,14 @@ export default function PositionRequirements() {
                 </div>
                                                {/* ====== CONTADOR REALISTA: ¿Puedes cubrirlo con tu plantilla actual? ====== */}
             {positions.length > 0 && (() => {
-                // Cálculo de demanda
+                // Cálculo de VHL y THL Diario
                 const totalPersonHours = matrix.reduce((dayTotal, row) =>
                     dayTotal + row.reduce((sum, cell) => sum + (cell || 0), 0), 0);
-
-                const maxConcurrent = Math.max(
-                    ...Array.from({ length: hours.length }, (_, col) =>
-                        matrix.reduce((sum, row) => sum + (row[col] || 0), 0)
-                    ), 0
-                );
-
-                // Tu plantilla real
-                const availableStaff = staffCount || 0;
-
-                // ¿Cuántas personas MÍNIMAS necesitas trabajando ese día?
-                const minPeopleNeeded = maxConcurrent; // Nunca puedes bajar del pico
-
-                // ¿Puedes cubrirlo con turnos cruzados (mañana + tarde + noche)?
-                const canCoverWithShifts = availableStaff >= minPeopleNeeded;
-
-                // Estimación inteligente: cuántos empleados necesitas "activos" ese día
-                const estimatedActiveThatDay = Math.max(minPeopleNeeded, Math.ceil(totalPersonHours / 10)); // 10h promedio por persona con descansos
-
-                const coveragePercentage = availableStaff > 0 
-                    ? Math.min(100, Math.round((availableStaff / Math.max(minPeopleNeeded, 10)) * 100)) 
-                    : 0;
+                
+                const dailyVTA = Math.round(salesConfig.vta || 0);
+                const dailyTXS = Math.round(salesConfig.txs || 0);
+                const dailyVHL = totalPersonHours > 0 ? (dailyVTA / totalPersonHours).toFixed(1) : "0.0";
+                const dailyTHL = totalPersonHours > 0 ? (dailyTXS / totalPersonHours).toFixed(1) : "0.0";
 
                 return (
                     <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 rounded-xl shadow-lg p-6 border-2 border-blue-200">
@@ -690,95 +960,51 @@ export default function PositionRequirements() {
                             </div>
                             <div>
                                 <h3 className="text-2xl font-bold text-gray-800">
-                                    Cobertura real para {weekdayLabels[day]}
+                                    Productividad Estimada del Día
                                 </h3>
-                                {staffCount !== null && (
-                                    <p className="text-sm text-gray-600 mt-1">
-                                        Tienes <strong className="text-blue-600">{availableStaff}</strong> empleados en plantilla
-                                    </p>
-                                )}
+                                <p className="text-sm text-gray-600 mt-1">
+                                    Resumen de VHL y THL basado en tu Venta (S/{dailyVTA}) y Transacciones ({dailyTXS}) totales.
+                                </p>
                             </div>
                         </div>
 
-                        {staffCount === null ? (
-                            <p className="text-center text-gray-500">Cargando plantilla...</p>
-                        ) : (
-                            <>
-                                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-                                    <div className="bg-white rounded-xl p-6 shadow-md border-2 border-blue-200 hover:shadow-lg transition-shadow">
-                                        <div className="flex items-center gap-3 mb-2">
-                                            <Users className="w-6 h-6 text-blue-600" />
-                                            <span className="text-xs font-semibold text-gray-600 uppercase">Pico simultáneo</span>
-                                        </div>
-                                        <div className="text-4xl font-bold text-blue-600">{maxConcurrent}</div>
-                                        <div className="text-xs text-gray-500 mt-1">personas máximo</div>
-                                    </div>
-
-                                    <div className="bg-white rounded-xl p-6 shadow-md border-2 border-purple-200 hover:shadow-lg transition-shadow">
-                                        <div className="flex items-center gap-3 mb-2">
-                                            <AlertCircle className="w-6 h-6 text-purple-600" />
-                                            <span className="text-xs font-semibold text-gray-600 uppercase">Mínimo necesarios</span>
-                                        </div>
-                                        <div className="text-4xl font-bold text-purple-600">{minPeopleNeeded}</div>
-                                        <div className="text-xs text-gray-500 mt-1">personas requeridas</div>
-                                    </div>
-
-                                    <div className={`bg-white rounded-xl p-6 shadow-md border-2 ${canCoverWithShifts ? 'border-green-200' : 'border-red-200'} hover:shadow-lg transition-shadow`}>
-                                        <div className="flex items-center gap-3 mb-2">
-                                            <CheckCircle2 className={`w-6 h-6 ${canCoverWithShifts ? 'text-green-600' : 'text-red-600'}`} />
-                                            <span className="text-xs font-semibold text-gray-600 uppercase">Plantilla disponible</span>
-                                        </div>
-                                        <div className={`text-4xl font-bold ${canCoverWithShifts ? 'text-green-600' : 'text-red-600'}`}>
-                                            {availableStaff}
-                                        </div>
-                                        <div className={`text-xs font-semibold mt-1 ${canCoverWithShifts ? 'text-green-700' : 'text-red-700'}`}>
-                                            {canCoverWithShifts ? '✓ Puedes cubrirlo' : '✗ No alcanzas'}
-                                        </div>
-                                    </div>
-
-                                    <div className="bg-white rounded-xl p-6 shadow-md border-2 border-orange-200 hover:shadow-lg transition-shadow">
-                                        <div className="flex items-center gap-3 mb-2">
-                                            <Clock className="w-6 h-6 text-orange-600" />
-                                            <span className="text-xs font-semibold text-gray-600 uppercase">Cobertura real</span>
-                                        </div>
-                                        <div className="text-4xl font-bold text-orange-600">
-                                            {coveragePercentage}%
-                                        </div>
-                                        <div className="text-xs text-gray-500 mt-1">de capacidad</div>
-                                    </div>
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-2">
+                            <div className="bg-white rounded-xl p-6 shadow-md border-2 border-indigo-100 hover:shadow-lg transition-shadow">
+                                <div className="flex items-center gap-3 mb-2">
+                                    <Clock className="w-6 h-6 text-indigo-600" />
+                                    <span className="text-xs font-semibold text-gray-600 uppercase">Total Horas Hombre</span>
                                 </div>
+                                <div className="text-4xl font-bold text-indigo-600">{totalPersonHours}</div>
+                                <div className="text-xs text-gray-500 mt-1">horas asignadas en el día</div>
+                            </div>
 
-                                <div className={`p-6 rounded-xl border-2 ${canCoverWithShifts ? 'bg-green-50 border-green-300' : 'bg-red-50 border-red-300'}`}>
-                                    <div className="flex items-start gap-3">
-                                        {canCoverWithShifts ? (
-                                            <CheckCircle2 className="w-6 h-6 text-green-600 flex-shrink-0 mt-0.5" />
-                                        ) : (
-                                            <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
-                                        )}
-                                        <div className="flex-1">
-                                            <p className={`font-bold mb-3 text-lg ${canCoverWithShifts ? 'text-green-900' : 'text-red-900'}`}>
-                                                Conclusión práctica:
-                                            </p>
-                                            
-                                            {canCoverWithShifts ? (
-                                                <div className="text-green-800 space-y-2 text-sm">
-                                                    <p className="font-semibold">¡Sí puedes cubrir este día con tu plantilla actual!</p>
-                                                    <p>Te sobran <strong className="text-green-900">{availableStaff - minPeopleNeeded} empleados</strong> → puedes dar descansos o reforzar limpieza.</p>
-                                                    <p>Recomendación: usa <strong>2–3 turnos cruzados</strong> (6–14, 12–20, 14–22).</p>
-                                                </div>
-                                            ) : (
-                                                <div className="text-red-800 space-y-2 text-sm">
-                                                    <p className="font-semibold">No alcanzas a cubrir el pico de {maxConcurrent} personas.</p>
-                                                    <p>Te faltan <strong className="text-red-900">{minPeopleNeeded - availableStaff} empleados</strong> en el momento más crítico.</p>
-                                                    <p>Solución: contratar refuerzo o reducir requerimientos en horario pico.</p>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
+                            <div className="bg-white rounded-xl p-6 shadow-md border-2 border-green-100 hover:shadow-lg transition-shadow">
+                                <div className="flex items-center gap-3 mb-2">
+                                    <TrendingUp className="w-6 h-6 text-green-600" />
+                                    <span className="text-xs font-semibold text-gray-600 uppercase">Venta Esperada</span>
                                 </div>
+                                <div className="text-4xl font-bold text-green-600">S/{dailyVTA}</div>
+                                <div className="text-xs text-gray-500 mt-1">monto total proyectado</div>
+                            </div>
 
-                            </>
-                        )}
+                            <div className="bg-white rounded-xl p-6 shadow-md border-2 border-blue-200 hover:shadow-lg transition-shadow">
+                                <div className="flex items-center gap-3 mb-2">
+                                    <Users className="w-6 h-6 text-blue-600" />
+                                    <span className="text-xs font-semibold text-gray-600 uppercase">VHL General</span>
+                                </div>
+                                <div className="text-4xl font-bold text-blue-600">S/{dailyVHL}</div>
+                                <div className="text-xs text-gray-500 mt-1">rentabilidad por cada hora laboral</div>
+                            </div>
+
+                            <div className="bg-white rounded-xl p-6 shadow-md border-2 border-purple-200 hover:shadow-lg transition-shadow">
+                                <div className="flex items-center gap-3 mb-2">
+                                    <AlertCircle className="w-6 h-6 text-purple-600" />
+                                    <span className="text-xs font-semibold text-gray-600 uppercase">THL General</span>
+                                </div>
+                                <div className="text-4xl font-bold text-purple-600">{dailyTHL}</div>
+                                <div className="text-xs text-gray-500 mt-1">transacciones por hora laboral</div>
+                            </div>
+                        </div>
                     </div>
                 );
             })()}

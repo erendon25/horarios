@@ -10,6 +10,7 @@ import WeeklyScheduleEditor from './components/WeeklyScheduleEditor';
 import PositioningConfig from './components/PositioningConfig';
 import StudyScheduleViewer from './components/StudyScheduleViewer';
 import PositionRequirementsWrapper from './components/PositionRequirementsWrapper';
+import SalesConfig from './components/SalesConfig';
 
 import RequireAdmin from "./components/RequireAdmin";
 import HolidayForm from './components/HolidayForm';
@@ -80,6 +81,12 @@ function AppRouter() {
       <Route path="/admin/requirements/:day" element={
         <PrivateRoute role="admin">
           <PositionRequirementsWrapper />
+        </PrivateRoute>
+      } />
+
+      <Route path="/admin/ventas" element={
+        <PrivateRoute role="admin">
+          <SalesConfig />
         </PrivateRoute>
       } />
 
