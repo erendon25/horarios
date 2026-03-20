@@ -982,6 +982,13 @@ export default function WeeklyScheduleEditor() {
         return true;
     });
 
+    // Orden de modalidad para la tabla: Full Time primero, Part Time abajo (igual que PDF)
+    const modalityOrder = (person) => {
+        const dateStr = getSelectedDateStr();
+        const effModality = getEffectiveModality(person, dateStr);
+        return (effModality || '').toLowerCase() === 'full-time' ? 0 : 1;
+    };
+
     // 2. Filtrar activeStaff según inputs de la UI (Modalidad, Posición)
     // Usamos activeStaff como base para que los cesados no aparezcan en la tabla ni en los filtros
     const filteredStaff = activeStaff.filter(person => {
@@ -1019,6 +1026,14 @@ export default function WeeklyScheduleEditor() {
         if (excludeTraineesFilter && person.isTrainee) return false;
 
         return true;
+    }).sort((a, b) => {
+        // Full Time primero, Part Time abajo (igual que el PDF de horario)
+        const orderDiff = modalityOrder(a) - modalityOrder(b);
+        if (orderDiff !== 0) return orderDiff;
+        // Dentro del mismo grupo: orden alfabético por nombre
+        const nameA = `${a.name} ${a.lastName || ''}`.toLowerCase();
+        const nameB = `${b.name} ${b.lastName || ''}`.toLowerCase();
+        return nameA.localeCompare(nameB);
     });
 
 
