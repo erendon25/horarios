@@ -77,7 +77,7 @@ export default function PositionRequirements() {
 
     const isDragging = useRef(false);
     const dragMode = useRef('add');
-    const [staffCount, setStaffCount] = useState(null); 
+    const [staffCount, setStaffCount] = useState({ total: 0, ft: 0, pt: 0 }); 
     const [stats, setStats] = useState({
         totalPersonHours: 0,
         maxConcurrent: 0,
@@ -520,22 +520,36 @@ export default function PositionRequirements() {
         // ==================== CARGA CONTEO DE EMPLEADOS REALES ====================
     useEffect(() => {
         if (!storeId) {
-            setStaffCount(0);
+            setStaffCount({ total: 0, ft: 0, pt: 0 });
             return;
         }
 
         const fetchStaffCount = async () => {
             try {
                 const staffRef = collection(db, 'staff_profiles');
-                const q = query(
-    staffRef,
-    where('storeId', '==', storeId)
-);
-                const snap = await getDocs(q);
-                setStaffCount(snap.size);
+                let snap = await getDocs(query(staffRef, where('storeId', '==', storeId)));
+                
+                // Fallback para DBs antiguas sin storeId asignado a los perfiles
+                if (snap.empty) {
+                    snap = await getDocs(staffRef);
+                }
+
+                let ft = 0; let pt = 0;
+                snap.forEach(doc => {
+                    const data = doc.data();
+                    // Ignora a los trainees o a los que tienen cessation date
+                    if (data.isTrainee) return;
+                    if (data.cessationDate && new Date(data.cessationDate) <= new Date()) return;
+
+                    const mod = String(data.modality || '').toLowerCase();
+                    if (mod.includes('full')) ft++;
+                    else if (mod.includes('part')) pt++;
+                });
+
+                setStaffCount({ total: ft + pt, ft, pt });
             } catch (err) {
                 console.error('Error cargando plantilla:', err);
-                setStaffCount(0);
+                setStaffCount({ total: 0, ft: 0, pt: 0 });
             }
         };
 
@@ -943,12 +957,47 @@ export default function PositionRequirements() {
                 </div>
                                                {/* ====== CONTADOR REALISTA: ¿Puedes cubrirlo con tu plantilla actual? ====== */}
             {positions.length > 0 && (() => {
-                // Cálculo de VHL y THL Diario
+                // Cálculo de
                 const totalPersonHours = matrix.reduce((dayTotal, row) =>
                     dayTotal + row.reduce((sum, cell) => sum + (cell || 0), 0), 0);
-                
+
                 const dailyVTA = Math.round(salesConfig.vta || 0);
                 const dailyTXS = Math.round(salesConfig.txs || 0);
+                
+                // === LÓGICA DE FT / PT ===
+                let suggestedFT = 0;
+                let suggestedPT = 0;
+                const { ft, pt, total } = staffCount || { total: 0, ft: 0, pt: 0 };
+                const isFallback = (ft === 0 && pt === 0);
+                
+                if (isFallback) {
+                    // Si no hay datos, asumimos una relación genérica 50% FT y 50% PT (en horas)
+                    const neededFtHrs = totalPersonHours / 2;
+                    const neededPtHrs = totalPersonHours / 2;
+                    suggestedFT = Math.round(neededFtHrs / 8);
+                    suggestedPT = Math.round(neededPtHrs / 4);
+                } else {
+                    const maxFtHrs = ft * 8;
+                    const maxPtHrs = pt * 4;
+                    const totalCapacity = maxFtHrs + maxPtHrs;
+                    const ftRatio = totalCapacity > 0 ? (maxFtHrs / totalCapacity) : 0.5;
+
+                    // 1. Distribución proporcional pura e ideal
+                    const neededFtHrs = totalPersonHours * ftRatio;
+                    
+                    suggestedFT = Math.round(neededFtHrs / 8);
+                    
+                    // Asegurarnos de que asigne el resto de horas al PT
+                    const hoursCoveredByFt = suggestedFT * 8;
+                    const remainingForPt = totalPersonHours - hoursCoveredByFt;
+                    
+                    suggestedPT = Math.max(0, Math.ceil(remainingForPt / 4));
+                }
+                
+                const faltanteFT = suggestedFT > ft ? suggestedFT - ft : 0;
+                const faltantePT = suggestedPT > pt ? suggestedPT - pt : 0;
+                const isUnderstaffed = (faltanteFT > 0 || faltantePT > 0);
+                
                 const dailyVHL = totalPersonHours > 0 ? (dailyVTA / totalPersonHours).toFixed(1) : "0.0";
                 const dailyTHL = totalPersonHours > 0 ? (dailyTXS / totalPersonHours).toFixed(1) : "0.0";
 
@@ -1003,6 +1052,65 @@ export default function PositionRequirements() {
                                 </div>
                                 <div className="text-4xl font-bold text-purple-600">{dailyTHL}</div>
                                 <div className="text-xs text-gray-500 mt-1">transacciones por hora laboral</div>
+                            </div>
+                        </div>
+
+                        {/* Nueva fila para sugerencia de Turnos Optimizada */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                            <div className="bg-white rounded-xl p-6 shadow-md border-2 border-orange-200 hover:shadow-lg transition-shadow">
+                                <div className="flex items-center justify-between mb-4">
+                                    <div className="flex items-center gap-3">
+                                        <Users className="w-6 h-6 text-orange-500" />
+                                        <span className="text-sm font-bold text-gray-700 uppercase tracking-wide">Mix Sugerido</span>
+                                    </div>
+                                    <div className="px-3 py-1 bg-gray-100 text-gray-600 text-xs font-bold rounded-full">
+                                        Planilla: {ft} FT / {pt} PT
+                                    </div>
+                                </div>
+                                
+                                <div className="flex items-center gap-8">
+                                    <div className="flex flex-col">
+                                        <div className="flex items-end gap-1">
+                                            <span className="text-4xl font-black text-orange-600">{suggestedFT}</span>
+                                            <span className="text-lg font-bold text-gray-400 mb-1">FT</span>
+                                        </div>
+                                        <span className="text-xs font-medium text-gray-500 uppercase mt-1">Full-Time (8h)</span>
+                                    </div>
+
+                                    <div className="h-12 w-0.5 bg-gray-200"></div>
+
+                                    <div className="flex flex-col">
+                                        <div className="flex items-end gap-1">
+                                            <span className="text-4xl font-black text-amber-500">{suggestedPT}</span>
+                                            <span className="text-lg font-bold text-gray-400 mb-1">PT</span>
+                                        </div>
+                                        <span className="text-xs font-medium text-gray-500 uppercase mt-1">Part-Time (4h)</span>
+                                    </div>
+                                </div>
+                                <p className="text-xs text-gray-400 mt-4 leading-relaxed border-t border-gray-100 pt-3">
+                                    {isFallback 
+                                        ? `⚠️ No tienes personal FT/PT activo en tu planilla actual. Este es un cálculo genérico 50/50 para cubrir las ${totalPersonHours}h requeridas.`
+                                        : `El sistema balanceó tus necesidades (${totalPersonHours}h requeridas). Maximizó el uso de tus ${ft} FT, y calculó el resto en turnos PT de 4h.`
+                                    }
+                                </p>
+                                
+                                {isUnderstaffed && !isFallback && (
+                                    <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
+                                        <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+                                        <div>
+                                            <p className="text-xs font-bold text-red-700">¡Alerta de Faltante de Personal!</p>
+                                            <p className="text-xs text-red-600 mt-1">
+                                                Tu cuadro genera {totalPersonHours} Horas, superando tu capacidad máxima ideal (incluso sin descansos). <br/>
+                                                <strong>
+                                                    Te faltan: 
+                                                    {faltanteFT > 0 ? ` ${faltanteFT} Full-Time` : ''} 
+                                                    {faltanteFT > 0 && faltantePT > 0 ? ' y ' : ''}
+                                                    {faltantePT > 0 ? ` ${faltantePT} Part-Time` : ''}.
+                                                </strong>
+                                            </p>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>

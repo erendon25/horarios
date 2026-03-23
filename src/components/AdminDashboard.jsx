@@ -1128,6 +1128,15 @@ function AdminDashboard() {
                                     </span>
                                 )}
                             </button>
+                            {currentUser?.email === 'erickrendon18@gmail.com' && (
+                                <button
+                                    onClick={() => navigate("/superadmin")}
+                                    className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-700 to-fuchsia-700 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium border border-purple-400"
+                                >
+                                    <span className="text-sm">👑</span>
+                                    Superadmin
+                                </button>
+                            )}
                             <button
                                 onClick={handleLogout}
                                 className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-gray-700 to-gray-800 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"

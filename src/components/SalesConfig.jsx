@@ -3,8 +3,8 @@ import { getFirestore, doc, getDoc, setDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { Save, Calendar, Clock, DollarSign, Activity, TrendingUp, ArrowLeft, Upload } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import Papa from 'papaparse';
-import { hours } from './PositionRequirements'; // Reusar arreglo de horas
+import * as XLSX from 'xlsx';
+// Horas de jornada comercial: 06:00 → 05:00 (cubre turno de cierre + trasnoche)
 
 export default function SalesConfig() {
     const db = getFirestore();
@@ -28,6 +28,9 @@ export default function SalesConfig() {
     // Estado de Participación por Hora Día a Día
     const [dailyHourlyParts, setDailyHourlyParts] = useState({});
 
+    // Estado de Ventas Reales (desde Excel/CSV) para la tabla de Promedios Base
+    const [realSalesData, setRealSalesData] = useState({});
+
     // Cargar tienda del usuario
     useEffect(() => {
         const fetchStore = async () => {
@@ -49,11 +52,14 @@ export default function SalesConfig() {
                 const snap = await getDoc(docRef);
 
                 if (snap.exists()) {
-                    setMonthlyData(snap.data().monthlyData || {});
-                    setDailyHourlyParts(snap.data().dailyHourlyParts || {});
+                    const data = snap.data();
+                    setMonthlyData(data.monthlyData || {});
+                    setDailyHourlyParts(data.dailyHourlyParts || {});
+                    setRealSalesData(data.realSalesData || {});
                 } else {
                     setMonthlyData({});
                     setDailyHourlyParts({});
+                    setRealSalesData({});
                 }
             } catch (e) {
                 console.error("Error al cargar config de ventas: ", e);
@@ -122,46 +128,179 @@ export default function SalesConfig() {
         const file = e.target.files[0];
         if (!file) return;
 
-        Papa.parse(file, {
-            header: true,
-            dynamicTyping: true,
-            skipEmptyLines: true,
-            complete: (results) => {
-                const data = results.data;
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+            const data = evt.target.result;
+            const workbook = XLSX.read(data, { type: 'array', cellDates: true });
+            const sheetName = workbook.SheetNames[0];
+            const sheet = workbook.Sheets[sheetName];
+
+            // Extraer filas genéricas para ubicar la verdadera línea de cabeceras
+            const rowsArray = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+            console.log("Primeras filas para diagnostico interno: ", rowsArray.slice(0, 15));
+
+            let headerRowIndex = 0;
+            let maxMatches = 0;
+            const keywords = ['fecha', 'hora', 'pedido', 'documento', 'correlativo', 'caja', 'estado', 'total', 'importe', 'venta', 'cliente', 'canal', 'estadoitem'];
+            
+            // Buscar en las primeras 20 filas la que tenga la mayor concentración de palabras clave
+            for (let i = 0; i < Math.min(20, rowsArray.length); i++) {
+                const rowStr = rowsArray[i].map(c => String(c).toLowerCase().trim().replace(/\s/g, '')).join('|');
+                
+                let matchCount = 0;
+                for (let kw of keywords) {
+                    if (rowStr.includes(kw)) matchCount++;
+                }
+
+                if (matchCount > maxMatches) {
+                    maxMatches = matchCount;
+                    headerRowIndex = i;
+                }
+            }
+            console.log(">>> Cabecera real ganadora en la fila:", headerRowIndex, " con ", maxMatches, " coincidencias.");
+
+            // Convertir a JSON empezando desde la fila real de cabeceras
+            const rawData = XLSX.utils.sheet_to_json(sheet, {
+                range: headerRowIndex,
+                raw: true,      // preserva Date objects nativos
+                defval: '',
+            });
+
+            procesarRows(rawData);
+        };
+        reader.readAsArrayBuffer(file);
+        e.target.value = null;
+    };
+
+    const procesarRows = (data) => {
+        if (data.length === 0) return;
+
+        // Diagnóstico: columnas disponibles
+        console.log('=== DIAGNÓSTICO XLSX ===');
+        console.log('Primera fila campos:', Object.keys(data[0]));
+        console.log('Muestra:', { FechaPedido: data[0].FechaPedido || data[0].Fecha, Total: data[0].Total, Pedido: data[0].Pedido });
+        console.log('========================');
+
+
+                // Función utilitaria para buscar columnas sin importar espacios ni mayúsculas
+                const findValue = (row, possibleKeys) => {
+                    const keys = Object.keys(row);
+                    for (let key of keys) {
+                        if (possibleKeys.includes(key.trim().toLowerCase())) {
+                            return row[key];
+                        }
+                    }
+                    return undefined;
+                };
+
                 const ventasPorDiaHora = {}; 
                 const totalesDiarios = {};   
-                const txsDiarios = {}; // Nuevo: contar transacciones o tickets
+                const pedidosPorDia = {}; // Pedidos únicos por día para TXS correcto
 
                 data.forEach(fila => {
-                    const fechaRaw = fila.FechaPedido || fila['FechaPedido'] || fila['Fecha Pedido'] || fila['FECHA'] || fila['Fecha'] || fila['Date'];
-                    const totalRaw = fila.Total || fila['Total'] || fila['TOTAL'] || fila['Monto'] || fila['Venta'];
-                    const isTxn = fila.Total !== undefined || fila.Venta !== undefined;
+                    if (!fila || typeof fila !== 'object') return;
 
-                    if (!fechaRaw || totalRaw === undefined) return;
+                    // Ignorar ítems anulados/cancelados
+                    const estadoItem = String(findValue(fila, ['estadoitem', 'estado item', 'estado']) || '').trim().toLowerCase();
+                    if (estadoItem && (estadoItem.includes('anulad') || estadoItem.includes('cancel'))) return;
 
-                    const fechaObj = new Date(fechaRaw);
-                    if (isNaN(fechaObj.getTime())) return;
+                    // Si es Inforest, ignoramos su fila de resumen final
+                    const pedidoRaw = String(findValue(fila, ['pedido']) || '').trim();
+                    if (pedidoRaw.includes("Total Pedido")) return;
 
-                    const yr = fechaObj.getFullYear();
-                    const mo = String(fechaObj.getMonth() + 1).padStart(2, '0');
-                    const da = String(fechaObj.getDate()).padStart(2, '0');
-                    const fecha = `${yr}-${mo}-${da}`; 
+                    const fechaRaw = findValue(fila, ['fecha', 'fechapedido', 'fecha pedido', 'date']);
+                    const totalRaw = findValue(fila, ['total', 'monto', 'venta', 'ventas']);
                     
-                    const horaStr = String(fechaObj.getHours()).padStart(2, '0') + ':00';
-                    const monto = Number(totalRaw) || 0;
+                    if (!fechaRaw || totalRaw === undefined || totalRaw === null || totalRaw === '') return;
+
+                    // Parseo agnóstico de dinero (S/ 1,500.50 -> 1500.50)
+                    let numStr = String(totalRaw).replace(/[^\d.,-]/g, '');
+                    if (numStr.includes(',') && numStr.includes('.')) {
+                        if (numStr.indexOf(',') < numStr.indexOf('.')) {
+                            numStr = numStr.replace(/,/g, ''); // 1,500.50
+                        } else {
+                            numStr = numStr.replace(/\./g, '').replace(',', '.'); // 1.500,50
+                        }
+                    } else if (numStr.includes(',')) {
+                        numStr = numStr.replace(',', '.'); // 500,50
+                    }
+                    const monto = parseFloat(numStr);
+                    if (isNaN(monto) || monto === 0) return;
+
+                    // Parseo de fecha a prueba de balas
+                    let fechaObj;
+                    if (fechaRaw instanceof Date) {
+                        fechaObj = fechaRaw;
+                    } else if (typeof fechaRaw === 'string') {
+                        const cleanStr = fechaRaw.trim().replace(/\s+/g, ' ');
+                        const [datePart, ...timeParts] = cleanStr.split(' ');
+                        const timePart = timeParts.join(' ');
+                        const partes = datePart.split(/[\/\-]/);
+                        if (partes.length === 3) {
+                            let y, m, d;
+                            if (partes[0].length === 4) {
+                                y = parseInt(partes[0], 10); m = parseInt(partes[1], 10) - 1; d = parseInt(partes[2], 10);
+                            } else {
+                                d = parseInt(partes[0], 10); m = parseInt(partes[1], 10) - 1; y = parseInt(partes[2], 10);
+                                if (y < 100) y += 2000;
+                            }
+                            let hh = 0, mm2 = 0, ss = 0;
+                            if (timePart) {
+                                const tParts = timePart.split(':');
+                                hh = parseInt(tParts[0], 10) || 0; mm2 = parseInt(tParts[1], 10) || 0; ss = parseInt(tParts[2], 10) || 0;
+                            }
+                            fechaObj = new Date(y, m, d, hh, mm2, ss);
+                        } else {
+                            fechaObj = new Date(fechaRaw);
+                        }
+                    } else {
+                        fechaObj = new Date(fechaRaw);
+                    }
+
+                    if (!fechaObj || isNaN(fechaObj.getTime())) return;
+
+                    let yr = fechaObj.getFullYear();
+                    let mo = fechaObj.getMonth() + 1;
+                    let da = fechaObj.getDate();
+                    const rawHours = fechaObj.getHours();
+
+                    // Ajuste de Día de Negocio (Shift de Trasnoche)
+                    // Ventas registradas hasta las 05:59am se computan hacia el día anterior
+                    if (rawHours < 6) {
+                        const prevDay = new Date(fechaObj);
+                        prevDay.setDate(prevDay.getDate() - 1);
+                        yr = prevDay.getFullYear();
+                        mo = prevDay.getMonth() + 1;
+                        da = prevDay.getDate();
+                    }
+
+                    const fecha = `${yr}-${String(mo).padStart(2, '0')}-${String(da).padStart(2, '0')}`;
+                    const horaStr = String(rawHours).padStart(2, '0') + ':00'; 
 
                     if (!ventasPorDiaHora[fecha]) ventasPorDiaHora[fecha] = {};
                     ventasPorDiaHora[fecha][horaStr] = (ventasPorDiaHora[fecha][horaStr] || 0) + monto;
-
                     totalesDiarios[fecha] = (totalesDiarios[fecha] || 0) + monto;
-                    // Asumimos 1 fila = 1 transacción si no hay campo que indique lo contrario
-                    if (isTxn) {
-                        txsDiarios[fecha] = (txsDiarios[fecha] || 0) + 1;
-                    }
+
+                    // Contar Pedidos ÚNICOS por día (no ítems individuales)
+                    if (!pedidosPorDia[fecha]) pedidosPorDia[fecha] = new Set();
+                    if (pedidoRaw) pedidosPorDia[fecha].add(pedidoRaw);
                 });
 
+                // Log de totales por fecha para diagnóstico
+                console.log('=== TOTALES PARSEADOS POR FECHA ===');
+                Object.keys(totalesDiarios).sort().forEach(f => {
+                    console.log(`${f}: S/${totalesDiarios[f].toFixed(2)} | TXS: ${pedidosPorDia[f]?.size || 0}`);
+                });
+                console.log('===================================');
+
+                const txsDiarios = {};
+                Object.keys(pedidosPorDia).forEach(f => {
+                    txsDiarios[f] = pedidosPorDia[f].size;
+                });
+
+                // Mantener los metas manuales intactos
                 const participacionFinal = {}; 
-                const newMonthlyData = { ...monthlyData };
+                const newRealSalesData = {};
 
                 Object.keys(ventasPorDiaHora).forEach(fecha => {
                     participacionFinal[fecha] = {};
@@ -172,33 +311,17 @@ export default function SalesConfig() {
                                                                : "0.00";
                     });
 
-                    // Si el archivo contiene datos del mes seleccionado, llenamos automáticamente VTA y TXS
-                    if (fecha.startsWith(selectedMonth)) {
-                        const [,, dayStr] = fecha.split('-');
-                        const dayNum = parseInt(dayStr, 10);
-                        if (dayNum <= days.length) {
-                            newMonthlyData[dayNum] = {
-                                ...newMonthlyData[dayNum],
-                                vta: totalesDiarios[fecha].toFixed(2),
-                                // Solo actualizamos TXS si queremos, aquí sí
-                                txs: txsDiarios[fecha] ? String(txsDiarios[fecha]) : (newMonthlyData[dayNum]?.txs || '0')
-                            };
-                        }
-                    }
+                    // Guardar los totales reales de este CSV para promediarlos
+                    newRealSalesData[fecha] = {
+                        vta: totalesDiarios[fecha],
+                        txs: txsDiarios[fecha] || 0
+                    };
                 });
 
                 setDailyHourlyParts(participacionFinal);
-                setMonthlyData(newMonthlyData);
-                alert("¡Datos del CSV procesados correctamente!\n\nSe han autocompletado las Ventas (VTA) y Transacciones (TXS) del mes y se ha calculado la participación por día y hora.\nNo olvides dar clic en 'Guardar'.");
-            },
-            error: (err) => {
-                alert("Error al parsear el archivo. Verifica que sea un formato CSV válido: " + err.message);
-            }
-        });
-        
-        // Reset so it can be re-uploaded if needed
-        e.target.value = null;
-    };
+                setRealSalesData(newRealSalesData);
+                alert("¡Datos procesados! La matriz de participación por hora se ha rellenado correctamente con las proporciones leídas del archivo.\n\nEl cuadro de metas (Ventas Diarias) se mantiene intacto. No olvides guardar.");
+    }; // fin procesarRows
 
     const saveData = async () => {
         if (!storeId) return;
@@ -208,7 +331,8 @@ export default function SalesConfig() {
             const docRef = doc(db, 'stores', storeId, 'sales_config', selectedMonth);
             await setDoc(docRef, {
                 monthlyData,
-                dailyHourlyParts
+                dailyHourlyParts,
+                realSalesData
             }, { merge: true });
             
             alert('Configuración guardada correctamente.');
@@ -220,9 +344,11 @@ export default function SalesConfig() {
         }
     };
 
-    // Obtenemos solo las horas cerradas del archivo PositionRequirements
-    // ej: 06:00, 07:00, etc.
-    const hourlyLabels = hours.filter(h => h.endsWith(':00'));
+    // 24 horas en orden de jornada comercial (06:00 -> 05:00)
+    const hourlyLabels = Array.from({ length: 24 }, (_, i) => {
+        const h = (i + 6) % 24; // empieza en 6am, termina en 5am
+        return String(h).padStart(2, '0') + ':00';
+    });
 
     const averagesByWeekday = React.useMemo(() => {
         const result = [
@@ -240,9 +366,12 @@ export default function SalesConfig() {
         days.forEach(day => {
             const d = new Date(year, parseInt(month) - 1, day);
             const wKey = d.getDay();
-            const data = monthlyData[day];
-            const vta = Number(data?.vta || 0);
-            const txs = Number(data?.txs || 0);
+            const dateStr = `${year}-${month}-${String(day).padStart(2, '0')}`;
+            
+            // Usar Ventas Reales en lugar de Metas para el Promedio
+            const realData = realSalesData[dateStr] || {};
+            const vta = Number(realData.vta || 0);
+            const txs = Number(realData.txs || 0);
             
             const wObj = result.find(w => w.id === wKey);
             if (vta > 0 || txs > 0) {
@@ -250,8 +379,6 @@ export default function SalesConfig() {
                 wObj.txs += txs;
                 wObj.count += 1;
             }
-
-            const dateStr = `${year}-${month}-${String(day).padStart(2, '0')}`;
             const parts = dailyHourlyParts[dateStr];
             if (parts) {
                 hourlyLabels.forEach(hour => {
@@ -279,7 +406,7 @@ export default function SalesConfig() {
         });
 
         return result;
-    }, [selectedMonth, days, monthlyData, dailyHourlyParts, hourlyLabels]);
+    }, [selectedMonth, days, realSalesData, dailyHourlyParts, hourlyLabels]);
 
     if (loading) {
         return <div className="p-8 text-center text-gray-500">Cargando configuración de ventas...</div>;
@@ -333,7 +460,7 @@ export default function SalesConfig() {
                     
                     <input 
                         type="file" 
-                        accept=".csv"
+                        accept=".csv,.xlsx,.xls"
                         ref={fileInputRef}
                         onChange={handleFileUpload}
                         className="hidden"
@@ -342,10 +469,10 @@ export default function SalesConfig() {
                     <button 
                         onClick={() => fileInputRef.current?.click()}
                         className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md font-semibold flex items-center gap-2 transition-colors"
-                        title="Subir archivo .csv de ventas"
+                        title="Subir archivo XLSX/CSV de ventas para calcular la matriz porcentual por hora"
                     >
                         <Upload className="w-4 h-4" />
-                        <span className="hidden sm:inline">Cargar CSV Diario</span>
+                        <span className="hidden sm:inline">Cargar XLSX/CSV</span>
                     </button>
                     
                     <button 
@@ -428,6 +555,17 @@ export default function SalesConfig() {
                                     </tr>
                                 ))}
                             </tbody>
+                            <tfoot className="bg-blue-50 border-t-2 border-blue-200 sticky bottom-0">
+                                <tr>
+                                    <td className="px-6 py-3 text-sm font-bold text-blue-900">TOTAL MES</td>
+                                    <td className="px-6 py-3 text-sm font-bold text-blue-900">
+                                        S/ {totalVentaMes.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </td>
+                                    <td className="px-6 py-3 text-sm font-bold text-blue-900">
+                                        {totalTxsMes.toLocaleString('en-US')}
+                                    </td>
+                                </tr>
+                            </tfoot>
                         </table>
                     </div>
                 </div>
