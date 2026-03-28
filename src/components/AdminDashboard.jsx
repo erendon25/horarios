@@ -25,7 +25,14 @@ import {
     Award,
     BarChart3,
     Calculator,
-    ClipboardCheck
+    ClipboardCheck,
+    CheckCircle2,
+    XCircle,
+    Pencil,
+    Trash2,
+    Unlink,
+    Bell,
+    ClipboardList
 } from "lucide-react";
 import {
     doc,
@@ -47,7 +54,6 @@ import StaffModal from './StaffModal';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import VHLConsultation from './VHLConsultation';
 import ScheduleRequestsManager from './ScheduleRequestsManager';
-import { Bell, ClipboardList } from "lucide-react";
 
 
 
@@ -1070,136 +1076,150 @@ function AdminDashboard() {
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                         <div>
-                            <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-                                Panel de Administración
+                            <h1 className="text-3xl font-black text-gray-900 tracking-tight">
+                                Panel <span className="text-indigo-600">Admin</span>
                             </h1>
                             {userData?.storeId && (
-                                <div className="flex items-center gap-2 mt-2 text-sm text-gray-600">
-                                    <Building2 className="w-4 h-4" />
-                                    <span className="font-medium">{storeName}</span>
+                                <div className="flex items-center gap-2 mt-2">
+                                    <div className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-lg border border-indigo-100/50 shadow-sm">
+                                        <Building2 className="w-3.5 h-3.5" />
+                                        <span className="text-[11px] font-black uppercase tracking-wider">{storeName}</span>
+                                    </div>
                                 </div>
                             )}
                         </div>
-                        <div className="flex flex-wrap gap-2">
-                            <button
-                                onClick={() => navigate("/admin/requirements/lunes")}
-                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
-                            >
-                                <Settings className="w-4 h-4" />
-                                Requerimientos
-                            </button>
-                            <button
-                                onClick={() => navigate("/admin/ventas")}
-                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
-                            >
-                                <BarChart3 className="w-4 h-4" />
-                                Ventas
-                            </button>
-                            <button
-                                onClick={() => navigate("/admin/generate-schedules")}
-                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
-                            >
-                                <Calendar className="w-4 h-4" />
-                                Horarios
-                            </button>
-                            <button
-                                onClick={() => navigate("/entrenamiento")}
-                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
-                            >
-                                <ClipboardCheck className="w-4 h-4" />
-                                Validador
-                            </button>
-                            <button
-                                onClick={() => setShowVHLModal(true)}
-                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-indigo-500 to-indigo-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
-                            >
-                                <Calculator className="w-4 h-4" />
-                                Consulta VHL/THL
-                            </button>
-                            <button
-                                onClick={exportCarnetExpiringPDF}
-                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
-                            >
-                                <FaFilePdf className="w-4 h-4" />
-                                Carnets PDF
-                            </button>
-                            <button
-                                onClick={() => { setShowCesadosModal(true); loadCesosRegistros(); }}
-                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
-                            >
-                                <Users className="w-4 h-4" />
-                                Consultar Ceses / Cambios
-                            </button>
-                            <button
-                                onClick={() => setShowRequestsModal(true)}
-                                className="relative flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-orange-600 to-red-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
-                            >
-                                <ClipboardList className="w-4 h-4" />
-                                Solicitudes
-                                {pendingRequestsCount > 0 && (
-                                    <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full border-2 border-white animate-bounce">
-                                        {pendingRequestsCount}
-                                    </span>
-                                )}
-                            </button>
-                            {currentUser?.email === 'erickrendon18@gmail.com' && (
+                        <div className="flex flex-wrap items-center gap-3">
+                            {/* Grupo: Operaciones */}
+                            <div className="flex items-center bg-gray-50 p-1 rounded-2xl border border-gray-100">
                                 <button
-                                    onClick={() => navigate("/superadmin")}
-                                    className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-700 to-fuchsia-700 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium border border-purple-400"
+                                    onClick={() => navigate("/admin/requirements/lunes")}
+                                    className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-emerald-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
+                                    title="Configurar requerimientos de personal"
                                 >
-                                    <span className="text-sm">👑</span>
-                                    Superadmin
+                                    <Settings className="w-4 h-4" />
+                                    <span>REQUERIMIENTOS</span>
                                 </button>
-                            )}
-                            <button
-                                onClick={handleLogout}
-                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-gray-700 to-gray-800 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
-                            >
-                                <LogOut className="w-4 h-4" />
-                                Salir
-                            </button>
+                                <button
+                                    onClick={() => navigate("/admin/ventas")}
+                                    className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-emerald-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
+                                >
+                                    <BarChart3 className="w-4 h-4" />
+                                    <span>VENTAS</span>
+                                </button>
+                                <button
+                                    onClick={() => navigate("/admin/generate-schedules")}
+                                    className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-indigo-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
+                                >
+                                    <Calendar className="w-4 h-4" />
+                                    <span>HORARIOS</span>
+                                </button>
+                            </div>
+
+                            {/* Grupo: Herramientas */}
+                            <div className="flex items-center bg-gray-50 p-1 rounded-2xl border border-gray-100">
+                                <button
+                                    onClick={() => navigate("/entrenamiento")}
+                                    className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-orange-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
+                                >
+                                    <ClipboardCheck className="w-4 h-4" />
+                                    <span>VALIDADOR</span>
+                                </button>
+                                <button
+                                    onClick={() => setShowVHLModal(true)}
+                                    className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-indigo-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
+                                >
+                                    <Calculator className="w-4 h-4" />
+                                    <span>VHL/THL</span>
+                                </button>
+                            </div>
+
+                            {/* Grupo: Administración */}
+                            <div className="flex items-center bg-gray-50 p-1 rounded-2xl border border-gray-100">
+                                <button
+                                    onClick={() => { setShowCesadosModal(true); loadCesosRegistros(); }}
+                                    className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-orange-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
+                                >
+                                    <Users className="w-4 h-4" />
+                                    <span>CESES / CAMBIOS</span>
+                                </button>
+                                <button
+                                    onClick={() => setShowRequestsModal(true)}
+                                    className="relative flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-red-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
+                                >
+                                    <Bell className="w-4 h-4" />
+                                    <span>SOLICITUDES</span>
+                                    {pendingRequestsCount > 0 && (
+                                        <span className="absolute -top-1 -right-1 bg-red-600 text-white text-[9px] font-black w-4 h-4 flex items-center justify-center rounded-full border border-white">
+                                            {pendingRequestsCount}
+                                        </span>
+                                    )}
+                                </button>
+                            </div>
+
+                            {/* Acciones Finales */}
+                            <div className="flex items-center gap-3 ml-auto">
+                                {currentUser?.email === 'erickrendon18@gmail.com' && (
+                                    <button
+                                        onClick={() => navigate("/superadmin")}
+                                        className="flex items-center gap-2 px-4 py-2 bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-xl transition-all text-xs font-black uppercase tracking-widest border border-purple-100 shadow-sm shadow-purple-50"
+                                    >
+                                        <Award className="w-4 h-4" />
+                                        Superadmin
+                                    </button>
+                                )}
+                                <button
+                                    onClick={handleLogout}
+                                    className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white rounded-xl shadow-lg shadow-gray-200 hover:bg-black transition-all text-xs font-black uppercase tracking-widest"
+                                >
+                                    <LogOut className="w-4 h-4" />
+                                    Salir
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                {/* System Settings Bar */}
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
-                    <div className="bg-white border border-blue-100 rounded-xl shadow-sm p-4 flex flex-col md:flex-row items-center justify-between gap-4">
-                        <div className="flex items-center gap-3">
-                            <div className={`p-2 rounded-full ${lockSettings.restrictionsEnabled ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
-                                {lockSettings.restrictionsEnabled ? <AlertCircle className="w-5 h-5" /> : <UserCheck className="w-5 h-5" />}
+                {/* System Settings Bar - Refinado */}
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6">
+                    <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5 flex flex-col md:flex-row items-center justify-between gap-6 transition-all hover:shadow-md">
+                        <div className="flex items-center gap-4">
+                            <div className={`p-4 rounded-xl transition-colors ${lockSettings.restrictionsEnabled ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                                {lockSettings.restrictionsEnabled ? <AlertCircle className="w-6 h-6" /> : <UserCheck className="w-6 h-6" />}
                             </div>
                             <div>
-                                <h3 className="text-sm font-bold text-gray-800">Bloqueo de Cambios (Dashboard Colaborador)</h3>
-                                <p className="text-xs text-gray-500">
+                                <h3 className="text-base font-bold text-gray-900">Configuración de Seguridad</h3>
+                                <p className="text-sm text-gray-500 font-medium">
                                     {lockSettings.restrictionsEnabled
-                                        ? `Activo hasta el ${new Date(lockSettings.reenableDate + 'T00:00:00').toLocaleDateString('es-ES')}`
+                                        ? `Bloqueo activo hasta el ${new Date(lockSettings.reenableDate + 'T00:00:00').toLocaleDateString('es-ES')}`
                                         : 'Los colaboradores pueden editar sus horarios libremente.'}
                                 </p>
                             </div>
                         </div>
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-4 w-full md:w-auto">
                             {lockSettings.restrictionsEnabled ? (
                                 <button
                                     onClick={() => handleUpdateLock({ ...lockSettings, restrictionsEnabled: false })}
-                                    className="px-4 py-2 bg-green-500 text-white text-xs font-bold rounded-lg hover:bg-green-600 transition-colors"
+                                    className="w-full md:w-auto px-6 py-2.5 bg-emerald-600 text-white text-xs font-black uppercase tracking-widest rounded-xl hover:bg-emerald-700 shadow-lg shadow-emerald-100 transition-all"
                                 >
                                     DESBLOQUEAR AHORA
                                 </button>
                             ) : (
-                                <div className="flex items-center gap-2">
-                                    <input
-                                        type="date"
-                                        className="text-xs border rounded p-2"
-                                        value={lockSettings.reenableDate}
-                                        onChange={(e) => setLockSettings({ ...lockSettings, reenableDate: e.target.value })}
-                                    />
+                                <div className="flex flex-col md:flex-row items-stretch md:items-center gap-3 w-full">
+                                    <div className="relative">
+                                        <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                                        <input
+                                            type="date"
+                                            className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-red-500/10 focus:border-red-500 outline-none transition-all"
+                                            value={lockSettings.reenableDate}
+                                            onChange={(e) => setLockSettings({ ...lockSettings, reenableDate: e.target.value })}
+                                        />
+                                    </div>
                                     <button
                                         onClick={() => {
                                             if (!lockSettings.reenableDate) return alert("Selecciona una fecha de reactivación");
                                             handleUpdateLock({ ...lockSettings, restrictionsEnabled: true });
                                         }}
-                                        className="px-4 py-2 bg-red-500 text-white text-xs font-bold rounded-lg hover:bg-red-600 transition-colors whitespace-nowrap"
+                                        className="px-6 py-2.5 bg-red-600 text-white text-xs font-black uppercase tracking-widest rounded-xl hover:bg-red-700 shadow-lg shadow-red-100 transition-all whitespace-nowrap"
                                     >
                                         BLOQUEAR CAMBIOS
                                     </button>
@@ -1220,63 +1240,71 @@ function AdminDashboard() {
                     </div>
                 )}
 
-                {/* Stats Cards */}
-                <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
+                {/* Stats Cards - Rediseño Minimalista */}
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mb-8">
                     {/* Total Plantilla */}
-                    <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl shadow-lg p-5 text-white transform hover:scale-105 transition-all duration-200">
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <p className="text-blue-100 text-[10px] font-medium mb-1 uppercase tracking-wider">Total Plantilla</p>
-                                <p className="text-2xl font-bold">{fullTimeCount + partTimeCount}</p>
-                            </div>
-                            <Users className="w-8 h-8 text-blue-200" />
+                    <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-6 flex items-center gap-4 transition-all hover:shadow-md">
+                        <div className="p-3 bg-indigo-50 rounded-xl">
+                            <Users className="w-6 h-6 text-indigo-600" />
+                        </div>
+                        <div>
+                            <p className="text-gray-500 text-xs font-bold uppercase tracking-wider">Total Plantilla</p>
+                            <p className="text-2xl font-black text-gray-900">{fullTimeCount + partTimeCount}</p>
                         </div>
                     </div>
+
                     {/* Full-Time */}
-                    <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-xl shadow-lg p-5 text-white transform hover:scale-105 transition-all duration-200">
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <p className="text-green-100 text-[10px] font-medium mb-1 uppercase tracking-wider">Full-Time</p>
-                                <p className="text-2xl font-bold">{fullTimeCount}</p>
-                            </div>
-                            <UserCheck className="w-8 h-8 text-green-200" />
+                    <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-6 flex items-center gap-4 transition-all hover:shadow-md">
+                        <div className="p-3 bg-emerald-50 rounded-xl">
+                            <UserCheck className="w-6 h-6 text-emerald-600" />
+                        </div>
+                        <div>
+                            <p className="text-gray-500 text-xs font-bold uppercase tracking-wider">Full-Time</p>
+                            <p className="text-2xl font-black text-gray-900">{fullTimeCount}</p>
                         </div>
                     </div>
+
                     {/* Part-Time */}
-                    <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl shadow-lg p-5 text-white transform hover:scale-105 transition-all duration-200">
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <p className="text-purple-100 text-[10px] font-medium mb-1 uppercase tracking-wider">Part-Time</p>
-                                <p className="text-2xl font-bold">{partTimeCount}</p>
-                            </div>
-                            <Clock className="w-8 h-8 text-purple-200" />
+                    <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-6 flex items-center gap-4 transition-all hover:shadow-md">
+                        <div className="p-3 bg-purple-50 rounded-xl">
+                            <Clock className="w-6 h-6 text-purple-600" />
+                        </div>
+                        <div>
+                            <p className="text-gray-500 text-xs font-bold uppercase tracking-wider">Part-Time</p>
+                            <p className="text-2xl font-black text-gray-900">{partTimeCount}</p>
                         </div>
                     </div>
+
                     {/* Trainees */}
-                    <div className="bg-gradient-to-br from-orange-400 to-orange-500 rounded-xl shadow-lg p-5 text-white transform hover:scale-105 transition-all duration-200">
-                        <div className="flex items-start justify-between">
-                            <div className="flex-1">
-                                <p className="text-orange-100 text-[10px] font-medium mb-1 uppercase tracking-wider">🎓 Entrenamiento</p>
-                                <p className="text-2xl font-bold">{traineeCount}</p>
+                    <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-6 flex items-center gap-4 transition-all hover:shadow-md">
+                        <div className="p-3 bg-orange-50 rounded-xl">
+                            <Award className="w-6 h-6 text-orange-600" />
+                        </div>
+                        <div>
+                            <p className="text-gray-500 text-xs font-bold uppercase tracking-wider">Entrenamiento</p>
+                            <div className="flex items-baseline gap-2">
+                                <p className="text-2xl font-black text-gray-900">{traineeCount}</p>
                                 {traineeCount > 0 && (
-                                    <div className="flex gap-2 mt-1 text-[9px] text-orange-100">
-                                        <span className="bg-white/20 px-1.5 py-0.5 rounded-full">FT: {traineeFTCount}</span>
-                                        <span className="bg-white/20 px-1.5 py-0.5 rounded-full">PT: {traineePTCount}</span>
-                                    </div>
+                                    <span className="text-[10px] font-bold text-orange-600">
+                                        (FT:{traineeFTCount} PT:{traineePTCount})
+                                    </span>
                                 )}
                             </div>
-                            <UserCheck className="w-8 h-8 text-orange-200 flex-shrink-0" />
                         </div>
                     </div>
+
                     {/* Carnets de Sanidad */}
                     <div
                         onClick={exportCarnetExpiringPDF}
-                        className="bg-gradient-to-br from-red-500 to-red-600 rounded-xl shadow-lg p-5 text-white transform hover:scale-105 transition-all duration-200 cursor-pointer"
+                        className="bg-white border border-red-100 rounded-2xl shadow-sm p-6 flex items-center gap-4 transition-all hover:shadow-md hover:border-red-200 cursor-pointer group"
                     >
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <p className="text-red-100 text-[10px] font-medium mb-1 uppercase tracking-wider">Carnets Críticos</p>
-                                <p className="text-2xl font-bold">
+                        <div className="p-3 bg-red-50 rounded-xl group-hover:bg-red-100 transition-colors">
+                            <AlertCircle className="w-6 h-6 text-red-600" />
+                        </div>
+                        <div>
+                            <p className="text-gray-500 text-xs font-bold uppercase tracking-wider">Carnets Críticos</p>
+                            <div className="flex items-baseline gap-2">
+                                <p className="text-2xl font-black text-red-600">
                                     {staff.filter(s => {
                                         if (!s.sanitaryCardDate) return false;
                                         const expiry = new Date(s.sanitaryCardDate + 'T00:00:00');
@@ -1285,59 +1313,63 @@ function AdminDashboard() {
                                         return expiry < now;
                                     }).length}
                                 </p>
-                                <p className="text-[9px] text-red-200 mt-1 uppercase font-bold">Vencidos hoy</p>
+                                <span className="text-[10px] font-bold text-red-400 uppercase">Vencidos</span>
                             </div>
-                            <AlertCircle className="w-8 h-8 text-red-200" />
                         </div>
                     </div>
                 </div>
 
-                {/* Filters and Actions */}
-                <div className="bg-white rounded-xl shadow-md p-6 mb-6">
+
+                {/* Filters and Actions - Refinado */}
+                <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-6 mb-8">
                     <div className="flex flex-col lg:flex-row gap-4 items-center">
-                        <div className="flex-1 w-full lg:w-auto">
-                            <div className="relative">
-                                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-                                <input
-                                    type="text"
-                                    placeholder="Buscar colaborador..."
-                                    className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                                    value={searchTerm}
-                                    onChange={(e) => setSearchTerm(e.target.value)}
-                                />
-                            </div>
+                        <div className="flex-1 w-full lg:w-auto relative">
+                            <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                            <input
+                                type="text"
+                                placeholder="Buscar por nombre o DNI..."
+                                className="w-full pl-11 pr-4 py-3 bg-gray-50 border border-transparent rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-sm outline-none"
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                            />
                         </div>
-                        <select
-                            className="px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white"
-                            value={modalityFilter}
-                            onChange={(e) => setModalityFilter(e.target.value)}
-                        >
-                            <option value="Todos">Todos</option>
-                            <option value="Full-Time">Full-Time</option>
-                            <option value="Part-Time">Part-Time</option>
-                            <option value="Trainee">🎓 Entrenamiento</option>
-                        </select>
-                        <button
-                            onClick={() => setShowTrainingReport(true)}
-                            className="flex items-center gap-2 px-5 py-2.5 bg-white border border-orange-200 text-orange-600 rounded-lg shadow-sm hover:shadow-md transform hover:scale-105 transition-all duration-200 font-medium whitespace-nowrap"
-                        >
-                            <Award className="w-5 h-5 text-orange-500" />
-                            Ver Avances
-                        </button>
-                        <button
-                            onClick={handleAddStaff}
-                            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium whitespace-nowrap"
-                        >
-                            <Plus className="w-5 h-5" />
-                            Agregar Personal
-                        </button>
-                        <button
-                            onClick={fetchAllStaffProfiles}
-                            className="flex items-center gap-2 px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg shadow-sm hover:shadow-md transform hover:scale-105 transition-all duration-200 font-medium whitespace-nowrap"
-                        >
-                            <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
-                            Actualizar
-                        </button>
+                        
+                        <div className="flex items-center gap-3 w-full lg:w-auto overflow-x-auto pb-1 lg:pb-0">
+                            <select
+                                className="px-4 py-3 bg-gray-50 border border-transparent rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-sm outline-none font-medium text-gray-700 min-w-[140px]"
+                                value={modalityFilter}
+                                onChange={(e) => setModalityFilter(e.target.value)}
+                            >
+                                <option value="Todos">Todas las modalidades</option>
+                                <option value="Full-Time">Full-Time</option>
+                                <option value="Part-Time">Part-Time</option>
+                                <option value="Trainee">🎓 Entrenamiento</option>
+                            </select>
+
+                            <button
+                                onClick={() => setShowTrainingReport(true)}
+                                className="flex items-center gap-2 px-6 py-3 border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 hover:border-orange-200 hover:text-orange-600 transition-all text-sm font-bold whitespace-nowrap"
+                            >
+                                <Award className="w-4 h-4" />
+                                Avances
+                            </button>
+
+                            <button
+                                onClick={fetchAllStaffProfiles}
+                                className="flex items-center justify-center p-3 border border-gray-200 text-gray-500 rounded-xl hover:bg-gray-50 transition-all"
+                                title="Actualizar lista"
+                            >
+                                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                            </button>
+
+                            <button
+                                onClick={handleAddStaff}
+                                className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 hover:shadow-indigo-300 transition-all text-sm font-bold whitespace-nowrap ml-2"
+                            >
+                                <Plus className="w-4 h-4" />
+                                Agregar Personal
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -1351,15 +1383,15 @@ function AdminDashboard() {
                     <div className="bg-white rounded-xl shadow-md overflow-hidden">
                         <div className="overflow-x-auto">
                             <table className="w-full">
-                                <thead className="bg-gradient-to-r from-gray-50 to-gray-100 border-b border-gray-200">
+                                <thead className="bg-gray-50/50 border-b border-gray-200">
                                     <tr>
-                                        <th className="px-8 py-5 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider min-w-[200px]">Nombre</th>
-                                        <th className="px-8 py-5 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider min-w-[140px]">Modalidad</th>
-                                        <th className="px-6 py-5 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Rol</th>
-                                        <th className="px-6 py-5 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Vinculado</th>
-                                        <th className="px-6 py-5 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Carnet Sanidad</th>
-                                        <th className="px-6 py-5 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Estado</th>
-                                        <th className="px-6 py-5 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Acciones</th>
+                                        <th className="px-8 py-4 text-left text-[11px] font-bold text-gray-500 uppercase tracking-widest">Nombre y Detalle</th>
+                                        <th className="px-8 py-4 text-left text-[11px] font-bold text-gray-500 uppercase tracking-widest">Modalidad</th>
+                                        <th className="px-6 py-4 text-left text-[11px] font-bold text-gray-500 uppercase tracking-widest">Rol</th>
+                                        <th className="px-6 py-4 text-center text-[11px] font-bold text-gray-500 uppercase tracking-widest">App</th>
+                                        <th className="px-6 py-4 text-left text-[11px] font-bold text-gray-500 uppercase tracking-widest">Carnet Sanidad</th>
+                                        <th className="px-6 py-4 text-center text-[11px] font-bold text-gray-500 uppercase tracking-widest">Estado</th>
+                                        <th className="px-6 py-4 text-center text-[11px] font-bold text-gray-500 uppercase tracking-widest">Acciones</th>
                                     </tr>
                                 </thead>
                                 <tbody className="bg-white divide-y divide-gray-200">
@@ -1426,31 +1458,31 @@ function AdminDashboard() {
                                                     </div>
                                                 </div>
                                             </td>
-                                            <td className="px-8 py-5">
+                                            <td className="px-8 py-4">
                                                 <div className="flex items-center">
-                                                    <span className={`px-4 py-2 rounded-full text-sm font-semibold inline-block ${colab.modality === "Full-Time"
-                                                        ? "bg-green-100 text-green-800"
-                                                        : "bg-purple-100 text-purple-800"
+                                                    <span className={`px-3 py-1 rounded-lg text-xs font-bold border ${colab.modality === "Full-Time"
+                                                        ? "bg-emerald-50 text-emerald-700 border-emerald-100"
+                                                        : "bg-purple-50 text-purple-700 border-purple-100"
                                                         }`}>
-                                                        {colab.modality}
+                                                        {colab.modality?.toUpperCase()}
                                                     </span>
                                                 </div>
                                             </td>
                                             <td className="px-6 py-5 text-gray-700">
                                                 <span className="text-base">{colab.position || 'colaborador'}</span>
                                             </td>
-                                            <td className="px-6 py-5 text-center">
-                                                <div className="flex flex-col items-center gap-3">
+                                            <td className="px-6 py-4 text-center">
+                                                <div className="flex flex-col items-center gap-1.5">
                                                     {colab.uid ? (
-                                                        <FaCheck className="text-green-500 text-xl" />
+                                                        <CheckCircle2 className="text-emerald-500 w-5 h-5" />
                                                     ) : (
-                                                        <FaTimes className="text-red-500 text-xl" />
+                                                        <XCircle className="text-gray-300 w-5 h-5" />
                                                     )}
                                                     <button
                                                         onClick={() => openPositionModal(colab)}
-                                                        className="text-xs text-indigo-600 hover:text-indigo-800 hover:underline font-medium whitespace-nowrap"
+                                                        className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold uppercase tracking-tighter"
                                                     >
-                                                        Asignar posiciones
+                                                        Posiciones
                                                     </button>
                                                 </div>
                                             </td>
@@ -1494,14 +1526,14 @@ function AdminDashboard() {
                                                 </div>
                                             </td>
                                             {/* Columna Estado / Cesar */}
-                                            <td className="px-6 py-5 text-center">
+                                            <td className="px-6 py-4 text-center">
                                                 <button
                                                     onClick={() => handleCessation(colab)}
-                                                    className={
+                                                    className={`w-full text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl border transition-all ${
                                                         colab.cessationDate && new Date(colab.cessationDate + 'T00:00:00') < new Date(new Date().setHours(0, 0, 0, 0))
-                                                            ? "w-full text-xs font-bold bg-green-100 hover:bg-green-200 text-green-800 px-3 py-2 rounded-lg border border-green-400 transition-colors"
-                                                            : "w-full text-xs font-bold bg-orange-100 hover:bg-orange-200 text-orange-800 px-3 py-2 rounded-lg border border-orange-400 transition-colors"
-                                                    }
+                                                            ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+                                                            : "bg-orange-50 text-orange-700 border-orange-200 hover:bg-orange-100"
+                                                    }`}
                                                 >
                                                     {colab.cessationDate && new Date(colab.cessationDate + 'T00:00:00') < new Date(new Date().setHours(0, 0, 0, 0))
                                                         ? "Reactivar"
@@ -1509,7 +1541,7 @@ function AdminDashboard() {
                                                     }
                                                 </button>
                                             </td>
-                                            <td className="px-6 py-5">
+                                            <td className="px-6 py-4">
                                                 <div className="flex flex-col gap-2">
                                                     {colab.isTrainee && (
                                                         <button
@@ -1521,20 +1553,13 @@ function AdminDashboard() {
                                                                     setStaff(prev => prev.filter(u => u.id !== colab.id));
                                                                 } catch (err) { alert('Error: ' + err.message); }
                                                             }}
-                                                            className="text-xs font-bold text-orange-700 bg-orange-50 hover:bg-orange-100 border border-orange-300 px-2 py-1 rounded-lg transition-colors whitespace-nowrap"
+                                                            className="text-[9px] font-black uppercase tracking-tighter text-orange-700 bg-orange-50 hover:bg-orange-100 border border-orange-200 px-2 py-1.5 rounded-lg transition-all"
                                                         >
-                                                            ✓ Finalizar entrenamiento
+                                                            Fin Entrenamiento
                                                         </button>
                                                     )}
-                                                    <button
-                                                        onClick={() => handleUnlinkEmail(colab.id)}
-                                                        className="text-xs text-red-600 hover:text-red-800 hover:underline font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-                                                        disabled={!colab.uid}
-                                                    >
-                                                        <FaUnlink className="inline" />
-                                                        Desvincular
-                                                    </button>
-                                                    <div className="flex items-center justify-center gap-3">
+                                                    
+                                                    <div className="flex items-center justify-center gap-1">
                                                         <button
                                                             onClick={async () => {
                                                                 if (!colab.uid) {
@@ -1552,24 +1577,32 @@ function AdminDashboard() {
                                                                 setSelectedStaff(colab);
                                                                 setShowScheduleEditor(true);
                                                             }}
-                                                            className="p-2 text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded-lg transition-colors"
+                                                            className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all"
                                                             title="Ver horarios"
                                                         >
-                                                            <FaCalendarAlt className="w-4 h-4" />
+                                                            <Calendar className="w-4 h-4" />
                                                         </button>
                                                         <button
                                                             onClick={() => setEditModal({ ...colab, isNew: false })}
-                                                            className="p-2 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors"
+                                                            className="p-2 text-amber-600 hover:bg-amber-50 rounded-xl transition-all"
                                                             title="Editar"
                                                         >
-                                                            <FaEdit className="w-4 h-4" />
+                                                            <Pencil className="w-4 h-4" />
                                                         </button>
                                                         <button
                                                             onClick={() => handleDelete(colab.uid, colab.id)}
-                                                            className="p-2 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-lg transition-colors"
+                                                            className="p-2 text-red-600 hover:bg-red-50 rounded-xl transition-all"
                                                             title="Eliminar"
                                                         >
-                                                            <FaTrash className="w-4 h-4" />
+                                                            <Trash2 className="w-4 h-4" />
+                                                        </button>
+                                                        <button
+                                                            onClick={() => handleUnlinkEmail(colab.id)}
+                                                            className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-all disabled:opacity-30"
+                                                            disabled={!colab.uid}
+                                                            title="Desvincular correo"
+                                                        >
+                                                            <Unlink className="w-4 h-4" />
                                                         </button>
                                                     </div>
                                                 </div>
