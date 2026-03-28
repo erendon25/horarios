@@ -603,7 +603,14 @@ function AdminDashboard() {
                             gender: editModal.gender || editModal.sexo || '',
                             position: editModal.position || 'TEAM MEMBER',
                             joinDate: original.joinDate || original.createdAt?.split?.('T')?.[0] || '',
-                            cessationDate: todayStr,
+                            cessationDate: (() => {
+                                const d = new Date(todayStr + 'T00:00:00');
+                                d.setDate(d.getDate() - 1);
+                                const y = d.getFullYear();
+                                const m = String(d.getMonth() + 1).padStart(2, '0');
+                                const day = String(d.getDate()).padStart(2, '0');
+                                return `${y}-${m}-${day}`;
+                            })(),
                             storeId: userData.storeId,
                             registeredAt: new Date().toISOString(),
                             isModalityChange: true,
@@ -682,7 +689,14 @@ function AdminDashboard() {
                             gender: s.gender || s.sexo || '',
                             position: s.position || 'TEAM MEMBER',
                             joinDate: s.joinDate || s.createdAt?.split?.('T')?.[0] || '',
-                            cessationDate: s.modalityChangeDate, // Se reporta en esta fecha
+                            cessationDate: (() => {
+                                const d = new Date(s.modalityChangeDate + 'T00:00:00');
+                                d.setDate(d.getDate() - 1);
+                                const y = d.getFullYear();
+                                const m = String(d.getMonth() + 1).padStart(2, '0');
+                                const day = String(d.getDate()).padStart(2, '0');
+                                return `${y}-${m}-${day}`;
+                            })(), // Un día antes del cambio
                             storeId: userData.storeId,
                             registeredAt: new Date().toISOString(),
                             isModalityChange: true,

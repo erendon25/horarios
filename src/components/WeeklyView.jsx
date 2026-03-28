@@ -125,10 +125,13 @@ export default function WeeklyView({ perfilId }) {
                 if (diff < 0) diff += 1440; // Cruza medianoche
                 totalMinutes += diff;
 
-                // Horas extras
-                if (day.extraHours && !isNaN(day.extraHours)) {
-                    totalExtra += Number(day.extraHours);
-                }
+                // Horas extras (Ant, Post y Genéricas)
+                const pre = Number(day.extraHoursPre || 0);
+                const post = Number(day.extraHoursPost || day.extraHours || 0);
+                if (!isNaN(pre)) totalExtra += pre;
+                if (!isNaN(post)) totalExtra += post;
+                
+                                 
             }
         });
 
@@ -241,20 +244,31 @@ export default function WeeklyView({ perfilId }) {
                                 const isOff = info?.off;
                                 const isFeriado = info?.feriado;
                                 const hasShift = info?.start && info?.end;
-                                const extraHrs = (info?.extraHours && !isNaN(info.extraHours) && Number(info.extraHours) > 0)
-                                    ? Number(info.extraHours)
-                                    : 0;
+                                 const extraHrsPre = Number(info?.extraHoursPre || 0);
+                                 const extraHrsPost = Number(info?.extraHoursPost || info?.extraHours || 0);
+                                 const totalExtraDay = extraHrsPre + extraHrsPost;
 
-                                // Calcular hora fin real sumando extras
-                                let displayEnd = info?.end;
-                                if (hasShift && extraHrs > 0) {
-                                    const [h, m] = info.end.split(':').map(Number);
-                                    const minutesToAdd = extraHrs * 60;
-                                    const totalMinutes = h * 60 + m + minutesToAdd;
-                                    const newH = Math.floor(totalMinutes / 60) % 24;
-                                    const newM = Math.floor(totalMinutes % 60);
-                                    displayEnd = `${newH.toString().padStart(2, '0')}:${newM.toString().padStart(2, '0')}`;
-                                }
+                                 let displayStart = info?.start;
+                                 let displayEnd = info?.end;
+
+                                 if (hasShift) {
+                                     // HE Pre: retrocede el inicio
+                                     if (extraHrsPre > 0 && info.start) {
+                                         const [h, m] = info.start.split(':').map(Number);
+                                         let totalMins = h * 60 + m - (extraHrsPre * 60);
+                                         if (totalMins < 0) totalMins = 0; // tope visual
+                                         displayStart = `${Math.floor(totalMins / 60).toString().padStart(2, '0')}:${(totalMins % 60).toString().padStart(2, '0')}`;
+                                     }
+                                     // HE Post: avanza el fin
+                                     if (extraHrsPost > 0 && info.end) {
+                                         const [h, m] = info.end.split(':').map(Number);
+                                         let totalMins = h * 60 + m + (extraHrsPost * 60);
+                                         displayEnd = `${Math.floor(totalMins / 60) % 24}:${(totalMins % 60).toString().padStart(2, '0')}`;
+                                         // Asegurar formato HH:mm
+                                         const [fH, fM] = displayEnd.split(':');
+                                         displayEnd = `${fH.padStart(2, '0')}:${fM.padStart(2, '0')}`;
+                                     }
+                                 }
                                 // ... existing logic ...
                                 return (
                                     <tr key={day} className="hover:bg-blue-50/50 transition-colors">
@@ -263,10 +277,19 @@ export default function WeeklyView({ perfilId }) {
                                         </td>
                                         <td className="px-4 py-3 text-center">
                                             {hasShift && !isOff && !isFeriado ? (
-                                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 text-blue-700 font-semibold border border-blue-100">
-                                                    <Clock className="w-3.5 h-3.5" />
-                                                    {info.start} - {displayEnd}
-                                                </span>
+                                                <>
+                                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 text-blue-700 font-semibold border border-blue-100">
+                                                        <Clock className="w-3.5 h-3.5" />
+                                                        {displayStart} - {displayEnd}
+                                                    </span>
+                                                    {totalExtraDay > 0 && (
+                                                        <div className="flex flex-col gap-0.5 mt-1">
+                                                            <span className="text-[10px] text-gray-400 font-medium italic">Turno: {info.start}-{info.end}</span>
+                                                            {extraHrsPre > 0 && <span className="text-[10px] text-red-600 font-bold uppercase">+{extraHrsPre}h HE ANT</span>}
+                                                            {extraHrsPost > 0 && <span className="text-[10px] text-red-600 font-bold uppercase">+{extraHrsPost}h HE DESP</span>}
+                                                        </div>
+                                                    )}
+                                                </>
                                             ) : (
                                                 <span className="text-gray-400">
                                                     {isOff ? '--' : isFeriado ? '--' : '--'}
@@ -286,9 +309,9 @@ export default function WeeklyView({ perfilId }) {
                                             )}
                                         </td>
                                         <td className="px-4 py-3 text-center">
-                                            {extraHrs > 0 ? (
+                                            {totalExtraDay > 0 ? (
                                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs font-bold border border-red-200">
-                                                    +{extraHrs}h
+                                                    +{totalExtraDay}h
                                                 </span>
                                             ) : (
                                                 <span className="text-gray-300">-</span>
