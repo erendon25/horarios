@@ -708,7 +708,7 @@ const CollaboratorDashboard = () => {
 
         {/* --- SECCIÓN DE HORARIO SEMANAL --- */}
         {perfil?.id && (
-          <WeeklyView perfilId={perfil.id} />
+          <WeeklyView perfilId={perfil.id} storeId={perfil.storeId} />
         )}
 
         {/* Modal mejorado */}

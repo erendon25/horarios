@@ -352,61 +352,61 @@ export default function SalesConfig() {
 
     const averagesByWeekday = React.useMemo(() => {
         const result = [
-            { id: 1, name: 'Lunes', count: 0, vta: 0, txs: 0, parts: {} },
-            { id: 2, name: 'Martes', count: 0, vta: 0, txs: 0, parts: {} },
-            { id: 3, name: 'Miércoles', count: 0, vta: 0, txs: 0, parts: {} },
-            { id: 4, name: 'Jueves', count: 0, vta: 0, txs: 0, parts: {} },
-            { id: 5, name: 'Viernes', count: 0, vta: 0, txs: 0, parts: {} },
-            { id: 6, name: 'Sábado', count: 0, vta: 0, txs: 0, parts: {} },
-            { id: 0, name: 'Domingo', count: 0, vta: 0, txs: 0, parts: {} },
+            { id: 1, name: 'Lunes', count: 0, vta: 0, txs: 0, parts: {}, partsCount: 0 },
+            { id: 2, name: 'Martes', count: 0, vta: 0, txs: 0, parts: {}, partsCount: 0 },
+            { id: 3, name: 'Miércoles', count: 0, vta: 0, txs: 0, parts: {}, partsCount: 0 },
+            { id: 4, name: 'Jueves', count: 0, vta: 0, txs: 0, parts: {}, partsCount: 0 },
+            { id: 5, name: 'Viernes', count: 0, vta: 0, txs: 0, parts: {}, partsCount: 0 },
+            { id: 6, name: 'Sábado', count: 0, vta: 0, txs: 0, parts: {}, partsCount: 0 },
+            { id: 0, name: 'Domingo', count: 0, vta: 0, txs: 0, parts: {}, partsCount: 0 },
         ];
 
-        const [year, month] = selectedMonth.split('-');
+        // Iterar sobre las fechas reales del Excel cargado (no del mes seleccionado)
+        const allDates = new Set([
+            ...Object.keys(realSalesData),
+            ...Object.keys(dailyHourlyParts),
+        ]);
 
-        days.forEach(day => {
-            const d = new Date(year, parseInt(month) - 1, day);
-            const wKey = d.getDay();
-            const dateStr = `${year}-${month}-${String(day).padStart(2, '0')}`;
-            
-            // Usar Ventas Reales en lugar de Metas para el Promedio
-            const realData = realSalesData[dateStr] || {};
-            const vta = Number(realData.vta || 0);
-            const txs = Number(realData.txs || 0);
-            
+        allDates.forEach(dateStr => {
+            const [y, m, d] = dateStr.split('-').map(Number);
+            const dateObj = new Date(y, m - 1, d);
+            const wKey = dateObj.getDay();
             const wObj = result.find(w => w.id === wKey);
-            if (vta > 0 || txs > 0) {
-                wObj.vta += vta;
-                wObj.txs += txs;
-                wObj.count += 1;
+            if (!wObj) return;
+
+            const realData = realSalesData[dateStr];
+            if (realData) {
+                const vta = Number(realData.vta || 0);
+                const txs = Number(realData.txs || 0);
+                if (vta > 0 || txs > 0) {
+                    wObj.vta += vta;
+                    wObj.txs += txs;
+                    wObj.count += 1;
+                }
             }
+
             const parts = dailyHourlyParts[dateStr];
             if (parts) {
                 hourlyLabels.forEach(hour => {
                     if (!wObj.parts[hour]) wObj.parts[hour] = 0;
                     wObj.parts[hour] += Number(parts[hour] || 0);
                 });
-                wObj.partsCount = (wObj.partsCount || 0) + 1;
+                wObj.partsCount += 1;
             }
         });
 
         result.forEach(w => {
-            if (w.count > 0) {
-                w.avgVta = w.vta / w.count;
-                w.avgTxs = w.txs / w.count;
-            } else {
-                w.avgVta = 0;
-                w.avgTxs = 0;
-            }
-
+            w.avgVta = w.count > 0 ? w.vta / w.count : 0;
+            w.avgTxs = w.count > 0 ? w.txs / w.count : 0;
             if (w.partsCount > 0) {
                 hourlyLabels.forEach(hour => {
-                    w.parts[hour] = w.parts[hour] / w.partsCount;
+                    w.parts[hour] = (w.parts[hour] || 0) / w.partsCount;
                 });
             }
         });
 
         return result;
-    }, [selectedMonth, days, realSalesData, dailyHourlyParts, hourlyLabels]);
+    }, [realSalesData, dailyHourlyParts, hourlyLabels]);
 
     if (loading) {
         return <div className="p-8 text-center text-gray-500">Cargando configuración de ventas...</div>;

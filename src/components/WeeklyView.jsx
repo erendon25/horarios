@@ -1,7 +1,8 @@
 
 import React, { useEffect, useState } from 'react';
 import { getFirestore, doc, onSnapshot, query, collection, where } from 'firebase/firestore';
-import { Calendar, Clock, MapPin, Coffee, AlertCircle, ChevronLeft, ChevronRight, ClipboardList, X } from 'lucide-react';
+import { Calendar, Clock, MapPin, Coffee, AlertCircle, ChevronLeft, ChevronRight, ClipboardList, X, Download } from 'lucide-react';
+import { exportGroupedPositionsPDF } from './PDFExport';
 
 const weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const weekdayLabels = {
@@ -30,12 +31,18 @@ const getWeekKey = (s) => {
     return `${format(start)}_to_${format(end)}`;
 };
 
-export default function WeeklyView({ perfilId }) {
+export default function WeeklyView({ perfilId, storeId }) {
     const [weekStartDate, setWeekStartDate] = useState('');
     const [schedule, setSchedule] = useState({});
     const [approvedRequests, setApprovedRequests] = useState([]);
     const [allRequests, setAllRequests] = useState([]);
     const [showRequestsModal, setShowRequestsModal] = useState(false);
+    
+    // Data para exportación de toda la tienda
+    const [allStaff, setAllStaff] = useState([]);
+    const [storeSchedules, setStoreSchedules] = useState({});
+    const [storePositions, setStorePositions] = useState([]);
+    const [isExporting, setIsExporting] = useState(false);
     const db = getFirestore();
 
     // Helper para formatear fecha local a YYYY-MM-DD sin conversión a UTC
@@ -94,7 +101,7 @@ export default function WeeklyView({ perfilId }) {
             setApprovedRequests(reqs);
         });
 
-        // Escuchar todas las solicitudes para el modal (opcionalmente filtrado por semana o general)
+        // Escuchar todas las solicitudes para el modal
         const qAll = query(
             collection(db, 'schedule_requests'),
             where('staffId', '==', perfilId)
@@ -108,7 +115,82 @@ export default function WeeklyView({ perfilId }) {
             unsub();
             unsubAll();
         };
-    }, [perfilId, weekStartDate, db]);
+    }, [perfilId, weekStartDate, db, getFirestore]);
+
+    // Cargar datos de la tienda para exportación (posicionamiento de todo el dia)
+    useEffect(() => {
+        if (!storeId || !weekStartDate) return;
+        const wk = getWeekKey(weekStartDate);
+        
+        const loadStoreData = async () => {
+            try {
+                // 1. Cargar staff de la tienda
+                const staffQuery = query(collection(db, 'staff_profiles'), where('storeId', '==', storeId));
+                const staffSnap = await getDocs(staffQuery);
+                const staffList = staffSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+                setAllStaff(staffList);
+
+                // 2. Cargar todos los horarios de la semana para la tienda
+                const schedQuery = query(
+                    collection(db, 'schedules'),
+                    where('weekKey', '==', wk),
+                    where('storeId', '==', storeId)
+                );
+                const schedSnap = await getDocs(schedQuery);
+                const schedMap = {};
+                schedSnap.docs.forEach(d => {
+                    const sId = d.id.split('_')[0];
+                    schedMap[sId] = d.data();
+                });
+                setStoreSchedules(schedMap);
+
+                // 3. Cargar posiciones/requerimientos (para orden)
+                const reqRef = doc(db, 'stores', storeId, 'positioning_requirements', 'monday');
+                const reqSnap = await getDoc(reqRef);
+                if (reqSnap.exists()) {
+                    setStorePositions(reqSnap.data().positions || []);
+                }
+            } catch (error) {
+                console.error("Error cargando datos de tienda para WeeklyView:", error);
+            }
+        };
+
+        loadStoreData();
+    }, [storeId, weekStartDate, db]);
+
+    const handleDownloadDailyPositioning = async (targetDay) => {
+        if (!allStaff.length || isExporting) {
+            if (!allStaff.length) alert("Cargando datos de la tienda...");
+            return;
+        }
+        
+        setIsExporting(true);
+        try {
+            // Calcular fecha exacta para el encabezado
+            let dateText = '';
+            const dayIndex = weekdays.indexOf(targetDay);
+            if (dayIndex !== -1) {
+                const [y, m, d] = weekStartDate.split('-').map(Number);
+                const date = new Date(y, m - 1, d);
+                date.setDate(date.getDate() + dayIndex);
+                dateText = date.toLocaleDateString('es-ES', {
+                    weekday: 'long',
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric'
+                });
+                dateText = dateText.charAt(0).toUpperCase() + dateText.slice(1);
+            }
+
+            // Exportar (usamos 'ambos' turnos por defecto para "todo el dia")
+            await exportGroupedPositionsPDF(allStaff, storeSchedules, targetDay, dateText, 'ambos', storePositions);
+        } catch (error) {
+            console.error("Error al exportar posicionamiento:", error);
+            alert("Error al generar el PDF");
+        } finally {
+            setIsExporting(false);
+        }
+    };
 
     // Calcular totales
     // Calcular totales
@@ -273,7 +355,18 @@ export default function WeeklyView({ perfilId }) {
                                 return (
                                     <tr key={day} className="hover:bg-blue-50/50 transition-colors">
                                         <td className="px-4 py-3 font-medium text-gray-800 capitalize">
-                                            {weekdayLabels[day]}
+                                            <div className="flex items-center justify-between group/row">
+                                                <span>{weekdayLabels[day]}</span>
+                                                <button
+                                                    onClick={() => handleDownloadDailyPositioning(day)}
+                                                    className="opacity-0 group-hover/row:opacity-100 p-1.5 hover:bg-blue-100 text-blue-600 rounded-md transition-all duration-200 flex items-center gap-1 text-[10px]"
+                                                    title={`Descargar posicionamiento de ${weekdayLabels[day]}`}
+                                                    disabled={isExporting}
+                                                >
+                                                    <Download className="w-3 h-3" />
+                                                    {isExporting ? '...' : 'PDF'}
+                                                </button>
+                                            </div>
                                         </td>
                                         <td className="px-4 py-3 text-center">
                                             {hasShift && !isOff && !isFeriado ? (

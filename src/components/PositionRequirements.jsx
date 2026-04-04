@@ -246,6 +246,9 @@ export default function PositionRequirements() {
     }, [day, storeId]);
 
     // ==================== CARGA CONFIGURACIÓN DE VENTAS ====================
+    // Calculamos los promedios globales de participación para usarlos como fallback
+    const [averagesData, setAveragesData] = useState([]);
+
     useEffect(() => {
         if (!storeId || !weekStartDate || !day) return;
 
@@ -253,47 +256,105 @@ export default function PositionRequirements() {
             const shiftDays = { monday: 0, tuesday: 1, wednesday: 2, thursday: 3, friday: 4, saturday: 5, sunday: 6 };
             const [baseY, baseM, baseD] = weekStartDate.split('-');
             const targetDate = new Date(baseY, parseInt(baseM) - 1, parseInt(baseD));
-            
-            // Sumamos los días que hayan pasado desde el lunes
             targetDate.setDate(targetDate.getDate() + (shiftDays[day] || 0));
 
-            const currentMonth = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}`;
-            const numericDay = targetDate.getDate().toString();
+            const yr = targetDate.getFullYear();
+            const mo = targetDate.getMonth() + 1;
+            const da = targetDate.getDate();
+            
+            const currentMonthKey = `${yr}-${String(mo).padStart(2, '0')}`;
+            const targetDateStr = `${yr}-${String(mo).padStart(2, '0')}-${String(da).padStart(2, '0')}`;
+            const numericDay = da.toString();
+
+            // También buscamos el mes anterior para tener promedios históricos si el actual está vacío
+            const prevMonthDate = new Date(yr, mo - 2, 1);
+            const prevMonthKey = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, '0')}`;
+
+            console.log(`[REQ DEBUG] Loading Sales for: ${targetDateStr} (Months: ${currentMonthKey}, ${prevMonthKey})`);
 
             try {
-                const docRef = doc(db, 'stores', storeId, 'sales_config', currentMonth);
-                const snap = await getDoc(docRef);
+                // Cargamos ambos meses en paralelo
+                const [currSnap, prevSnap] = await Promise.all([
+                    getDoc(doc(db, 'stores', storeId, 'sales_config', currentMonthKey)),
+                    getDoc(doc(db, 'stores', storeId, 'sales_config', prevMonthKey))
+                ]);
 
-                if (snap.exists()) {
-                    const data = snap.data();
-                    const monthData = data.monthlyData || {};
-                    const hourlyParts = data.hourlyParticipation || {};
-                    const dailyHourlyParts = data.dailyHourlyParts || {};
+                const currData = currSnap.exists() ? currSnap.data() : {};
+                const prevData = prevSnap.exists() ? prevSnap.data() : {};
+
+                // Combinar datos de participación diaria de ambos meses para mejores promedios
+                const allDailyParts = { ...(prevData.dailyHourlyParts || {}), ...(currData.dailyHourlyParts || {}) };
+                const allRealSales = { ...(prevData.realSalesData || {}), ...(currData.realSalesData || {}) };
+                
+                const monthMeta = currData.monthlyData || {};
+                const globalHourlyParts = currData.hourlyParticipation || prevData.hourlyParticipation || {};
+                
+                const dayMeta = monthMeta[numericDay] || {};
+                const realDayData = (currData.realSalesData || {})[targetDateStr] || {};
+
+                // Calcular promedios por día de la semana (usando ambos meses)
+                const weekdayAvgs = [
+                    { id: 0, parts: {}, count: 0 }, { id: 1, parts: {}, count: 0 }, 
+                    { id: 2, parts: {}, count: 0 }, { id: 3, parts: {}, count: 0 }, 
+                    { id: 4, parts: {}, count: 0 }, { id: 5, parts: {}, count: 0 }, 
+                    { id: 6, parts: {}, count: 0 }
+                ];
+
+                Object.keys(allDailyParts).forEach(dateKey => {
+                    const [yStr, mStr, dStr] = dateKey.split('-');
+                    const dObj = new Date(parseInt(yStr), parseInt(mStr) - 1, parseInt(dStr));
+                    if (isNaN(dObj.getTime())) return;
                     
-                    const dayData = monthData[numericDay] || {};
-                    
-                    const yr = targetDate.getFullYear();
-                    const mo = String(targetDate.getMonth() + 1).padStart(2, '0');
-                    const da = String(targetDate.getDate()).padStart(2, '0');
-                    const targetDateStr = `${yr}-${mo}-${da}`;
+                    const wKey = dObj.getDay();
+                    const parts = allDailyParts[dateKey];
+                    const wObj = weekdayAvgs.find(w => w.id === wKey);
+                    if (wObj && parts) {
+                        hours.forEach(hour => {
+                            wObj.parts[hour] = (wObj.parts[hour] || 0) + Number(parts[hour] || 0);
+                        });
+                        wObj.count++;
+                    }
+                });
 
-                    const specificHourlyParts = dailyHourlyParts[targetDateStr] || hourlyParts;
+                // Normalizar
+                weekdayAvgs.forEach(w => {
+                    if (w.count > 0) {
+                        hours.forEach(hour => {
+                            w.parts[hour] = w.parts[hour] / w.count;
+                        });
+                    }
+                });
 
-                    setSalesConfig({
-                        vta: Number(dayData.vta || 0),
-                        txs: Number(dayData.txs || 0),
-                        hourlyParts: specificHourlyParts
-                    });
-                } else {
-                    setSalesConfig({ vta: 0, txs: 0, hourlyParts: {} });
+                const weekdayInt = targetDate.getDay();
+                const avgForThisWeekday = weekdayAvgs.find(w => w.id === weekdayInt)?.parts || {};
+
+                // Prioridad de participación: 
+                // 1. Específica del día actual (si subió Excel de este mes del día exacto)
+                // 2. Promedio histórico del día de la semana (Lunes, Martes...) de lo cargado (este mes o anterior)
+                // 3. Matriz global manual
+                let finalParts = (currData.dailyHourlyParts || {})[targetDateStr];
+                if (!finalParts || Object.keys(finalParts).length === 0) {
+                    finalParts = Object.keys(avgForThisWeekday).length > 0 ? avgForThisWeekday : globalHourlyParts;
                 }
+
+                setSalesConfig({
+                    vta: Number(dayMeta.vta || realDayData.vta || 0),
+                    txs: Number(dayMeta.txs || realDayData.txs || 0),
+                    hourlyParts: finalParts
+                });
+
+                console.log(`[REQ DEBUG] Final SalesConfig for ${targetDateStr}:`, { 
+                    vta: dayMeta.vta || realDayData.vta, 
+                    source: (currData.dailyHourlyParts || {})[targetDateStr] ? 'daily' : (Object.keys(avgForThisWeekday).length > 0 ? 'aggregated_avg' : 'global')
+                });
+
             } catch (e) {
                 console.error("Error loading sales", e);
             }
         };
 
         fetchSales();
-    }, [storeId, weekStartDate, day]);
+    }, [storeId, weekStartDate, day, db]);
 
 
     // ==================== FUNCIONES DE EDICIÓN ====================
@@ -855,7 +916,7 @@ export default function PositionRequirements() {
                                 <div className="w-[140px] px-3 py-1 text-right text-xs font-bold text-gray-800 border-r border-gray-300">VHL</div>
                                 {hours.map((h, col) => {
                                     const prc = Number(salesConfig.hourlyParts[h] || 0) / 100;
-                                    const vtaHr = salesConfig.vta * prc;
+                                    const vtaHr = Math.round(salesConfig.vta * prc);
                                     const sumHr = matrix.reduce((acc, row) => acc + (row[col] || 0), 0);
                                     const vhl = sumHr > 0 ? (vtaHr / sumHr).toFixed(1) : "0.0";
                                     return <div key={col} className="w-[60px] text-center text-xs text-gray-700 border-r border-gray-200 py-1">{vhl}</div>;
@@ -867,7 +928,7 @@ export default function PositionRequirements() {
                                 <div className="w-[140px] px-3 py-1 text-right text-xs font-bold text-gray-800 border-r border-gray-300">THL</div>
                                 {hours.map((h, col) => {
                                     const prc = Number(salesConfig.hourlyParts[h] || 0) / 100;
-                                    const txsHr = salesConfig.txs * prc;
+                                    const txsHr = Math.round(salesConfig.txs * prc);
                                     const sumHr = matrix.reduce((acc, row) => acc + (row[col] || 0), 0);
                                     const thl = sumHr > 0 ? (txsHr / sumHr).toFixed(1) : "0.0";
                                     return <div key={col} className="w-[60px] text-center text-xs text-gray-700 border-r border-gray-200 py-1">{thl}</div>;

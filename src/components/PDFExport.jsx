@@ -189,14 +189,15 @@ export const exportGroupedPositionsPDF = async (
     const minTarde = 12 * 60; // 12:00
 
     // Agrupar datos
-    const grupos = { mañana: {}, tarde: {} };
+    const grupos = { mañana: {}, tarde: {}, ambos: {} };
 
-    staff.forEach(({ id, name, modality }) => {
+    staff.forEach((person) => {
+        const { id, name, modality } = person;
         if (!id || !name) return;
         const info = schedules[id]?.[selectedDay];
         if (!info?.position || !info.start || !info.end) return;
 
-        // --- LOGICA DE SUMA DE HORAS EXTRAS (VISUAL) ---
+        // --- CALCULO DE HORAL REAL (BASE + EXTRAS) ---
         let [sh, sm] = info.start.split(':').map(Number);
         let [eh, em] = info.end.split(':').map(Number);
 
@@ -205,7 +206,6 @@ export const exportGroupedPositionsPDF = async (
 
         let finalStartH = sh;
         let finalStartM = sm;
-
         if (extraPre > 0) {
             const totalMins = sh * 60 + sm - (extraPre * 60);
             const finalMins = Math.max(0, totalMins);
@@ -215,7 +215,6 @@ export const exportGroupedPositionsPDF = async (
 
         let finalEndH = eh;
         let finalEndM = em;
-
         if (extraPost > 0) {
             const totalMins = eh * 60 + em + (extraPost * 60);
             finalEndH = Math.floor(totalMins / 60) % 24;
@@ -226,29 +225,40 @@ export const exportGroupedPositionsPDF = async (
         const finalEndStr = `${String(finalEndH).padStart(2, '0')}:${String(finalEndM).padStart(2, '0')}`;
 
         const startMin = sh * 60 + sm;
-        let endMin = finalEndH * 60 + finalEndM;
+        let endMin = eh * 60 + em;
         if (endMin <= startMin) endMin += 1440;
 
-        const displayName = name ? name.toUpperCase() : 'SIN NOMBRE';
+        const displayName = name.toUpperCase();
         let label = displayName;
         if (extraPre + extraPost > 0) {
             label += ` (+${extraPre + extraPost}h)`;
         }
 
-        const entry = { n: label, mod: modality, h: `${finalStartStr} - ${finalEndStr}` };
+        const entry = { 
+            n: label, 
+            mod: modality, 
+            h: `${finalStartStr} - ${finalEndStr}`,
+            startMin: finalStartH * 60 + finalStartM // Para ordenar internamente por hora de entrada
+        };
 
-        // Lógica de turno (usando la hora base para categorizar, o la extendida? 
-        // Usualmente mañna/tarde se define por el INICIO o bloqe principal.
-        // Mantendremos lógica actual basada en startMin)
-        if ((turno === 'mañana' || turno === 'ambos') && startMin < corte) {
-            if (!grupos.mañana[info.position]) grupos.mañana[info.position] = [];
-            grupos.mañana[info.position].push(entry);
+        const pos = info.position;
+
+        // 1. Siempre añadir al grupo 'ambos'
+        if (!grupos.ambos[pos]) grupos.ambos[pos] = [];
+        grupos.ambos[pos].push(entry);
+
+        // 2. Clasificar en Mañana / Tarde para los filtros específicos
+        // Mañana: Inicia antes del corte
+        if (startMin < corte) {
+            if (!grupos.mañana[pos]) grupos.mañana[pos] = [];
+            grupos.mañana[pos].push(entry);
         }
 
+        // Tarde: Inicia después de las 12:00, o después del corte, o termina después del corte
         const enTarde = startMin >= minTarde || startMin >= corte || endMin > corte;
-        if (enTarde && (turno === 'tarde' || turno === 'ambos')) {
-            if (!grupos.tarde[info.position]) grupos.tarde[info.position] = [];
-            grupos.tarde[info.position].push(entry);
+        if (enTarde) {
+            if (!grupos.tarde[pos]) grupos.tarde[pos] = [];
+            grupos.tarde[pos].push(entry);
         }
     });
 
@@ -275,7 +285,8 @@ export const exportGroupedPositionsPDF = async (
         pdf.setFontSize(12);
         pdf.setFont('helvetica', 'normal');
         pdf.setTextColor(100);
-        const subtitle = `${dateText || selectedDay.toUpperCase()} | ${titleSuffix.toUpperCase()}`;
+        const tLabel = titleSuffix === 'ambos' ? 'DÍA COMPLETO' : titleSuffix.toUpperCase();
+        const subtitle = `${dateText || selectedDay.toUpperCase()} | ${tLabel}`;
         const subW = pdf.getTextWidth(subtitle);
         pdf.text(subtitle, pageWidth - margin - subW, 55);
 
@@ -294,7 +305,7 @@ export const exportGroupedPositionsPDF = async (
     };
 
     // Renderizar tablas
-    const turnosToRender = ['mañana', 'tarde'].filter(t => turno === 'ambos' || turno === t);
+    const turnosToRender = turno === 'ambos' ? ['ambos'] : [turno];
 
     for (let i = 0; i < turnosToRender.length; i++) {
         const t = turnosToRender[i];
@@ -361,7 +372,9 @@ export const exportGroupedPositionsPDF = async (
                 tableWidth: colWidth,
                 theme: 'grid',
                 head: [[pos.toUpperCase()]],
-                body: rows.map(r => [`${r.n}\n${r.mod} • ${r.h}`]),
+                body: rows
+                    .sort((a,b) => a.startMin - b.startMin) // Ordenar por hora de entrada dentro de la posición
+                    .map(r => [`${r.n}\n${r.mod} • ${r.h}`]),
                 styles: {
                     fontSize: 9,
                     cellPadding: 4,

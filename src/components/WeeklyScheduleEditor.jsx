@@ -93,7 +93,7 @@ export default function WeeklyScheduleEditor() {
     const [tooltipOpen, setTooltipOpen] = useState(null);
     const [tooltipPosition, setTooltipPosition] = useState({ top: 0, left: 0 });
     const [showTurnoModal, setShowTurnoModal] = useState(false);
-    const [turnoPDF, setTurnoPDF] = useState('mañana');
+    const [turnoPDF, setTurnoPDF] = useState('ambos');
     const [conflictAlerts, setConflictAlerts] = useState({});
     const [scheduleAttempt, setScheduleAttempt] = useState(0);
     const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'success' | 'error'
@@ -2079,6 +2079,17 @@ export default function WeeklyScheduleEditor() {
                                         className="w-5 h-5 text-purple-600 focus:ring-2 focus:ring-purple-500"
                                     />
                                     <span className="font-medium text-gray-700">Turno Tarde</span>
+                                </label>
+
+                                <label className="flex items-center gap-3 p-4 border-2 border-gray-200 rounded-lg cursor-pointer hover:border-purple-300 hover:bg-purple-50 transition-all">
+                                    <input
+                                        type="radio"
+                                        value="ambos"
+                                        checked={turnoPDF === 'ambos'}
+                                        onChange={() => setTurnoPDF('ambos')}
+                                        className="w-5 h-5 text-purple-600 focus:ring-2 focus:ring-purple-500"
+                                    />
+                                    <span className="font-medium text-gray-700">Todo el día</span>
                                 </label>
                             </div>
 
