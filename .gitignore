@@ -67,3 +67,19 @@ node_modules/
 
 # dataconnect generated files
 .dataconnect
+
+# Android
+.gradle/
+build/
+.idea/
+android-app/.gradle/
+android-app/build/
+android-app/app/build/
+android-app/local.properties
+android-app/*.iml
+android-app/.idea/
+*.hprof
+*.apk
+*.aab
+*.jks
+*.keystore
