@@ -130,7 +130,7 @@ export default function SalesConfig() {
 
         const reader = new FileReader();
         reader.onload = (evt) => {
-            const data = evt.target.result;
+            const data = new Uint8Array(evt.target.result);
             const workbook = XLSX.read(data, { type: 'array', cellDates: true });
             const sheetName = workbook.SheetNames[0];
             const sheet = workbook.Sheets[sheetName];

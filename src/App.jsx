@@ -11,6 +11,7 @@ import PositioningConfig from './components/PositioningConfig';
 import StudyScheduleViewer from './components/StudyScheduleViewer';
 import PositionRequirementsWrapper from './components/PositionRequirementsWrapper';
 import SalesConfig from './components/SalesConfig';
+import SalesAnalysis from './components/SalesAnalysis';
 
 import RequireAdmin from "./components/RequireAdmin";
 import HolidayForm from './components/HolidayForm';
@@ -87,6 +88,12 @@ function AppRouter() {
       <Route path="/admin/ventas" element={
         <PrivateRoute role="admin">
           <SalesConfig />
+        </PrivateRoute>
+      } />
+
+      <Route path="/admin/analisis-ventas" element={
+        <PrivateRoute role="admin">
+          <SalesAnalysis />
         </PrivateRoute>
       } />
 

@@ -1107,6 +1107,13 @@ function AdminDashboard() {
                                     <span>VENTAS</span>
                                 </button>
                                 <button
+                                    onClick={() => navigate("/admin/analisis-ventas")}
+                                    className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-blue-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
+                                >
+                                    <BarChart3 className="w-4 h-4" />
+                                    <span>ANÁLISIS VENTAS</span>
+                                </button>
+                                <button
                                     onClick={() => navigate("/admin/generate-schedules")}
                                     className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-indigo-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
                                 >

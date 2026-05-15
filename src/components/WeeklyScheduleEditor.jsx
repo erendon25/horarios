@@ -25,7 +25,8 @@ import {
     ChevronLeft,
     ChevronRight,
     Search,
-    ClipboardList
+    ClipboardList,
+    Copy
 } from 'lucide-react';
 import { HOURS } from './ScheduleHeatmapMatrix';
 import ModalSelectorDePosiciones from './ModalSelectorDePosiciones';
@@ -110,6 +111,9 @@ export default function WeeklyScheduleEditor() {
         excludeTrainees: false,
         showPositions: false
     });
+    const [showReplicateModal, setShowReplicateModal] = useState(false);
+    const [replicateTargetStaff, setReplicateTargetStaff] = useState([]);
+    const [replicateTargetDays, setReplicateTargetDays] = useState([]);
 
     const wk = getWeekKey(weekStartDate);
     const schedules = wk ? allSchedules[wk] || {} : {};
@@ -779,6 +783,58 @@ export default function WeeklyScheduleEditor() {
             [wk]: newSchedules
         }));
     }
+
+    const handleReplicate = () => {
+        if (replicateTargetStaff.length === 0) {
+            alert("Selecciona al menos un colaborador.");
+            return;
+        }
+        if (replicateTargetDays.length === 0) {
+            alert("Selecciona al menos un día de destino.");
+            return;
+        }
+
+        if (Object.keys(prevWeekSchedules).length === 0) {
+            const confirmEmpty = window.confirm("No se encontraron horarios de la semana pasada. ¿Deseas continuar? (Se podrían borrar horarios actuales si no hay respaldo)");
+            if (!confirmEmpty) return;
+        }
+
+        setAllSchedules(prev => {
+            const currentWeekSchedules = { ...prev[wk] } || {};
+            const newDirty = new Set(dirtyStaff);
+
+            replicateTargetStaff.forEach(staffId => {
+                const prevPersonSchedule = prevWeekSchedules[staffId] || {};
+                
+                if (!currentWeekSchedules[staffId]) {
+                    currentWeekSchedules[staffId] = {};
+                }
+
+                replicateTargetDays.forEach(day => {
+                    const sourceDaySchedule = prevPersonSchedule[day];
+                    if (sourceDaySchedule) {
+                        currentWeekSchedules[staffId][day] = { ...sourceDaySchedule };
+                    } else {
+                        // Si no hay horario la semana pasada para ese día, podemos optar por no hacer nada o limpiar
+                        // Según la petición, "replica el mismo horario", si no hay, no se replica.
+                    }
+                });
+                newDirty.add(staffId);
+            });
+
+            setDirtyStaff(newDirty);
+            return {
+                ...prev,
+                [wk]: currentWeekSchedules
+            };
+        });
+
+        setHasUnsavedChanges(true);
+        setShowReplicateModal(false);
+        setReplicateTargetStaff([]);
+        setReplicateTargetDays([]);
+        alert("Horarios de la semana pasada replicados correctamente. No olvides guardar los cambios.");
+    };
     // Reemplaza SOLO la parte que carga study_schedules dentro del useEffect que carga staff
     // En el useEffect que carga staff, modifica esta parte:
     useEffect(() => {
@@ -1401,6 +1457,14 @@ export default function WeeklyScheduleEditor() {
                             >
                                 <ClipboardList className="w-5 h-5" />
                                 Solicitudes ({approvedRequests.length})
+                            </button>
+
+                            <button
+                                onClick={() => setShowReplicateModal(true)}
+                                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-700 to-indigo-800 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <Copy className="w-5 h-5" />
+                                Replicar Horario
                             </button>
                         </div>
                     </div>
@@ -2256,6 +2320,115 @@ export default function WeeklyScheduleEditor() {
                                     className="px-6 py-2 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-100 transition-all shadow-sm"
                                 >
                                     Cerrar
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Modal de Replicar Horario */}
+                {showReplicateModal && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+                        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in duration-300">
+                            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 p-4 flex justify-between items-center text-white">
+                                <h3 className="text-lg font-bold flex items-center gap-2">
+                                    <Copy className="w-5 h-5" />
+                                    Replicar Horario (Semana Pasada)
+                                </h3>
+                                <button onClick={() => setShowReplicateModal(false)} className="p-1 hover:bg-white/20 rounded-lg transition-colors">
+                                    <X className="w-5 h-5" />
+                                </button>
+                            </div>
+
+                            <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6 max-h-[70vh] overflow-y-auto">
+                                {/* Colaboradores */}
+                                <div>
+                                    <div className="flex justify-between items-center mb-3">
+                                        <h4 className="font-bold text-gray-700 flex items-center gap-2">
+                                            <Users className="w-4 h-4 text-blue-500" />
+                                            1. Colaboradores
+                                        </h4>
+                                        <button
+                                            onClick={() => {
+                                                if (replicateTargetStaff.length === filteredStaff.length) {
+                                                    setReplicateTargetStaff([]);
+                                                } else {
+                                                    setReplicateTargetStaff(filteredStaff.map(p => p.id));
+                                                }
+                                            }}
+                                            className="text-xs font-bold text-blue-600 hover:underline"
+                                        >
+                                            {replicateTargetStaff.length === filteredStaff.length ? 'Desmarcar todos' : 'Marcar todos'}
+                                        </button>
+                                    </div>
+                                    <div className="space-y-2 border border-gray-100 rounded-xl p-3 bg-gray-50 max-h-[40vh] overflow-y-auto">
+                                        {filteredStaff.map(person => (
+                                            <label key={person.id} className="flex items-center gap-3 p-2 hover:bg-white rounded-lg cursor-pointer transition-colors border border-transparent hover:border-gray-200">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={replicateTargetStaff.includes(person.id)}
+                                                    onChange={() => {
+                                                        setReplicateTargetStaff(prev =>
+                                                            prev.includes(person.id) ? prev.filter(id => id !== person.id) : [...prev, person.id]
+                                                        );
+                                                    }}
+                                                    className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                                                />
+                                                <span className="text-sm font-medium text-gray-700">{person.name} {person.lastName}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Días */}
+                                <div>
+                                    <h4 className="font-bold text-gray-700 mb-3 flex items-center gap-2">
+                                        <Calendar className="w-4 h-4 text-purple-500" />
+                                        2. Días de destino
+                                    </h4>
+                                    <div className="space-y-2 border border-gray-100 rounded-xl p-3 bg-gray-50">
+                                        {weekdays.map(day => (
+                                            <label
+                                                key={day}
+                                                className="flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-colors border hover:bg-white border-transparent hover:border-gray-200"
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={replicateTargetDays.includes(day)}
+                                                    onChange={() => {
+                                                        setReplicateTargetDays(prev =>
+                                                            prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day]
+                                                        );
+                                                    }}
+                                                    className="w-4 h-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500"
+                                                />
+                                                <span className="text-sm font-medium text-gray-700">
+                                                    {weekdayLabels[day]}
+                                                </span>
+                                            </label>
+                                        ))}
+                                    </div>
+
+                                    <div className="mt-6 p-4 bg-blue-50 rounded-xl border border-blue-100">
+                                        <p className="text-xs text-blue-800 leading-relaxed">
+                                            <span className="font-bold">Nota:</span> Se copiará el horario exacto de la <span className="font-bold">semana pasada</span> para los días y colaboradores seleccionados hacia la semana actual.
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="p-4 bg-gray-50 border-t flex justify-end gap-3">
+                                <button
+                                    onClick={() => setShowReplicateModal(false)}
+                                    className="px-6 py-2 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-100 transition-all shadow-sm"
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    onClick={handleReplicate}
+                                    className="px-6 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl text-sm font-bold hover:shadow-lg transform hover:scale-105 transition-all"
+                                >
+                                    Confirmar Replicación
                                 </button>
                             </div>
                         </div>
