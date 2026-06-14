@@ -12,10 +12,45 @@ export default function AvailableHeatmapMatrix({ studySchedules = [], requiremen
     return Math.floor(((h * 60 + m) - 360) / 15);
   };
 
+  const normalize = (position) => position?.trim().replace(/#\d+$/g, '').replace(/\s+/g, ' ').toLowerCase() || '';
+
+  const requirementMap = React.useMemo(() => {
+    if (!Array.isArray(requirements.positions)) {
+      return requirements || {};
+    }
+
+    const rawMatrix = requirements.matrix || {};
+    const rows = (Array.isArray(rawMatrix)
+      ? rawMatrix
+      : Object.keys(rawMatrix)
+        .sort((a, b) => Number(a) - Number(b))
+        .map(k => rawMatrix[k])
+    ).map(row => (
+      Array.isArray(row)
+        ? row
+        : Object.keys(row || {})
+          .sort((a, b) => Number(a) - Number(b))
+          .map(k => row[k])
+    ));
+
+    return requirements.positions.reduce((acc, position, index) => {
+      const sourceRow = Array.isArray(rows[index]) ? rows[index] : [];
+      const expanded = Array(8).fill(0);
+
+      for (let i = 0; i < 21; i++) {
+        const qty = sourceRow[i] || 0;
+        expanded.push(qty, qty, qty, qty);
+      }
+
+      acc[normalize(position)] = expanded.slice(0, hours.length);
+      return acc;
+    }, {});
+  }, [requirements]);
+
   const matrix = studySchedules.map(({ name, position, modality, study_schedule }) => {
     const row = Array(77).fill('bg-white');
     const studyBlocks = study_schedule?.[selectedDay] || [];
-    const posKey = position?.toLowerCase();
+    const posKey = normalize(position);
 
     for (let block of studyBlocks) {
       const start = Math.max(0, timeToIndex(block.start));
@@ -26,7 +61,7 @@ export default function AvailableHeatmapMatrix({ studySchedules = [], requiremen
     for (let i = 0; i < 77; i++) {
       const hora = hours[i];
       const esLibre = row[i] === 'bg-white';
-      const hayRequerimiento = requirements[posKey]?.[i] > (assigned[posKey]?.[hora] || 0);
+      const hayRequerimiento = (requirementMap[posKey]?.[i] || 0) > (assigned[posKey]?.[hora] || 0);
 
       if (esLibre && hayRequerimiento) {
         row[i] = 'bg-green-400';

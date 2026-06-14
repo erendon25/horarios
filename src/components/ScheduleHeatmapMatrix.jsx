@@ -134,7 +134,11 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
         const expanded = Object.keys(compressed)
             .sort((a, b) => Number(a) - Number(b))
             .map(k => {
-                const sourceRow = compressed[k]; 
+                const sourceRow = Array.isArray(compressed[k])
+                    ? compressed[k]
+                    : Object.keys(compressed[k] || {})
+                        .sort((a, b) => Number(a) - Number(b))
+                        .map(col => compressed[k][col]);
                 const fullRow = [];
                 
                 // Alineación de 06:00 a 08:00
@@ -151,11 +155,11 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
             const norm = normalize(pos);
             const name = pos.replace(/#\d+$/, '').trim();
             displayNames.set(norm, name);
+            need[norm] = need[norm] || {};
 
             const row = expanded[i] || Array(HOURS.length).fill(0);
             row.forEach((qty, j) => {
                 if (qty > 0) {
-                    need[norm] = need[norm] || {};
                     need[norm][HOURS[j]] = qty;
                 }
             });

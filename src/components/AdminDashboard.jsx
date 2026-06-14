@@ -1,5 +1,5 @@
 // AdminDashboard.jsx
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import {
@@ -32,7 +32,8 @@ import {
     Trash2,
     Unlink,
     Bell,
-    ClipboardList
+    ClipboardList,
+    Upload
 } from "lucide-react";
 import {
     doc,
@@ -62,6 +63,32 @@ import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
+
+const normalizeDni = (value) => String(value || '').replace(/\D/g, '').trim();
+
+const parseGeoVictoriaDate = (value) => {
+    if (!value) return '';
+    if (value instanceof Date && !isNaN(value.getTime())) {
+        return value.toISOString().split('T')[0];
+    }
+
+    const text = String(value).trim();
+    const match = text.match(/(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})/);
+    if (!match) return '';
+
+    const day = String(match[1]).padStart(2, '0');
+    const month = String(match[2]).padStart(2, '0');
+    let year = match[3];
+    if (year.length === 2) year = `20${year}`;
+
+    return `${year}-${month}-${day}`;
+};
+
+const readGeoVictoriaRows = (workbook) => {
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) return [];
+    return XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '', raw: true });
+};
 
 function AdminDashboard() {
     const { logout, currentUser, userRole, userData } = useAuth();
@@ -113,6 +140,9 @@ function AdminDashboard() {
     const [showVHLModal, setShowVHLModal] = useState(false);
     const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
     const [showRequestsModal, setShowRequestsModal] = useState(false);
+    const geoVictoriaInputRef = useRef(null);
+    const [geoVictoriaImporting, setGeoVictoriaImporting] = useState(false);
+    const [geoVictoriaImportResult, setGeoVictoriaImportResult] = useState(null);
 
     const skillStats = useMemo(() => {
         const stats = {};
@@ -492,6 +522,108 @@ function AdminDashboard() {
             storeId: userData?.storeId || '',
             sanitaryCardDate: '', // <-- Nuevo campo
         });
+    };
+
+    const handleGeoVictoriaImport = async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        if (!userData?.storeId) {
+            alert("No se pudo identificar la tienda para importar usuarios.");
+            event.target.value = '';
+            return;
+        }
+
+        setGeoVictoriaImporting(true);
+        setGeoVictoriaImportResult(null);
+
+        try {
+            const buffer = await file.arrayBuffer();
+            const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+            const rows = readGeoVictoriaRows(workbook);
+
+            const existingByDni = new Map();
+            staff.forEach((person) => {
+                const dni = normalizeDni(person.dni);
+                if (dni) existingByDni.set(dni, person);
+            });
+
+            const seenInFile = new Set();
+            const created = [];
+            let existingCount = 0;
+            let skippedCount = 0;
+
+            for (const row of rows) {
+                const estado = String(row.Estado || '').trim().toLowerCase();
+                if (estado && !estado.includes('activ')) {
+                    skippedCount++;
+                    continue;
+                }
+
+                const dni = normalizeDni(row.Identificador);
+                if (!dni || seenInFile.has(dni)) {
+                    skippedCount++;
+                    continue;
+                }
+                seenInFile.add(dni);
+
+                if (existingByDni.has(dni)) {
+                    existingCount++;
+                    continue;
+                }
+
+                const name = String(row.Nombre || '').trim();
+                const lastName = String(row.Apellidos || '').trim();
+                if (!name || !lastName) {
+                    skippedCount++;
+                    continue;
+                }
+
+                const payload = {
+                    name,
+                    lastName,
+                    dni,
+                    email: String(row.Email || '').trim(),
+                    modality: '',
+                    position: 'COLABORADOR',
+                    storeId: userData.storeId,
+                    storeName: storeName || '',
+                    joinDate: parseGeoVictoriaDate(row['Fecha inicio contrato']),
+                    sanitaryCardDate: '',
+                    sanitaryCardUnlock: false,
+                    isTrainee: false,
+                    importedFrom: 'geovictoria',
+                    importedAt: new Date().toISOString(),
+                    needsCompletion: true,
+                    status: 'pending',
+                };
+
+                const docRef = await addDoc(collection(db, "staff_profiles"), payload);
+                const newStaff = { id: docRef.id, ...payload };
+                created.push(newStaff);
+                existingByDni.set(dni, newStaff);
+            }
+
+            setGeoVictoriaImportResult({
+                created,
+                existingCount,
+                skippedCount,
+                fileName: file.name,
+            });
+
+            if (created.length > 0) {
+                alert(`Se agregaron ${created.length} ingresos nuevos desde Geovictoria. Revisa la notificación para completar modalidad y carnet.`);
+            } else {
+                alert(`No se encontraron ingresos nuevos. ${existingCount} usuarios ya existían por DNI.`);
+            }
+
+            await fetchAllStaffProfiles();
+        } catch (err) {
+            console.error("Error importando usuarios de Geovictoria:", err);
+            alert(`No se pudo procesar el Excel de Geovictoria: ${err.message}`);
+        } finally {
+            setGeoVictoriaImporting(false);
+            event.target.value = '';
+        }
     };
 
     const openScheduleWindow = async (uid, docId) => {
@@ -1100,6 +1232,13 @@ function AdminDashboard() {
                                     <span>REQUERIMIENTOS</span>
                                 </button>
                                 <button
+                                    onClick={() => navigate("/admin/proyeccion")}
+                                    className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-orange-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
+                                >
+                                    <Calculator className="w-4 h-4" />
+                                    <span>PROYECCIÓN</span>
+                                </button>
+                                <button
                                     onClick={() => navigate("/admin/ventas")}
                                     className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-emerald-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
                                 >
@@ -1142,6 +1281,22 @@ function AdminDashboard() {
 
                             {/* Grupo: Administración */}
                             <div className="flex items-center bg-gray-50 p-1 rounded-2xl border border-gray-100">
+                                <input
+                                    ref={geoVictoriaInputRef}
+                                    type="file"
+                                    accept=".xlsx,.xls"
+                                    className="hidden"
+                                    onChange={handleGeoVictoriaImport}
+                                />
+                                <button
+                                    onClick={() => geoVictoriaInputRef.current?.click()}
+                                    disabled={geoVictoriaImporting}
+                                    className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-emerald-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title="Importar usuarios activos de Geovictoria"
+                                >
+                                    <Upload className="w-4 h-4" />
+                                    <span>{geoVictoriaImporting ? 'IMPORTANDO...' : 'GEOVICTORIA'}</span>
+                                </button>
                                 <button
                                     onClick={() => { setShowCesadosModal(true); loadCesosRegistros(); }}
                                     className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-orange-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
@@ -1244,6 +1399,53 @@ function AdminDashboard() {
                     <div className="mb-6 p-4 bg-red-50 border-l-4 border-red-500 rounded-r-lg shadow-md flex items-start gap-3">
                         <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
                         <p className="text-red-700 font-medium">{error}</p>
+                    </div>
+                )}
+
+                {geoVictoriaImportResult && (
+                    <div className={`mb-6 p-4 border rounded-2xl shadow-sm flex flex-col gap-3 ${geoVictoriaImportResult.created.length > 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-blue-50 border-blue-200'}`}>
+                        <div className="flex items-start justify-between gap-4">
+                            <div className="flex items-start gap-3">
+                                <div className={`p-2 rounded-xl ${geoVictoriaImportResult.created.length > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'}`}>
+                                    {geoVictoriaImportResult.created.length > 0 ? <UserCheck className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
+                                </div>
+                                <div>
+                                    <p className={`font-black text-sm uppercase tracking-wide ${geoVictoriaImportResult.created.length > 0 ? 'text-emerald-900' : 'text-blue-900'}`}>
+                                        Importación Geovictoria
+                                    </p>
+                                    <p className="text-sm text-gray-700">
+                                        {geoVictoriaImportResult.created.length > 0
+                                            ? `${geoVictoriaImportResult.created.length} ingreso(s) nuevo(s) detectado(s). Haz click en un nombre para completar modalidad y carnet.`
+                                            : `No hubo ingresos nuevos. ${geoVictoriaImportResult.existingCount} usuario(s) ya existían por DNI.`}
+                                    </p>
+                                    <p className="text-xs text-gray-500 mt-1">
+                                        Archivo: {geoVictoriaImportResult.fileName} · Omitidos: {geoVictoriaImportResult.skippedCount}
+                                    </p>
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => setGeoVictoriaImportResult(null)}
+                                className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-white rounded-lg transition-colors"
+                                title="Cerrar notificación"
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+
+                        {geoVictoriaImportResult.created.length > 0 && (
+                            <div className="flex flex-wrap gap-2 pl-12">
+                                {geoVictoriaImportResult.created.map((person) => (
+                                    <button
+                                        key={person.id}
+                                        onClick={() => setEditModal({ ...person, isNew: false })}
+                                        className="px-3 py-1.5 bg-white border border-emerald-200 text-emerald-800 hover:bg-emerald-100 rounded-xl text-xs font-bold transition-colors"
+                                        title="Completar datos del colaborador"
+                                    >
+                                        {person.name} {person.lastName}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -2025,7 +2227,6 @@ function AdminDashboard() {
                         </div>
                     </div>
                 )}
-
                 {/* ===== MODAL REPORTE DE BAJAS ===== */}
                 {reporteBajaColaborador && (() => {
                     const s = reporteBajaColaborador;

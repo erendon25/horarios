@@ -6,7 +6,7 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
   const [form, setForm] = useState({
     name: staff?.name || '',
     lastName: staff?.lastName || '',
-    modality: staff?.modality || 'Full-Time',
+    modality: staff ? (staff.modality ?? '') : 'Full-Time',
     dni: staff?.dni || '',
     gender: staff?.gender || '',
     joinDate: staff?.joinDate || '',
@@ -34,9 +34,13 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
 
     try {
       if (staff) {
+        const needsCompletion = staff.needsCompletion
+          ? !(form.modality && form.sanitaryCardDate)
+          : (staff.needsCompletion || false);
         await setDoc(doc(db, 'staff_profiles', staff.id), {
           ...staff,
           ...form,
+          needsCompletion,
         });
       } else {
         await addDoc(collection(db, 'staff_profiles'), {
@@ -128,6 +132,7 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
             <div>
               <label className={labelCls}>Modalidad Actual</label>
               <select name="modality" value={form.modality} onChange={handleChange} className={inputCls}>
+                <option value="">— Seleccionar —</option>
                 <option>Full-Time</option>
                 <option>Part-Time</option>
               </select>

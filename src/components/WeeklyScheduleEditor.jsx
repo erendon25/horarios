@@ -79,9 +79,17 @@ const getEffectiveModality = (person, dateStr) => {
     return person.modality;
 };
 
+const normalizePosition = (position) =>
+    String(position || '')
+        .trim()
+        .replace(/#\d+$/g, '')
+        .replace(/\s+/g, ' ')
+        .toLowerCase();
+
 export default function WeeklyScheduleEditor() {
     const [staff, setStaff] = useState([]);
     const [positions, setPositions] = useState([]);
+    const [projectionPositions, setProjectionPositions] = useState([]);
     const [allSchedules, setAllSchedules] = useState({});
     const [requirements, setRequirements] = useState({});
     const [selectedDay, setSelectedDay] = useState('monday');
@@ -211,40 +219,64 @@ export default function WeeklyScheduleEditor() {
     }, []);
 
     // === VALIDACIÓN TEMPRANA ===
-    if (!currentUser) return <p className="text-center py-8">Inicia sesión</p>;
+    const isUnauthenticated = !currentUser;
     // Posiciones del día seleccionado (para el selector y el filtro)
-    useEffect(() => {
-        setPositions(requirements[selectedDay]?.positions || []);
-    }, [requirements, selectedDay]);
+    const getProjectionRequirementsForDay = (day) => {
+        const projectionRequirements = requirements[day] || { positions: [], matrix: [] };
+        const projectionNames = projectionPositions
+            .map(position => (typeof position === 'string' ? position : position?.name))
+            .filter(Boolean);
+        const dayPositions = Array.isArray(projectionRequirements.positions) && projectionRequirements.positions.length > 0
+            ? projectionRequirements.positions
+            : projectionNames;
+        const rawMatrix = projectionRequirements.matrix || [];
+        const normalizedMatrix = (Array.isArray(rawMatrix)
+            ? rawMatrix
+            : Object.keys(rawMatrix)
+                .sort((a, b) => Number(a) - Number(b))
+                .map(k => rawMatrix[k])
+        ).map(row => (
+            Array.isArray(row)
+                ? row
+                : Object.keys(row || {})
+                    .sort((a, b) => Number(a) - Number(b))
+                    .map(k => row[k])
+        ));
 
-    // ==================== CARGA TODOS LOS REQUERIMIENTOS (una sola vez) ====================
+        return {
+            positions: dayPositions,
+            matrix: dayPositions.map((_, index) => (
+                Array.isArray(normalizedMatrix[index]) ? normalizedMatrix[index] : Array(21).fill(0)
+            ))
+        };
+    };
+
+    useEffect(() => {
+        setPositions(getProjectionRequirementsForDay(selectedDay).positions);
+    }, [requirements, selectedDay, projectionPositions]);
+
     useEffect(() => {
         if (!storeId) return;
 
-        const loadAllRequirements = async () => {
-            const newReq = {};
-
-            for (const day of weekdays) {
-                let docRef = doc(db, 'stores', storeId, 'positioning_requirements', day);
-                let snap = await getDoc(docRef);
-
-                if (!snap.exists()) {
-                    docRef = doc(db, 'positioning_requirements', day);
-                    snap = await getDoc(docRef);
-                }
-
-                const data = snap.exists() ? snap.data() : { positions: [], matrix: {} };
-                newReq[day] = {
-                    positions: data.positions || [],
-                    matrix: data.matrix || {}
-                };
+        const ref = doc(db, 'stores', storeId, 'config', 'schedule_projection');
+        const unsubscribe = onSnapshot(
+            ref,
+            (snapshot) => {
+                const data = snapshot.exists() ? snapshot.data() : {};
+                setProjectionPositions(Array.isArray(data.positions) ? data.positions : []);
+                setRequirements(data.requirements || {});
+            },
+            (error) => {
+                console.error('Error loading projection positions:', error);
+                setProjectionPositions([]);
+                setRequirements({});
             }
+        );
 
-            setRequirements(newReq);
-        };
+        return () => unsubscribe();
+    }, [storeId, db]);
 
-        loadAllRequirements();
-    }, [storeId]);
+    // Los requerimientos del editor semanal salen solo de Proyeccion.
 
     // === CARGA SOLICITUDES APROBADAS ===
     useEffect(() => {
@@ -381,16 +413,17 @@ export default function WeeklyScheduleEditor() {
         if (isFeriado) return null;
 
         const studyBlocks = staff.study_schedule?.[day]?.blocks || [];
+        const conflicts = [];
 
         // ✅ Si el día está marcado como libre en estudio, no asignar
         if (staff.study_schedule?.[day]?.free === true) {
-            return 'estudia'; // día libre → no asignable
+            conflicts.push('estudia'); // día libre → no asignable
         }
 
         const requiredSkill = shift.position;
         const hasSkill = staff.skills?.includes(requiredSkill);
         if (!hasSkill) {
-            return 'incompatible'; // sin habilidad → no apto
+            conflicts.push('incompatible'); // sin habilidad → no apto
         }
 
         // Detectar conflictos de horario
@@ -418,11 +451,12 @@ export default function WeeklyScheduleEditor() {
             }
 
             if (overlapCurrent || overlapNext) {
-                return 'conflicto';
+                conflicts.push('conflicto');
+                break;
             }
         }
 
-        return null;
+        return conflicts.length > 0 ? conflicts : null;
     };
 
 
@@ -547,6 +581,32 @@ export default function WeeklyScheduleEditor() {
         return `${hours}:${mins.toString().padStart(2, '0')}`;
     };
 
+    const parseExtraHours = (value) => {
+        const parsed = parseFloat(String(value || 0).replace(',', '.'));
+        return Number.isFinite(parsed) ? parsed : 0;
+    };
+
+    const formatClockMinutes = (minutes) => {
+        const normalized = ((Math.round(minutes) % (24 * 60)) + (24 * 60)) % (24 * 60);
+        const hours = Math.floor(normalized / 60);
+        const mins = normalized % 60;
+        return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+    };
+
+    const getShiftWithExtras = (shift) => {
+        if (!shift?.start || !shift?.end) return null;
+
+        const pre = parseExtraHours(shift.extraHoursPre);
+        const post = parseExtraHours(shift.extraHoursPost ?? shift.extraHours);
+        const startMinutes = Math.max(0, timeToMinutes(shift.start) - pre * 60);
+        const endMinutes = timeToMinutes(shift.end) + post * 60;
+
+        return {
+            start: formatClockMinutes(startMinutes),
+            end: formatClockMinutes(endMinutes),
+        };
+    };
+
     const getDateStrForDay = (day) => {
         if (!weekStartDate || !day) return null;
         const [y, m, d] = weekStartDate.split('-').map(Number);
@@ -637,8 +697,8 @@ export default function WeeklyScheduleEditor() {
         }
 
         const newSchedules = { ...schedules };
-        const dayReqs = requirements[selectedDay];
-        const positions = Array.isArray(requirements.positions) ? requirements.positions : [];
+        const dayReqs = getProjectionRequirementsForDay(selectedDay);
+        const positions = Array.isArray(dayReqs.positions) ? dayReqs.positions : [];
         const matrix = dayReqs.matrix;
         // Convertir matrix de objeto a array si es necesario
         const isMatrixObject = !Array.isArray(matrix) && typeof matrix === 'object';
@@ -799,12 +859,36 @@ export default function WeeklyScheduleEditor() {
             if (!confirmEmpty) return;
         }
 
+        const hasScheduleContent = (schedule) => Boolean(
+            schedule && (
+                schedule.start ||
+                schedule.end ||
+                schedule.position ||
+                schedule.off ||
+                schedule.feriado
+            )
+        );
+
+        const sanitizeReplicatedSchedule = (schedule, day) => {
+            const validPositions = new Set(
+                getProjectionRequirementsForDay(day).positions.map(position => normalizePosition(position))
+            );
+            const nextSchedule = { ...schedule };
+
+            if (nextSchedule.position && !validPositions.has(normalizePosition(nextSchedule.position))) {
+                nextSchedule.position = '';
+            }
+
+            return nextSchedule;
+        };
+
         setAllSchedules(prev => {
             const currentWeekSchedules = { ...prev[wk] } || {};
             const newDirty = new Set(dirtyStaff);
 
             replicateTargetStaff.forEach(staffId => {
                 const prevPersonSchedule = prevWeekSchedules[staffId] || {};
+                let staffChanged = false;
                 
                 if (!currentWeekSchedules[staffId]) {
                     currentWeekSchedules[staffId] = {};
@@ -812,14 +896,16 @@ export default function WeeklyScheduleEditor() {
 
                 replicateTargetDays.forEach(day => {
                     const sourceDaySchedule = prevPersonSchedule[day];
-                    if (sourceDaySchedule) {
-                        currentWeekSchedules[staffId][day] = { ...sourceDaySchedule };
+                    const currentDaySchedule = currentWeekSchedules[staffId][day];
+                    if (sourceDaySchedule && !hasScheduleContent(currentDaySchedule)) {
+                        currentWeekSchedules[staffId][day] = sanitizeReplicatedSchedule(sourceDaySchedule, day);
+                        staffChanged = true;
                     } else {
                         // Si no hay horario la semana pasada para ese día, podemos optar por no hacer nada o limpiar
                         // Según la petición, "replica el mismo horario", si no hay, no se replica.
                     }
                 });
-                newDirty.add(staffId);
+                if (staffChanged) newDirty.add(staffId);
             });
 
             setDirtyStaff(newDirty);
@@ -927,9 +1013,6 @@ export default function WeeklyScheduleEditor() {
 
                 setStaff(activeStaff);
 
-                const posSet = new Set();
-                activeStaff.forEach(s => s.positionAbilities?.forEach(p => posSet.add(p)));
-                setPositions(Array.from(posSet));
             } catch (err) {
             } finally {
                 setLoading(false);
@@ -1128,11 +1211,20 @@ export default function WeeklyScheduleEditor() {
         return { preCierres, cierres };
     };
 
+    const safeRequirements = getProjectionRequirementsForDay(selectedDay);
+    const selectablePositionsByNorm = new Map(
+        positions.map(position => [normalizePosition(position), position])
+    );
+    const getSelectablePosition = (position) =>
+        selectablePositionsByNorm.get(normalizePosition(position)) || '';
+
     const assignedArray = filteredStaff
         .map(p => {
             const d = schedules[p.id]?.[selectedDay];
             // Si no hay datos, o faltan start/end esenciales, retornar vacío se filtrará luego
             if (!d || !d.start || !d.end) return {};
+            const selectedPosition = getSelectablePosition(d.position);
+            if (!selectedPosition) return {};
 
             let realStart = d.start;
             let realEnd = d.end;
@@ -1170,16 +1262,18 @@ export default function WeeklyScheduleEditor() {
                 realEnd = `${String(finalH).padStart(2, '0')}:${String(finalM).padStart(2, '0')}`;
             }
 
+            const realShift = getShiftWithExtras(d);
+
             return {
-                position: d?.position,
-                start: realStart,
-                end: realEnd,
+                position: selectedPosition,
+                start: realShift?.start || realStart,
+                end: realShift?.end || realEnd,
                 isTrainer: p.position === 'ENTRENADOR'
             };
         })
         .filter(x => x.position && x.start && x.end);
 
-    const safeRequirements = requirements[selectedDay] || { positions: [], matrix: {} };
+    if (isUnauthenticated) return <p className="text-center py-8">Inicia sesión</p>;
     if (loading) {
         return (
             <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center">
@@ -1522,6 +1616,7 @@ export default function WeeklyScheduleEditor() {
                                             const effModality = getEffectiveModality(p, currentDateStr);
 
                                             const d = schedules[p.id]?.[selectedDay] || {};
+                                            const visiblePosition = getSelectablePosition(d.position);
                                             const hasConflict = detectScheduleConflict(p, selectedDay, d);
                                             const horas = calculateWeeklyHours(p.id);
                                             // Cálculo de si tiene al menos un día libre en la semana
@@ -1661,8 +1756,8 @@ export default function WeeklyScheduleEditor() {
                                                                         size={16}
                                                                         onMouseEnter={(e) => {
                                                                             const rect = e.currentTarget.getBoundingClientRect();
-                                                                            const tooltipHeight = 350;
-                                                                            const tooltipWidth = 300;
+                                                                            const tooltipHeight = 300;
+                                                                            const tooltipWidth = 360;
                                                                             const viewportHeight = window.innerHeight;
                                                                             const viewportWidth = window.innerWidth;
 
@@ -1707,14 +1802,17 @@ export default function WeeklyScheduleEditor() {
 
                                                             const alerts = [];
 
-                                                            // 1. Conflicto de Habilidades / Estudio (Original)
-                                                            if (hasConflict) {
+                                                            // 1. Conflictos de habilidades y estudio
+                                                            const scheduleConflicts = Array.isArray(hasConflict)
+                                                                ? hasConflict
+                                                                : (hasConflict ? [hasConflict] : []);
+                                                            scheduleConflicts.forEach(conflict => {
                                                                 alerts.push({
                                                                     type: 'warning',
-                                                                    text: formatConflictMessage(hasConflict),
+                                                                    text: formatConflictMessage(conflict),
                                                                     icon: <AlertCircle className="w-3 h-3" />
                                                                 });
-                                                            }
+                                                            });
 
                                                             // 2. Conflicto de Descanso (Cierre -> Apertura)
                                                             const dayIdx = weekdays.indexOf(selectedDay);
@@ -1865,7 +1963,7 @@ export default function WeeklyScheduleEditor() {
                                                     <td className="px-4 py-4 text-center">
                                                         {isCeased ? <span className="text-xs font-bold text-red-500 bg-red-100 px-2 py-1 rounded">CESADO</span> : (
                                                             <select
-                                                                value={d.position || ''}
+                                                                value={visiblePosition}
                                                                 onChange={e => handleChange(p.id, 'position', e.target.value)}
                                                                 disabled={d.feriado || d.off}
                                                                 className="w-full px-2 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
@@ -1989,7 +2087,7 @@ export default function WeeklyScheduleEditor() {
                                 <ScheduleHeatmapMatrix
                                     key={selectedDay}
                                     assigned={assignedArray}
-                                    requirements={requirements[selectedDay] || { positions: [], matrix: {} }}
+                                    requirements={safeRequirements}
                                 />
                             </div>
                         </div>
@@ -2003,8 +2101,8 @@ export default function WeeklyScheduleEditor() {
                         className="fixed z-[9999] bg-white border-2 border-blue-200 rounded-lg shadow-xl p-3"
                         style={{
                             pointerEvents: 'auto',
-                            width: '300px',
-                            maxHeight: '350px',
+                            width: '360px',
+                            maxHeight: '300px',
                             overflowY: 'auto',
                             top: `${tooltipPosition.top}px`,
                             left: `${tooltipPosition.left}px`,
@@ -2020,41 +2118,65 @@ export default function WeeklyScheduleEditor() {
                         {(() => {
                             const person = filteredStaff.find(p => p.id === tooltipOpen);
                             if (!person) return null;
+                            const personSchedule = schedules[person.id] || {};
+                            const formatAssignedShift = (day) => {
+                                const shift = personSchedule[day];
+                                if (!shift) return { text: 'S/A', tone: 'text-gray-400 italic' };
+                                if (shift.off) return { text: 'Descanso', tone: 'text-green-700 font-bold' };
+                                if (shift.feriado) return { text: 'Feriado', tone: 'text-yellow-700 font-bold' };
+                                if (!shift.start || !shift.end) return { text: 'S/A', tone: 'text-gray-400 italic' };
+                                const realShift = getShiftWithExtras(shift);
+                                return {
+                                    text: `${realShift?.start || shift.start} - ${realShift?.end || shift.end}`,
+                                    tone: 'text-blue-700 font-semibold'
+                                };
+                            };
 
                             return (
                                 <>
-                                    <strong className="block mb-2 text-xs font-bold text-gray-800 border-b border-gray-200 pb-1.5 flex items-center gap-1.5">
-                                        <Clock className="w-3.5 h-3.5 text-blue-600" />
-                                        Horarios de Estudio - {person.name} {person.lastName}
+                                    <strong className="block mb-1.5 text-[11px] font-bold text-gray-800 border-b border-gray-200 pb-1 flex items-center gap-1.5">
+                                        <Clock className="w-3 h-3 text-blue-600" />
+                                        Estudio y Turno - {person.name} {person.lastName}
                                     </strong>
 
-                                    <div className="space-y-1 text-xs">
+                                    <div className="space-y-0.5 text-[11px]">
+                                        <div className="grid grid-cols-[36px_1fr_1fr] gap-1.5 text-[8px] uppercase tracking-wider font-black text-gray-400 pb-1 border-b border-gray-100">
+                                            <span>Dia</span>
+                                            <span>Estudio</span>
+                                            <span className="border-l border-dashed border-blue-300 pl-1.5">Turno</span>
+                                        </div>
                                         {weekdays.map(day => {
                                             const daySchedule = person.study_schedule?.[day];
                                             const isFree = daySchedule?.free === true;
                                             const hasBlocks = daySchedule?.blocks && daySchedule.blocks.length > 0;
+                                            const assignedShift = formatAssignedShift(day);
 
                                             return (
-                                                <div key={day} className="flex items-start gap-2 py-0.5">
-                                                    <span className="font-semibold text-gray-700 min-w-[55px] text-xs">
+                                                <div key={day} className="grid grid-cols-[36px_1fr_1fr] gap-1.5 items-start py-0.5 border-b border-gray-50 last:border-b-0">
+                                                    <span className="font-semibold text-gray-700 text-[11px]">
                                                         {weekdayLabels[day].slice(0, 3)}:
                                                     </span>
-                                                    <div className="flex-1">
+                                                    <div className="min-w-0">
                                                         {isFree ? (
-                                                            <span className="text-green-700 font-semibold text-xs">
+                                                            <span className="text-green-700 font-semibold text-[11px]">
                                                                 ✓ Libre
                                                             </span>
                                                         ) : hasBlocks ? (
                                                             <div className="space-y-0.5">
                                                                 {daySchedule.blocks.map((block, i) => (
-                                                                    <div key={i} className="text-orange-700 font-medium text-xs">
+                                                                    <div key={i} className="text-orange-700 font-medium text-[11px]">
                                                                         {block.start || block.startTime} - {block.end || block.endTime}
                                                                     </div>
                                                                 ))}
                                                             </div>
                                                         ) : (
-                                                            <span className="text-gray-500 italic text-xs">Sin clases</span>
+                                                            <span className="text-gray-500 italic text-[11px]">Sin clases</span>
                                                         )}
+                                                    </div>
+                                                    <div className="min-w-0 border-l border-dashed border-blue-300 pl-1.5">
+                                                        <span className={`block text-[11px] break-words ${assignedShift.tone}`}>
+                                                            {assignedShift.text}
+                                                        </span>
                                                     </div>
                                                 </div>
                                             );

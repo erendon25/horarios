@@ -53,8 +53,15 @@ const CollaboratorDashboard = () => {
   const isRestricted = () => {
     if (isHealthCardBlocked()) return true;
     if (!lockSettings.restrictionsEnabled) return false;
-    const today = new Date().toISOString().split('T')[0];
-    return today < lockSettings.reenableDate;
+    
+    // Obtener la fecha local actual para evitar desajustes por zona horaria UTC
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const todayLocal = `${y}-${m}-${day}`;
+    
+    return todayLocal <= lockSettings.reenableDate;
   };
 
   const getSanitaryCardStatus = () => {
@@ -120,17 +127,21 @@ const CollaboratorDashboard = () => {
   }, []);
 
   useEffect(() => {
-    const fetchLock = async () => {
-      if (!perfil?.storeId) return;
-      const db = getFirestore();
-      try {
-        const docRef = doc(db, "stores", perfil.storeId, "config", "schedule_lock");
-        const snap = await getDoc(docRef);
-        if (snap.exists()) setLockSettings(snap.data());
-      } catch (e) { console.error(e); }
-    };
-    fetchLock();
-  }, [perfil]);
+    if (!perfil?.storeId) return;
+    const db = getFirestore();
+    const docRef = doc(db, "stores", perfil.storeId, "config", "schedule_lock");
+    const unsubscribe = onSnapshot(docRef, (snap) => {
+      if (snap.exists()) {
+        setLockSettings(snap.data());
+      } else {
+        setLockSettings({ restrictionsEnabled: false, reenableDate: '' });
+      }
+    }, (e) => {
+      console.error("Error al escuchar schedule_lock:", e);
+    });
+
+    return () => unsubscribe();
+  }, [perfil?.storeId]);
 
   useEffect(() => {
     const fetchPerfil = async () => {
