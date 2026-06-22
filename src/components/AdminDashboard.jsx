@@ -10,7 +10,6 @@ import { FaCheck, FaTimes, FaCalendarAlt, FaFilePdf, FaEdit, FaTrash, FaUnlink, 
 import {
     Users,
     Clock,
-    Settings,
     Calendar,
     Search,
     Plus,
@@ -55,6 +54,8 @@ import StaffModal from './StaffModal';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import VHLConsultation from './VHLConsultation';
 import ScheduleRequestsManager from './ScheduleRequestsManager';
+import { exportExtraHoursPDF, exportExtraHoursGroupedPDF } from "../services/exportExtraHoursPDF";
+import GeoVictoriaUpload from './GeoVictoriaUpload';
 
 
 
@@ -64,7 +65,7 @@ import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
 
-const normalizeDni = (value) => String(value || '').replace(/\D/g, '').trim();
+const normalizeDni = (value) => String(value ?? '').trim().replace(/\.0+$/, '').replace(/\D/g, '').trim();
 
 const parseGeoVictoriaDate = (value) => {
     if (!value) return '';
@@ -88,6 +89,256 @@ const readGeoVictoriaRows = (workbook) => {
     const sheetName = workbook.SheetNames[0];
     if (!sheetName) return [];
     return XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '', raw: true });
+};
+
+const normalizeHeader = (value) =>
+    String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+
+const getRowValue = (row, labels) => {
+    const targets = labels.map(normalizeHeader);
+    const match = Object.keys(row || {}).find((key) => targets.includes(normalizeHeader(key)));
+    return match ? row[match] : '';
+};
+
+const getRepeatedRowValue = (row, label, index = 0) => {
+    const target = normalizeHeader(label);
+    const matches = Object.keys(row || {}).filter((key) => {
+        const normalized = normalizeHeader(key);
+        return normalized === target || normalized.replace(/[._]\d+$/, '') === target;
+    });
+    const match = matches[index];
+    return match ? row[match] : '';
+};
+
+const getRowValueWithFallback = (row, labels, fallbackKeys = []) => {
+    const direct = getRowValue(row, labels);
+    if (direct !== '') return direct;
+
+    for (const key of fallbackKeys) {
+        if (row && row[key] !== undefined && row[key] !== '') return row[key];
+    }
+
+    return '';
+};
+
+const parseActivationDate = (value) => {
+    if (!value) return null;
+
+    if (value instanceof Date && !isNaN(value.getTime())) {
+        return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+    }
+
+    if (typeof value === 'number') {
+        const parsed = XLSX.SSF.parse_date_code(value);
+        if (parsed) return new Date(parsed.y, parsed.m - 1, parsed.d);
+    }
+
+    const text = String(value).trim();
+    const match = text.match(/(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})/);
+    if (match) {
+        const day = Number(match[1]);
+        const month = Number(match[2]) - 1;
+        const year = Number(match[3].length === 2 ? `20${match[3]}` : match[3]);
+        const parsed = new Date(year, month, day);
+        return isNaN(parsed.getTime()) ? null : parsed;
+    }
+
+    const fallback = new Date(text);
+    return isNaN(fallback.getTime())
+        ? null
+        : new Date(fallback.getFullYear(), fallback.getMonth(), fallback.getDate());
+};
+
+const formatDateInput = (date) => {
+    if (!date || isNaN(date.getTime())) return '';
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+};
+
+const parseGeoVictoriaTimeValue = (value) => {
+    if (value === null || value === undefined || value === '') return '';
+
+    if (value instanceof Date && !isNaN(value.getTime())) {
+        return `${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`;
+    }
+
+    if (typeof value === 'number') {
+        const totalMinutes = Math.round(((value % 1) + Number.EPSILON) * 24 * 60);
+        return `${String(Math.floor(totalMinutes / 60) % 24).padStart(2, '0')}:${String(totalMinutes % 60).padStart(2, '0')}`;
+    }
+
+    const match = String(value).trim().match(/(\d{1,2}):(\d{2})/);
+    if (!match) return '';
+    return `${String(Number(match[1])).padStart(2, '0')}:${match[2]}`;
+};
+
+const parseGeoVictoriaDurationMinutes = (value) => {
+    if (value === null || value === undefined || value === '') return 0;
+
+    if (typeof value === 'number') {
+        return Math.max(0, Math.round(value * 24 * 60));
+    }
+
+    if (value instanceof Date && !isNaN(value.getTime())) {
+        return Math.max(0, value.getHours() * 60 + value.getMinutes());
+    }
+
+    const text = String(value).trim().toLowerCase().replace(',', '.');
+    if (!text || text === '0') return 0;
+
+    const daysMatch = text.match(/(\d+)\s*days?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    if (daysMatch) {
+        return (Number(daysMatch[1]) * 24 * 60) + (Number(daysMatch[2]) * 60) + Number(daysMatch[3]);
+    }
+
+    const clockMatch = text.match(/(\d{1,3}):(\d{2})(?::(\d{2}))?/);
+    if (clockMatch) {
+        return (Number(clockMatch[1]) * 60) + Number(clockMatch[2]);
+    }
+
+    const hourMatch = text.match(/(\d+(?:\.\d+)?)\s*h/);
+    const minuteMatch = text.match(/(\d+)\s*m/);
+    if (hourMatch || minuteMatch) {
+        return Math.round((hourMatch ? Number(hourMatch[1]) * 60 : 0) + (minuteMatch ? Number(minuteMatch[1]) : 0));
+    }
+
+    const numeric = Number(text);
+    if (!isNaN(numeric)) {
+        return Math.max(0, Math.round((numeric <= 1 ? numeric * 24 : numeric) * 60));
+    }
+
+    return 0;
+};
+
+const parseTurnoRange = (value) => {
+    const matches = String(value || '').match(/\d{1,2}:\d{2}/g) || [];
+    return {
+        scheduledStart: parseGeoVictoriaTimeValue(matches[0] || ''),
+        scheduledEnd: parseGeoVictoriaTimeValue(matches[1] || ''),
+    };
+};
+
+const formatDurationMinutes = (minutes) => {
+    const total = Math.max(0, Math.round(Number(minutes) || 0));
+    const hours = Math.floor(total / 60);
+    const mins = total % 60;
+    return `${hours}h ${mins}m`;
+};
+
+const minutesToHours = (minutes) => Math.round(((Number(minutes) || 0) / 60) * 100) / 100;
+
+const getExtraRecordMinutes = (record) => {
+    if (record?.totalExtraMinutes !== undefined) return Number(record.totalExtraMinutes) || 0;
+    if (record?.durationMinutes !== undefined) return Number(record.durationMinutes) || 0;
+    return parseGeoVictoriaDurationMinutes(record?.duracion);
+};
+
+const geoVictoriaDayNames = ['Domingo', 'Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado'];
+
+const getGeoVictoriaDayLabel = (dateString) => {
+    if (!dateString) return '';
+    const date = new Date(`${dateString}T00:00:00`);
+    if (isNaN(date.getTime())) return dateString;
+    const day = geoVictoriaDayNames[date.getDay()];
+    const dd = String(date.getDate()).padStart(2, '0');
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    return `${day} ${dd}/${mm}`;
+};
+
+const getClosedWeekKey = (dateString) => {
+    const date = new Date(`${dateString}T00:00:00`);
+    if (isNaN(date.getTime())) return '';
+    const day = date.getDay();
+    const mondayOffset = day === 0 ? -6 : 1 - day;
+    const monday = new Date(date);
+    monday.setDate(date.getDate() + mondayOffset);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    return `${formatDateInput(monday)}_to_${formatDateInput(sunday)}`;
+};
+
+const addMinutesToTime = (time, minutes) => {
+    const match = String(time || '').match(/^(\d{1,2}):(\d{2})$/);
+    if (!match) return time || '';
+    const base = Number(match[1]) * 60 + Number(match[2]);
+    const total = base + Math.round(Number(minutes) || 0);
+    const normalized = ((total % 1440) + 1440) % 1440;
+    return `${String(Math.floor(normalized / 60)).padStart(2, '0')}:${String(normalized % 60).padStart(2, '0')}`;
+};
+
+const getShiftWithGeoVictoriaExtras = (detail) => {
+    const baseStart = detail?.scheduledStart || detail?.entrada || '';
+    const baseEnd = detail?.scheduledEnd || detail?.salida || '';
+    const start = detail?.extraMinutesPre > 0 ? addMinutesToTime(baseStart, -detail.extraMinutesPre) : baseStart;
+    const end = detail?.extraMinutesPost > 0 ? addMinutesToTime(baseEnd, detail.extraMinutesPost) : baseEnd;
+    if (!start && !end) return detail?.turno || '';
+    return `${start || '--'} - ${end || '--'}`;
+};
+
+const formatHrDate = (date) =>
+    date ? date.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '-';
+
+const getTenure = (startDate, endDate = new Date()) => {
+    if (!startDate || isNaN(startDate.getTime())) return null;
+
+    const start = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+    const end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+    if (start > end) {
+        return { months: 0, days: 0, totalDays: 0, label: 'Fecha futura', bucket: 'Sin rango' };
+    }
+
+    let months = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
+    let days = end.getDate() - start.getDate();
+
+    if (days < 0) {
+        months -= 1;
+        days += new Date(end.getFullYear(), end.getMonth(), 0).getDate();
+    }
+
+    const totalDays = Math.max(0, Math.floor((end - start) / (1000 * 60 * 60 * 24)));
+    const monthLabel = `${months} ${months === 1 ? 'mes' : 'meses'}`;
+    const dayLabel = `${days} ${days === 1 ? 'dia' : 'dias'}`;
+    const bucket = getTenureBucket(totalDays);
+
+    return {
+        months,
+        days,
+        totalDays,
+        bucket,
+        label: months > 0 ? `${monthLabel} con ${dayLabel}` : dayLabel,
+    };
+};
+
+const getTenureBucket = (totalDays) => {
+    const monthsApprox = totalDays / 30.4375;
+    if (monthsApprox < 1) return 'Menos de 1 mes';
+    if (monthsApprox < 4) return '1 a 3 meses';
+    if (monthsApprox < 7) return '4 a 7 meses';
+    if (monthsApprox < 10) return '7 a 10 meses';
+    return '10 a mas';
+};
+
+const hrTenureBuckets = ['1 a 3 meses', '4 a 7 meses', '7 a 10 meses', '10 a mas'];
+
+const isHrManagementRole = (...values) => {
+    const text = normalizeHeader(values.filter(Boolean).join(' '));
+    if (!text) return false;
+
+    return [
+        'jefe de tienda',
+        'jefa de tienda',
+        'gerente de tienda',
+        'gerente de tiendas',
+        'gerente tiendas',
+        'store manager',
+    ].some((term) => text.includes(term)) || text === 'gerente';
 };
 
 function AdminDashboard() {
@@ -140,9 +391,25 @@ function AdminDashboard() {
     const [showVHLModal, setShowVHLModal] = useState(false);
     const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
     const [showRequestsModal, setShowRequestsModal] = useState(false);
+    const [showHRPanel, setShowHRPanel] = useState(false);
     const geoVictoriaInputRef = useRef(null);
+    const hrAnalysisInputRef = useRef(null);
+    const geoVictoriaExtraInputRef = useRef(null);
     const [geoVictoriaImporting, setGeoVictoriaImporting] = useState(false);
     const [geoVictoriaImportResult, setGeoVictoriaImportResult] = useState(null);
+    const [hrAnalysisLoading, setHrAnalysisLoading] = useState(false);
+    const [hrAnalysisError, setHrAnalysisError] = useState('');
+    const [hrTimeAnalysis, setHrTimeAnalysis] = useState(null);
+    const [geoVictoriaExtraImporting, setGeoVictoriaExtraImporting] = useState(false);
+    const [geoVictoriaExtraImportResult, setGeoVictoriaExtraImportResult] = useState(null);
+    const [geoVictoriaExtraRecords, setGeoVictoriaExtraRecords] = useState([]);
+    const [geoVictoriaExtraLoading, setGeoVictoriaExtraLoading] = useState(false);
+    const [geoVictoriaExtraDateFrom, setGeoVictoriaExtraDateFrom] = useState('');
+    const [geoVictoriaExtraDateTo, setGeoVictoriaExtraDateTo] = useState('');
+    const [geoVictoriaExtraStaffFilter, setGeoVictoriaExtraStaffFilter] = useState('');
+    const [geoVictoriaTurnoMap, setGeoVictoriaTurnoMap] = useState({});
+    const [geoVictoriaTurnoMeta, setGeoVictoriaTurnoMeta] = useState(null);
+    const [geoVictoriaTurnoSaving, setGeoVictoriaTurnoSaving] = useState(false);
 
     const skillStats = useMemo(() => {
         const stats = {};
@@ -176,6 +443,47 @@ function AdminDashboard() {
             .sort((a, b) => b.percentage - a.percentage);
     }, [staff]);
 
+    const geoVictoriaExtraFilteredRecords = useMemo(() => {
+        return geoVictoriaExtraRecords.filter((record) => {
+            const recordStart = record.periodStart || record.fecha || '';
+            const recordEnd = record.periodEnd || record.fecha || recordStart;
+            if (geoVictoriaExtraDateFrom && recordEnd < geoVictoriaExtraDateFrom) return false;
+            if (geoVictoriaExtraDateTo && recordStart > geoVictoriaExtraDateTo) return false;
+            if (geoVictoriaExtraStaffFilter) {
+                const key = record.staffId || record.uid || record.dni;
+                if (key !== geoVictoriaExtraStaffFilter) return false;
+            }
+            return true;
+        });
+    }, [geoVictoriaExtraRecords, geoVictoriaExtraDateFrom, geoVictoriaExtraDateTo, geoVictoriaExtraStaffFilter]);
+
+    const geoVictoriaExtraTotals = useMemo(() => {
+        const collaboratorKeys = new Set();
+        return geoVictoriaExtraFilteredRecords.reduce((acc, record) => {
+            collaboratorKeys.add(record.staffId || record.uid || record.dni);
+            acc.records += 1;
+            acc.preMinutes += Number(record.extraMinutesPre) || 0;
+            acc.postMinutes += Number(record.extraMinutesPost) || 0;
+            acc.totalMinutes += getExtraRecordMinutes(record);
+            acc.collaborators = collaboratorKeys.size;
+            return acc;
+        }, { records: 0, collaborators: 0, preMinutes: 0, postMinutes: 0, totalMinutes: 0 });
+    }, [geoVictoriaExtraFilteredRecords]);
+
+    const geoVictoriaExtraCollaborators = useMemo(() => {
+        const options = new Map();
+        geoVictoriaExtraRecords.forEach((record) => {
+            const key = record.staffId || record.uid || record.dni;
+            if (!key || options.has(key)) return;
+            options.set(key, {
+                key,
+                label: `${record.name || ''} ${record.lastName || ''}`.trim() || record.dni || 'Sin nombre',
+                dni: record.dni || '',
+            });
+        });
+        return Array.from(options.values()).sort((a, b) => a.label.localeCompare(b.label));
+    }, [geoVictoriaExtraRecords]);
+
     const fetchScheduleLock = async () => {
         if (!userData?.storeId) return;
         try {
@@ -186,6 +494,59 @@ function AdminDashboard() {
             }
         } catch (err) {
             console.error("Error al cargar configuración de bloqueo:", err);
+        }
+    };
+
+    const fetchGeoVictoriaTurnos = async () => {
+        if (!userData?.storeId) return;
+        try {
+            const docRef = doc(db, "stores", userData.storeId, "config", "geovictoria_turnos");
+            const snap = await getDoc(docRef);
+            if (snap.exists()) {
+                const data = snap.data();
+                setGeoVictoriaTurnoMap(data.turnoMap || {});
+                setGeoVictoriaTurnoMeta({
+                    fileName: data.fileName || '',
+                    count: data.count || Object.keys(data.turnoMap || {}).length,
+                    updatedAt: data.updatedAt || '',
+                });
+            } else {
+                setGeoVictoriaTurnoMap({});
+                setGeoVictoriaTurnoMeta(null);
+            }
+        } catch (err) {
+            console.error("Error al cargar turnos GeoVictoria:", err);
+        }
+    };
+
+    const handleGeoVictoriaTurnosLoaded = async (turnoMap, file) => {
+        if (!userData?.storeId) {
+            alert('No se pudo identificar la tienda.');
+            return;
+        }
+
+        setGeoVictoriaTurnoSaving(true);
+        try {
+            const payload = {
+                turnoMap,
+                count: Object.keys(turnoMap).length,
+                fileName: file?.name || '',
+                updatedAt: new Date().toISOString(),
+                storeId: userData.storeId,
+            };
+
+            await setDoc(doc(db, "stores", userData.storeId, "config", "geovictoria_turnos"), payload);
+            setGeoVictoriaTurnoMap(turnoMap);
+            setGeoVictoriaTurnoMeta({
+                fileName: payload.fileName,
+                count: payload.count,
+                updatedAt: payload.updatedAt,
+            });
+        } catch (err) {
+            console.error("Error guardando turnos GeoVictoria:", err);
+            alert('No se pudo guardar el archivo de turnos GeoVictoria.');
+        } finally {
+            setGeoVictoriaTurnoSaving(false);
         }
     };
 
@@ -230,6 +591,19 @@ function AdminDashboard() {
         return diffDays <= 15;
     };
 
+    const isActiveInSystem = (person) => {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const endDateStr = person.isTrainee
+            ? person.trainingEndDate
+            : (person.cessationDate || person.terminationDate);
+
+        if (!endDateStr) return true;
+
+        const endDate = new Date(`${endDateStr}T00:00:00`);
+        return !isNaN(endDate.getTime()) && endDate >= today;
+    };
+
     const openPositionModal = (colab) => {
         setPositionTarget(colab);
         setTempAbilities(colab.positionAbilities || []);
@@ -265,7 +639,7 @@ function AdminDashboard() {
         const doc = new jsPDF();
         doc.text("Colaboradores con carnet de sanidad próximo a vencer", 14, 14);
 
-        const filtered = staff.filter(s => isCardExpiringSoon(s.sanitaryCardDate));
+        const filtered = staff.filter(s => isActiveInSystem(s) && isCardExpiringSoon(s.sanitaryCardDate));
         if (filtered.length === 0) {
             doc.text("No hay colaboradores con carnet próximo a vencer.", 14, 30);
         } else {
@@ -482,6 +856,7 @@ function AdminDashboard() {
             fetchAllStaffProfiles();
             fetchScheduleLock();
             fetchStoreRequirements();
+            fetchGeoVictoriaTurnos();
 
             // Notify listener for pending requests
             const q = query(
@@ -538,7 +913,7 @@ function AdminDashboard() {
 
         try {
             const buffer = await file.arrayBuffer();
-            const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+            const workbook = XLSX.read(buffer, { type: 'array', cellDates: false });
             const rows = readGeoVictoriaRows(workbook);
 
             const existingByDni = new Map();
@@ -622,6 +997,622 @@ function AdminDashboard() {
             alert(`No se pudo procesar el Excel de Geovictoria: ${err.message}`);
         } finally {
             setGeoVictoriaImporting(false);
+            event.target.value = '';
+        }
+    };
+
+    const isStaffActiveForHr = (person) => {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const endDateStr = person.isTrainee ? person.trainingEndDate : (person.cessationDate || person.terminationDate);
+        if (!endDateStr) return true;
+        const endDate = new Date(`${endDateStr}T00:00:00`);
+        return endDate >= today;
+    };
+
+    const getGeoVictoriaExtraPeriodLabel = (record) => {
+        if (record?.periodStart && record?.periodEnd) {
+            return `${record.periodStart} a ${record.periodEnd}`;
+        }
+        return record?.fecha || '';
+    };
+
+    const getGeoVictoriaExtraStaffProfile = (record) => {
+        const recordDni = normalizeDni(record?.dni);
+        return staff.find((person) =>
+            person.id === record?.staffId
+            || person.uid === record?.uid
+            || (recordDni && normalizeDni(person.dni) === recordDni)
+        ) || {};
+    };
+
+    const buildGeoVictoriaExtraPdfData = (record) => {
+        const profile = getGeoVictoriaExtraStaffProfile(record);
+        const totalMinutes = getExtraRecordMinutes(record);
+        const periodLabel = getGeoVictoriaExtraPeriodLabel(record);
+        const activityParts = [];
+        if ((Number(record.extraMinutesPre) || 0) > 0) {
+            activityParts.push(`Entrada: ${formatDurationMinutes(record.extraMinutesPre)}`);
+        }
+        if ((Number(record.extraMinutesPost) || 0) > 0) {
+            activityParts.push(`Salida: ${formatDurationMinutes(record.extraMinutesPost)}`);
+        }
+
+        return {
+            name: record.name || profile.name || '',
+            lastName: record.lastName || profile.lastName || '',
+            dni: record.dni || profile.dni || '',
+            cargo: record.cargo || record.position || profile.cargo || profile.position || '',
+            modality: record.modality || profile.modality || '',
+            storeName: record.storeName || profile.storeName || storeName || '',
+            periodLabel,
+            fileName: `Horas_Extras_${normalizeDni(record.dni) || record.staffId || 'colaborador'}_${(record.periodStart || record.fecha || '').replaceAll('-', '')}.pdf`,
+            registros: [{
+                fecha: periodLabel,
+                fechaLabel: periodLabel,
+                inicio: record.entrada || record.inicio || '',
+                fin: record.salida || record.fin || '',
+                duracion: formatDurationMinutes(totalMinutes),
+                totalExtraMinutes: totalMinutes,
+                durationMinutes: totalMinutes,
+                actividad: record.actividad || `Tiempo extra GeoVictoria (${activityParts.join(' | ')})`,
+            }],
+        };
+    };
+
+    const handleExportGeoVictoriaExtraPDF = async (record) => {
+        await exportExtraHoursPDF(buildGeoVictoriaExtraPdfData(record));
+    };
+
+    const handleExportGeoVictoriaExtraFilteredPDF = async () => {
+        if (geoVictoriaExtraFilteredRecords.length === 0) {
+            alert('No hay registros para descargar con los filtros seleccionados.');
+            return;
+        }
+
+        const datePart = new Date().toLocaleDateString('es-PE').replace(/\//g, '.');
+        const detailDates = geoVictoriaExtraFilteredRecords
+            .flatMap((record) => (record.dailyDetails || []).map((detail) => detail.fecha).filter(Boolean));
+        const periodStart = (geoVictoriaExtraDateFrom || detailDates.sort()[0]) || geoVictoriaExtraFilteredRecords
+            .map((record) => record.periodStart || record.fecha)
+            .filter(Boolean)
+            .sort()[0] || geoVictoriaExtraDateFrom || '';
+        const periodEnd = (geoVictoriaExtraDateTo || detailDates.sort().slice(-1)[0]) || geoVictoriaExtraFilteredRecords
+            .map((record) => record.periodEnd || record.fecha)
+            .filter(Boolean)
+            .sort()
+            .slice(-1)[0] || geoVictoriaExtraDateTo || '';
+        const periodLabel = periodStart && periodEnd ? `${periodStart}_to_${periodEnd}` : 'GeoVictoria';
+
+        const groupedRows = geoVictoriaExtraFilteredRecords.flatMap((record) => {
+            const profile = getGeoVictoriaExtraStaffProfile(record);
+            const baseName = `${record.name || profile.name || ''} ${record.lastName || profile.lastName || ''}`.trim();
+            const modality = record.modality || profile.modality || '';
+            const details = Array.isArray(record.dailyDetails) ? record.dailyDetails : [];
+
+            return details
+                .filter((detail) => {
+                    const fecha = detail.fecha || record.fecha || '';
+                    if (geoVictoriaExtraDateFrom && fecha < geoVictoriaExtraDateFrom) return false;
+                    if (geoVictoriaExtraDateTo && fecha > geoVictoriaExtraDateTo) return false;
+                    return (Number(detail.totalExtraMinutes) || 0) > 0;
+                })
+                .map((detail) => ({
+                    name: baseName,
+                    modality,
+                    day: detail.day || getGeoVictoriaDayLabel(detail.fecha),
+                    shift: getShiftWithGeoVictoriaExtras(detail),
+                    extraHours: Math.round(((Number(detail.totalExtraMinutes) || 0) / 60) * 100) / 100,
+                    weekKey: getClosedWeekKey(detail.fecha || record.fecha),
+                    sortKey: `${detail.fecha || record.fecha || ''}_${baseName}`,
+                }));
+        }).sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+
+        if (groupedRows.length === 0) {
+            alert('No hay detalle diario de horas extra para el rango seleccionado. Vuelve a subir el Excel de GeoVictoria para guardar el detalle por dia.');
+            return;
+        }
+
+        await exportExtraHoursGroupedPDF(groupedRows, {
+            weekKey: periodLabel,
+            fileName: `Reporte_Extras_${periodLabel}_GeoVictoria_${datePart}.pdf`,
+        });
+    };
+
+    const loadGeoVictoriaExtraHours = async () => {
+        if (!userData?.storeId) return;
+        setGeoVictoriaExtraLoading(true);
+        try {
+            const snap = await getDocs(collection(db, 'extra_hours'));
+            const storeStaffIds = new Set(staff.map((person) => person.id));
+            const storeUids = new Set(staff.map((person) => person.uid).filter(Boolean));
+            const records = snap.docs
+                .map((d) => ({ id: d.id, ...d.data() }))
+                .filter((record) => {
+                    const isGeoVictoriaExtra = record.source === 'geovictoria_extra_hours'
+                        || record.importedFrom === 'geovictoria_tiempo_extra';
+                    if (!isGeoVictoriaExtra) return false;
+                    if (record.isPeriodTotal !== true) return false;
+                    if (record.storeId) return record.storeId === userData.storeId;
+                    return storeStaffIds.has(record.staffId) || storeUids.has(record.uid);
+                })
+                .sort((a, b) => String(b.fecha || '').localeCompare(String(a.fecha || '')));
+            setGeoVictoriaExtraRecords(records);
+        } catch (err) {
+            console.error('Error cargando horas extra GeoVictoria:', err);
+            alert(`No se pudo cargar el historial de horas extra: ${err.message}`);
+        } finally {
+            setGeoVictoriaExtraLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (showHRPanel && userData?.storeId) {
+            loadGeoVictoriaExtraHours();
+        }
+    }, [showHRPanel, userData?.storeId, staff.length]);
+
+    const handleGeoVictoriaExtraHoursUpload = async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        if (!userData?.storeId) {
+            alert('No se pudo identificar la tienda para importar horas extra.');
+            event.target.value = '';
+            return;
+        }
+
+        setGeoVictoriaExtraImporting(true);
+        setGeoVictoriaExtraImportResult(null);
+
+        try {
+            const buffer = await file.arrayBuffer();
+            const workbook = XLSX.read(buffer, { type: 'array', cellDates: false });
+            const rows = readGeoVictoriaRows(workbook);
+
+            const staffByDni = new Map();
+            staff.forEach((person) => {
+                const dni = normalizeDni(person.dni);
+                if (!dni) return;
+                const current = staffByDni.get(dni);
+                if (!current || isStaffActiveForHr(person)) {
+                    staffByDni.set(dni, person);
+                }
+            });
+
+            const grouped = new Map();
+            let matchedRows = 0;
+            let skippedNoDni = 0;
+            let unmatchedRows = 0;
+            let invalidDateRows = 0;
+            let noExtraRows = 0;
+            let lastExtraContext = null;
+            const unmatchedDnis = new Set();
+
+            rows.forEach((row, rowIndex) => {
+                const rawDni = normalizeDni(getRowValueWithFallback(row, ['Identificador', 'DNI', 'Documento'], ['_3']));
+                if (rawDni) {
+                    const person = staffByDni.get(rawDni);
+                    if (!person) {
+                        if (!unmatchedDnis.has(rawDni)) {
+                            unmatchedRows += 1;
+                            unmatchedDnis.add(rawDni);
+                        }
+                        lastExtraContext = null;
+                        return;
+                    }
+
+                    const rowDate = parseActivationDate(getRowValueWithFallback(row, ['Fecha'], ['', '_0']));
+                    const rowFecha = formatDateInput(rowDate);
+                    if (!rowFecha) {
+                        invalidDateRows += 1;
+                        lastExtraContext = null;
+                        return;
+                    }
+
+                    const turno = String(getRowValueWithFallback(row, ['Turno'], ['_5']) || '').trim();
+                    const { scheduledStart, scheduledEnd } = parseTurnoRange(turno);
+                    const entrada = parseGeoVictoriaTimeValue(getRowValueWithFallback(row, ['Entrada'], ['_6']));
+                    const salida = parseGeoVictoriaTimeValue(getRowValueWithFallback(row, ['Salio', 'Salió'], ['_10']));
+                    const detailExtraMinutesPre = parseGeoVictoriaDurationMinutes(getRepeatedRowValue(row, 'TE', 0) || getRowValueWithFallback(row, ['TE Entrada'], ['_7']));
+                    const detailExtraMinutesPost = parseGeoVictoriaDurationMinutes(getRepeatedRowValue(row, 'TE', 1) || getRowValueWithFallback(row, ['TE Salida'], ['_11']));
+                    const dailyDetail = detailExtraMinutesPre + detailExtraMinutesPost > 0
+                        ? {
+                            rowIndex: rowIndex + 2,
+                            fecha: rowFecha,
+                            day: getGeoVictoriaDayLabel(rowFecha),
+                            turno,
+                            entrada,
+                            salida,
+                            scheduledStart,
+                            scheduledEnd,
+                            extraMinutesPre: detailExtraMinutesPre,
+                            extraMinutesPost: detailExtraMinutesPost,
+                            totalExtraMinutes: detailExtraMinutesPre + detailExtraMinutesPost,
+                        }
+                        : null;
+
+                    if (!lastExtraContext || lastExtraContext.dni !== rawDni) {
+                        lastExtraContext = {
+                            dni: rawDni,
+                            person,
+                            date: rowDate,
+                            fecha: rowFecha,
+                            periodStart: rowFecha,
+                            periodEnd: rowFecha,
+                            turno,
+                            entrada,
+                            salida,
+                            scheduledStart,
+                            scheduledEnd,
+                            detailRows: 1,
+                            dailyDetails: dailyDetail ? [dailyDetail] : [],
+                        };
+                    } else {
+                        lastExtraContext.date = rowDate;
+                        lastExtraContext.fecha = rowFecha;
+                        lastExtraContext.periodStart = rowFecha < lastExtraContext.periodStart ? rowFecha : lastExtraContext.periodStart;
+                        lastExtraContext.periodEnd = rowFecha > lastExtraContext.periodEnd ? rowFecha : lastExtraContext.periodEnd;
+                        lastExtraContext.turno = turno || lastExtraContext.turno;
+                        lastExtraContext.entrada = entrada || lastExtraContext.entrada;
+                        lastExtraContext.salida = salida || lastExtraContext.salida;
+                        lastExtraContext.scheduledStart = scheduledStart || lastExtraContext.scheduledStart;
+                        lastExtraContext.scheduledEnd = scheduledEnd || lastExtraContext.scheduledEnd;
+                        lastExtraContext.detailRows += 1;
+                        if (dailyDetail) lastExtraContext.dailyDetails.push(dailyDetail);
+                    }
+                    return;
+                }
+
+                const dni = rawDni || lastExtraContext?.dni || '';
+                if (!dni) {
+                    skippedNoDni += 1;
+                    return;
+                }
+
+                const person = rawDni
+                    ? staffByDni.get(dni)
+                    : (lastExtraContext?.person || staffByDni.get(dni));
+                if (!person) {
+                    unmatchedRows += 1;
+                    return;
+                }
+
+                const rawDate = parseActivationDate(getRowValueWithFallback(row, ['Fecha'], ['', '_0']));
+                const date = rawDate || lastExtraContext?.date;
+                const fecha = formatDateInput(date);
+                if (!fecha) {
+                    invalidDateRows += 1;
+                    return;
+                }
+                const turno = String(getRowValueWithFallback(row, ['Turno'], ['_5']) || lastExtraContext?.turno || '').trim();
+                const { scheduledStart, scheduledEnd } = parseTurnoRange(turno);
+                const entrada = parseGeoVictoriaTimeValue(getRowValueWithFallback(row, ['Entrada'], ['_6'])) || lastExtraContext?.entrada || '';
+
+                const salida = parseGeoVictoriaTimeValue(getRowValueWithFallback(row, ['Salio', 'Salió'], ['_10'])) || lastExtraContext?.salida || '';
+                const teEntrada = getRepeatedRowValue(row, 'TE', 0) || getRowValueWithFallback(row, ['TE Entrada'], ['_7']);
+                const teSalida = getRepeatedRowValue(row, 'TE', 1) || getRowValueWithFallback(row, ['TE Salida'], ['_11']);
+                const extraMinutesPre = parseGeoVictoriaDurationMinutes(teEntrada);
+                const extraMinutesPost = parseGeoVictoriaDurationMinutes(teSalida);
+                const totalExtraMinutes = extraMinutesPre + extraMinutesPost;
+                if (totalExtraMinutes <= 0) {
+                    lastExtraContext = null;
+                    noExtraRows += 1;
+                    return;
+                }
+
+                matchedRows += 1;
+                const periodStart = lastExtraContext?.periodStart || fecha;
+                const periodEnd = lastExtraContext?.periodEnd || fecha;
+                const key = `${person.id}_${periodStart}_${periodEnd}`;
+                const existing = grouped.get(key) || {
+                    person,
+                    dni,
+                    fecha: periodEnd,
+                    periodStart,
+                    periodEnd,
+                    isPeriodTotal: true,
+                    turno,
+                    entrada,
+                    salida,
+                    scheduledStart,
+                    scheduledEnd,
+                    extraMinutesPre: 0,
+                    extraMinutesPost: 0,
+                    totalExtraMinutes: 0,
+                    segments: [],
+                    dailyDetails: [],
+                };
+
+                existing.extraMinutesPre += extraMinutesPre;
+                existing.extraMinutesPost += extraMinutesPost;
+                existing.totalExtraMinutes += totalExtraMinutes;
+                existing.turno = existing.turno || turno;
+                existing.entrada = existing.entrada || entrada;
+                existing.salida = salida || existing.salida;
+                existing.scheduledStart = existing.scheduledStart || scheduledStart;
+                existing.scheduledEnd = existing.scheduledEnd || scheduledEnd;
+                existing.dailyDetails = lastExtraContext?.dailyDetails || [];
+                existing.segments.push({
+                    rowIndex: rowIndex + 2,
+                    type: 'subtotal',
+                    periodStart,
+                    periodEnd,
+                    detailRows: lastExtraContext?.detailRows || 0,
+                    turno,
+                    entrada,
+                    salida,
+                    scheduledStart,
+                    scheduledEnd,
+                    extraMinutesPre,
+                    extraMinutesPost,
+                    totalExtraMinutes,
+                });
+                grouped.set(key, existing);
+                lastExtraContext = null;
+            });
+
+            let created = 0;
+            let updated = 0;
+            const totalByStaff = new Map();
+
+            for (const item of grouped.values()) {
+                const person = item.person;
+                const ref = doc(db, 'extra_hours', `gvextra_${person.id}_${item.periodStart || item.fecha}_${item.periodEnd || item.fecha}`);
+                const existed = await getDoc(ref);
+                const totalExtraMinutes = item.totalExtraMinutes;
+                const extraMinutesPre = item.extraMinutesPre;
+                const extraMinutesPost = item.extraMinutesPost;
+                const inicio = extraMinutesPre > 0
+                    ? (item.entrada || item.scheduledStart || '')
+                    : (item.scheduledEnd || item.salida || '');
+                const fin = extraMinutesPost > 0
+                    ? (item.salida || item.scheduledEnd || '')
+                    : (item.scheduledStart || item.entrada || '');
+                const activityParts = [];
+                if (extraMinutesPre > 0) activityParts.push(`Entrada: ${formatDurationMinutes(extraMinutesPre)}`);
+                if (extraMinutesPost > 0) activityParts.push(`Salida: ${formatDurationMinutes(extraMinutesPost)}`);
+
+                const payload = {
+                    uid: person.uid || person.id,
+                    staffId: person.id,
+                    dni: item.dni,
+                    name: person.name || '',
+                    lastName: person.lastName || '',
+                    cargo: person.cargo || person.position || '',
+                    position: person.position || '',
+                    modality: person.modality || '',
+                    storeId: userData.storeId,
+                    storeName: storeName || person.storeName || '',
+                    fecha: item.fecha,
+                    periodStart: item.periodStart || item.fecha,
+                    periodEnd: item.periodEnd || item.fecha,
+                    isPeriodTotal: true,
+                    inicio,
+                    fin,
+                    entrada: item.entrada || '',
+                    salida: item.salida || '',
+                    turno: item.turno || '',
+                    scheduledStart: item.scheduledStart || '',
+                    scheduledEnd: item.scheduledEnd || '',
+                    extraMinutesPre,
+                    extraMinutesPost,
+                    totalExtraMinutes,
+                    durationMinutes: totalExtraMinutes,
+                    extraHoursPre: minutesToHours(extraMinutesPre),
+                    extraHoursPost: minutesToHours(extraMinutesPost),
+                    totalExtraHours: minutesToHours(totalExtraMinutes),
+                    duracion: formatDurationMinutes(totalExtraMinutes),
+                    actividad: `Tiempo extra GeoVictoria (${activityParts.join(' | ')})`,
+                    source: 'geovictoria_extra_hours',
+                    importedFrom: 'geovictoria_tiempo_extra',
+                    sourceFile: file.name,
+                    importedAt: new Date().toISOString(),
+                    segments: item.segments,
+                    dailyDetails: item.dailyDetails || [],
+                };
+
+                await setDoc(ref, payload, { merge: true });
+                if (existed.exists()) updated += 1;
+                else created += 1;
+
+                const staffKey = person.id;
+                const current = totalByStaff.get(staffKey) || {
+                    staffId: staffKey,
+                    name: `${person.name || ''} ${person.lastName || ''}`.trim(),
+                    dni: item.dni,
+                    totalMinutes: 0,
+                    preMinutes: 0,
+                    postMinutes: 0,
+                };
+                current.totalMinutes += totalExtraMinutes;
+                current.preMinutes += extraMinutesPre;
+                current.postMinutes += extraMinutesPost;
+                totalByStaff.set(staffKey, current);
+            }
+
+            const importedTotalMinutes = Array.from(grouped.values())
+                .reduce((acc, item) => acc + item.totalExtraMinutes, 0);
+
+            setGeoVictoriaExtraImportResult({
+                fileName: file.name,
+                created,
+                updated,
+                matchedRows,
+                uploadedRecords: grouped.size,
+                skippedNoDni,
+                unmatchedRows,
+                invalidDateRows,
+                noExtraRows,
+                totalMinutes: importedTotalMinutes,
+                totalByStaff: Array.from(totalByStaff.values())
+                    .sort((a, b) => b.totalMinutes - a.totalMinutes),
+            });
+
+            await loadGeoVictoriaExtraHours();
+            alert(`Horas extra importadas: ${grouped.size} registro(s), total ${formatDurationMinutes(importedTotalMinutes)}.`);
+        } catch (err) {
+            console.error('Error importando tiempo extra GeoVictoria:', err);
+            alert(`No se pudo procesar el Excel de tiempo extra: ${err.message}`);
+        } finally {
+            setGeoVictoriaExtraImporting(false);
+            event.target.value = '';
+        }
+    };
+
+    const handleHrTimeAnalysisUpload = async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        setHrAnalysisLoading(true);
+        setHrAnalysisError('');
+
+        try {
+            const buffer = await file.arrayBuffer();
+            const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+            const rows = readGeoVictoriaRows(workbook);
+            const today = new Date();
+
+            const excelByDni = new Map();
+            let skippedRows = 0;
+            let excludedManagementExcel = 0;
+
+            rows.forEach((row) => {
+                const estado = String(getRowValue(row, ['Estado']) || '').trim().toLowerCase();
+                if (estado && !estado.includes('activ')) {
+                    skippedRows += 1;
+                    return;
+                }
+
+                if (isHrManagementRole(
+                    getRowValue(row, ['Cargo']),
+                    getRowValue(row, ['Grupo']),
+                    getRowValue(row, ['Perfil'])
+                )) {
+                    excludedManagementExcel += 1;
+                    return;
+                }
+
+                const dni = normalizeDni(getRowValue(row, ['Identificador', 'DNI', 'Documento']));
+                if (!dni || excelByDni.has(dni)) {
+                    skippedRows += 1;
+                    return;
+                }
+
+                const activationDate = parseActivationDate(getRowValue(row, [
+                    'Fecha ultimo estado de activacion',
+                    'Fecha último estado de activación',
+                ]));
+
+                excelByDni.set(dni, {
+                    dni,
+                    name: String(getRowValue(row, ['Nombre']) || '').trim(),
+                    lastName: String(getRowValue(row, ['Apellidos']) || '').trim(),
+                    activationDate,
+                    rawActivationDate: getRowValue(row, [
+                        'Fecha ultimo estado de activacion',
+                        'Fecha último estado de activación',
+                    ]),
+                });
+            });
+
+            const activeStaffForHr = staff.filter(isStaffActiveForHr);
+            const excludedManagementStaff = activeStaffForHr.filter((person) =>
+                isHrManagementRole(
+                    person.position,
+                    person.cargo,
+                    person.jobTitle,
+                    person.role,
+                    person.profile
+                )
+            );
+            const activeProgramStaff = activeStaffForHr.filter((person) =>
+                !isHrManagementRole(
+                    person.position,
+                    person.cargo,
+                    person.jobTitle,
+                    person.role,
+                    person.profile
+                )
+            );
+            const programByDni = new Map();
+            activeProgramStaff.forEach((person) => {
+                const dni = normalizeDni(person.dni);
+                if (dni) programByDni.set(dni, person);
+            });
+
+            const matched = [];
+            const missingInExcel = [];
+            const missingDni = [];
+
+            activeProgramStaff.forEach((person) => {
+                const dni = normalizeDni(person.dni);
+                if (!dni) {
+                    missingDni.push(person);
+                    return;
+                }
+
+                const excelPerson = excelByDni.get(dni);
+                if (!excelPerson) {
+                    missingInExcel.push(person);
+                    return;
+                }
+
+                const tenure = getTenure(excelPerson.activationDate, today);
+                matched.push({
+                    id: person.id,
+                    dni,
+                    name: `${person.name || ''} ${person.lastName || ''}`.trim(),
+                    modality: person.modality || '-',
+                    programJoinDate: person.joinDate || '',
+                    activationDate: excelPerson.activationDate,
+                    rawActivationDate: excelPerson.rawActivationDate,
+                    tenure,
+                    bucket: tenure?.bucket || 'Sin fecha valida',
+                });
+            });
+
+            const missingInProgram = Array.from(excelByDni.values())
+                .filter((row) => !programByDni.has(row.dni))
+                .map((row) => ({
+                    ...row,
+                    fullName: `${row.name || ''} ${row.lastName || ''}`.trim(),
+                }));
+
+            const validMatched = matched.filter((row) => row.activationDate && row.tenure);
+            const bucketSummary = hrTenureBuckets.map((label) => {
+                const count = validMatched.filter((row) => row.bucket === label).length;
+                return {
+                    label,
+                    count,
+                    percentage: validMatched.length ? Math.round((count / validMatched.length) * 1000) / 10 : 0,
+                };
+            });
+
+            const lessThanOneMonth = validMatched.filter((row) => row.bucket === 'Menos de 1 mes').length;
+            const invalidActivation = matched.filter((row) => !row.activationDate || !row.tenure).length;
+
+            setHrTimeAnalysis({
+                fileName: file.name,
+                generatedAt: new Date().toISOString(),
+                totalExcel: excelByDni.size,
+                totalProgram: activeProgramStaff.length,
+                matched,
+                validMatchedCount: validMatched.length,
+                missingInExcel,
+                missingInProgram,
+                missingDni,
+                skippedRows,
+                excludedManagementExcel,
+                excludedManagementStaff: excludedManagementStaff.length,
+                invalidActivation,
+                lessThanOneMonth,
+                bucketSummary,
+            });
+        } catch (err) {
+            console.error("Error analizando permanencia RRHH:", err);
+            setHrAnalysisError(`No se pudo analizar el Excel: ${err.message}`);
+        } finally {
+            setHrAnalysisLoading(false);
             event.target.value = '';
         }
     };
@@ -1224,14 +2215,6 @@ function AdminDashboard() {
                             {/* Grupo: Operaciones */}
                             <div className="flex items-center bg-gray-50 p-1 rounded-2xl border border-gray-100">
                                 <button
-                                    onClick={() => navigate("/admin/requirements/lunes")}
-                                    className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-emerald-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
-                                    title="Configurar requerimientos de personal"
-                                >
-                                    <Settings className="w-4 h-4" />
-                                    <span>REQUERIMIENTOS</span>
-                                </button>
-                                <button
                                     onClick={() => navigate("/admin/proyeccion")}
                                     className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-orange-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
                                 >
@@ -1264,11 +2247,11 @@ function AdminDashboard() {
                             {/* Grupo: Herramientas */}
                             <div className="flex items-center bg-gray-50 p-1 rounded-2xl border border-gray-100">
                                 <button
-                                    onClick={() => navigate("/entrenamiento")}
-                                    className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-orange-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
+                                    onClick={() => setShowHRPanel(true)}
+                                    className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-emerald-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
                                 >
-                                    <ClipboardCheck className="w-4 h-4" />
-                                    <span>VALIDADOR</span>
+                                    <Users className="w-4 h-4" />
+                                    <span>RRHH</span>
                                 </button>
                                 <button
                                     onClick={() => setShowVHLModal(true)}
@@ -1288,22 +2271,20 @@ function AdminDashboard() {
                                     className="hidden"
                                     onChange={handleGeoVictoriaImport}
                                 />
-                                <button
-                                    onClick={() => geoVictoriaInputRef.current?.click()}
-                                    disabled={geoVictoriaImporting}
-                                    className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-emerald-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
-                                    title="Importar usuarios activos de Geovictoria"
-                                >
-                                    <Upload className="w-4 h-4" />
-                                    <span>{geoVictoriaImporting ? 'IMPORTANDO...' : 'GEOVICTORIA'}</span>
-                                </button>
-                                <button
-                                    onClick={() => { setShowCesadosModal(true); loadCesosRegistros(); }}
-                                    className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-orange-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
-                                >
-                                    <Users className="w-4 h-4" />
-                                    <span>CESES / CAMBIOS</span>
-                                </button>
+                                <input
+                                    ref={hrAnalysisInputRef}
+                                    type="file"
+                                    accept=".xlsx,.xls"
+                                    className="hidden"
+                                    onChange={handleHrTimeAnalysisUpload}
+                                />
+                                <input
+                                    ref={geoVictoriaExtraInputRef}
+                                    type="file"
+                                    accept=".xlsx,.xls"
+                                    className="hidden"
+                                    onChange={handleGeoVictoriaExtraHoursUpload}
+                                />
                                 <button
                                     onClick={() => setShowRequestsModal(true)}
                                     className="relative flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-red-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
@@ -1399,6 +2380,483 @@ function AdminDashboard() {
                     <div className="mb-6 p-4 bg-red-50 border-l-4 border-red-500 rounded-r-lg shadow-md flex items-start gap-3">
                         <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
                         <p className="text-red-700 font-medium">{error}</p>
+                    </div>
+                )}
+
+                {showHRPanel && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
+                        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-6xl max-h-[92vh] overflow-hidden flex flex-col">
+                            <div className="px-6 py-5 bg-gradient-to-r from-emerald-700 to-slate-900 text-white flex items-start justify-between gap-4">
+                                <div>
+                                    <p className="text-xs font-black uppercase tracking-[0.24em] text-emerald-200">Recursos Humanos</p>
+                                    <h2 className="text-2xl font-black mt-1">Panel RRHH</h2>
+                                    <p className="text-sm text-emerald-50 mt-1">
+                                        Gestiona ingresos, ceses, validaciones y permanencia del personal.
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={() => setShowHRPanel(false)}
+                                    className="p-2 hover:bg-white/10 rounded-xl transition-colors"
+                                    title="Cerrar RRHH"
+                                >
+                                    <X className="w-6 h-6" />
+                                </button>
+                            </div>
+
+                            <div className="overflow-y-auto p-6 bg-slate-50 space-y-6">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <button
+                                        onClick={() => geoVictoriaInputRef.current?.click()}
+                                        disabled={geoVictoriaImporting}
+                                        className="bg-white border border-emerald-100 rounded-2xl p-5 text-left hover:border-emerald-300 hover:shadow-md transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                                    >
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div className="p-3 bg-emerald-50 text-emerald-700 rounded-xl">
+                                                <Upload className="w-6 h-6" />
+                                            </div>
+                                            <span className="text-[10px] font-black uppercase tracking-widest text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
+                                                Excel
+                                            </span>
+                                        </div>
+                                        <h3 className="font-black text-slate-900 mt-4">
+                                            {geoVictoriaImporting ? 'Importando GeoVictoria...' : 'GeoVictoria'}
+                                        </h3>
+                                        <p className="text-sm text-slate-500 mt-1">
+                                            Importa usuarios activos nuevos y completa luego su modalidad y carnet.
+                                        </p>
+                                    </button>
+
+                                    <button
+                                        onClick={() => {
+                                            setShowHRPanel(false);
+                                            setShowCesadosModal(true);
+                                            loadCesosRegistros();
+                                        }}
+                                        className="bg-white border border-orange-100 rounded-2xl p-5 text-left hover:border-orange-300 hover:shadow-md transition-all"
+                                    >
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div className="p-3 bg-orange-50 text-orange-700 rounded-xl">
+                                                <Users className="w-6 h-6" />
+                                            </div>
+                                            <span className="text-[10px] font-black uppercase tracking-widest text-orange-600 bg-orange-50 px-2 py-1 rounded-full">
+                                                Historial
+                                            </span>
+                                        </div>
+                                        <h3 className="font-black text-slate-900 mt-4">Ceses / Cambios</h3>
+                                        <p className="text-sm text-slate-500 mt-1">
+                                            Consulta bajas, cambios de modalidad y genera reportes mensuales.
+                                        </p>
+                                    </button>
+
+                                    <button
+                                        onClick={() => navigate("/entrenamiento")}
+                                        className="bg-white border border-blue-100 rounded-2xl p-5 text-left hover:border-blue-300 hover:shadow-md transition-all"
+                                    >
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div className="p-3 bg-blue-50 text-blue-700 rounded-xl">
+                                                <ClipboardCheck className="w-6 h-6" />
+                                            </div>
+                                            <span className="text-[10px] font-black uppercase tracking-widest text-blue-600 bg-blue-50 px-2 py-1 rounded-full">
+                                                Evaluacion
+                                            </span>
+                                        </div>
+                                        <h3 className="font-black text-slate-900 mt-4">Validador</h3>
+                                        <p className="text-sm text-slate-500 mt-1">
+                                            Abre el modulo de entrenamiento y validacion de colaboradores.
+                                        </p>
+                                    </button>
+                                </div>
+
+                                <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+                                    <div className="px-5 py-4 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                                        <div>
+                                            <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                                                <Download className="w-5 h-5 text-teal-600" />
+                                                Turnos GeoVictoria
+                                            </h3>
+                                            <p className="text-sm text-slate-500 mt-1">
+                                                Sube una sola vez el Excel maestro de turnos. Se guardara para futuras exportaciones.
+                                            </p>
+                                            {geoVictoriaTurnoMeta && (
+                                                <p className="text-xs text-teal-700 font-bold mt-2">
+                                                    {geoVictoriaTurnoMeta.count} turnos guardados
+                                                    {geoVictoriaTurnoMeta.fileName ? ` | ${geoVictoriaTurnoMeta.fileName}` : ''}
+                                                </p>
+                                            )}
+                                        </div>
+                                        <div className="bg-slate-50 border border-slate-100 rounded-xl p-3">
+                                            <GeoVictoriaUpload
+                                                onTurnosLoaded={handleGeoVictoriaTurnosLoaded}
+                                                initialCount={Object.keys(geoVictoriaTurnoMap).length}
+                                                label={geoVictoriaTurnoSaving ? 'Guardando turnos...' : 'Actualizar Excel de turnos'}
+                                                compact
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {geoVictoriaTurnoSaving && (
+                                        <div className="px-5 py-3 bg-teal-50 text-teal-700 text-sm font-bold border-b border-teal-100">
+                                            Guardando configuracion GeoVictoria...
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+                                    <div className="px-5 py-4 border-b border-slate-100 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
+                                        <div>
+                                            <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                                                <Clock className="w-5 h-5 text-red-600" />
+                                                Tiempo extra GeoVictoria
+                                            </h3>
+                                            <p className="text-sm text-slate-500 mt-1">
+                                                Sube el Excel de tiempo extra y cruza las marcaciones por DNI contra usuarios del sistema.
+                                            </p>
+                                        </div>
+                                        <div className="flex flex-wrap gap-2">
+                                            <button
+                                                onClick={() => geoVictoriaExtraInputRef.current?.click()}
+                                                disabled={geoVictoriaExtraImporting}
+                                                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-red-600 text-white text-sm font-bold hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                                            >
+                                                <Upload className="w-4 h-4" />
+                                                {geoVictoriaExtraImporting ? 'Importando...' : 'Subir Tiempo Extra'}
+                                            </button>
+                                            <button
+                                                onClick={loadGeoVictoriaExtraHours}
+                                                disabled={geoVictoriaExtraLoading}
+                                                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 text-sm font-bold hover:bg-slate-200 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                                            >
+                                                <RefreshCw className={`w-4 h-4 ${geoVictoriaExtraLoading ? 'animate-spin' : ''}`} />
+                                                Actualizar
+                                            </button>
+                                            <button
+                                                onClick={handleExportGeoVictoriaExtraFilteredPDF}
+                                                disabled={geoVictoriaExtraLoading || geoVictoriaExtraFilteredRecords.length === 0}
+                                                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-red-50 text-red-700 text-sm font-bold hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors border border-red-100"
+                                            >
+                                                <FaFilePdf className="w-4 h-4" />
+                                                PDF filtrado
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div className="p-5 space-y-5">
+                                        {geoVictoriaExtraImportResult && (
+                                            <div className="rounded-xl border border-red-100 bg-red-50 p-4">
+                                                <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                                                    <div>
+                                                        <p className="text-sm font-black text-red-900 uppercase tracking-wide">Ultima importacion</p>
+                                                        <p className="text-sm text-red-800 mt-1">
+                                                            {geoVictoriaExtraImportResult.uploadedRecords} registro(s) subido(s), total {formatDurationMinutes(geoVictoriaExtraImportResult.totalMinutes)}.
+                                                        </p>
+                                                        <p className="text-xs text-red-700 mt-1">
+                                                            Archivo: {geoVictoriaExtraImportResult.fileName} | Nuevos: {geoVictoriaExtraImportResult.created} | Actualizados: {geoVictoriaExtraImportResult.updated}
+                                                        </p>
+                                                        <p className="text-xs text-red-600 mt-1">
+                                                            Sin DNI: {geoVictoriaExtraImportResult.skippedNoDni} | Sin usuario: {geoVictoriaExtraImportResult.unmatchedRows} | Sin fecha: {geoVictoriaExtraImportResult.invalidDateRows} | Sin TE: {geoVictoriaExtraImportResult.noExtraRows}
+                                                        </p>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => setGeoVictoriaExtraImportResult(null)}
+                                                        className="self-start p-1.5 rounded-lg text-red-500 hover:text-red-800 hover:bg-white transition-colors"
+                                                        title="Cerrar resumen"
+                                                    >
+                                                        <X className="w-4 h-4" />
+                                                    </button>
+                                                </div>
+
+                                                {geoVictoriaExtraImportResult.totalByStaff.length > 0 && (
+                                                    <div className="mt-3 flex flex-wrap gap-2">
+                                                        {geoVictoriaExtraImportResult.totalByStaff.slice(0, 8).map((row) => (
+                                                            <span key={row.staffId} className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white border border-red-100 text-xs font-bold text-red-800">
+                                                                {row.name}
+                                                                <span className="font-black">{formatDurationMinutes(row.totalMinutes)}</span>
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Registros</p>
+                                                <p className="text-2xl font-black text-slate-900">{geoVictoriaExtraTotals.records}</p>
+                                            </div>
+                                            <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
+                                                <p className="text-[10px] font-black uppercase tracking-widest text-blue-700">Colaboradores</p>
+                                                <p className="text-2xl font-black text-blue-900">{geoVictoriaExtraTotals.collaborators}</p>
+                                            </div>
+                                            <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+                                                <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">TE Entrada</p>
+                                                <p className="text-2xl font-black text-emerald-900">{formatDurationMinutes(geoVictoriaExtraTotals.preMinutes)}</p>
+                                            </div>
+                                            <div className="rounded-xl border border-orange-100 bg-orange-50 px-4 py-3">
+                                                <p className="text-[10px] font-black uppercase tracking-widest text-orange-700">TE Salida</p>
+                                                <p className="text-2xl font-black text-orange-900">{formatDurationMinutes(geoVictoriaExtraTotals.postMinutes)}</p>
+                                            </div>
+                                            <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3">
+                                                <p className="text-[10px] font-black uppercase tracking-widest text-red-700">Total HE</p>
+                                                <p className="text-2xl font-black text-red-900">{formatDurationMinutes(geoVictoriaExtraTotals.totalMinutes)}</p>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                                            <div>
+                                                <label className="text-xs font-black uppercase tracking-widest text-slate-500">Desde</label>
+                                                <input
+                                                    type="date"
+                                                    value={geoVictoriaExtraDateFrom}
+                                                    onChange={(e) => setGeoVictoriaExtraDateFrom(e.target.value)}
+                                                    className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-300"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-xs font-black uppercase tracking-widest text-slate-500">Hasta</label>
+                                                <input
+                                                    type="date"
+                                                    value={geoVictoriaExtraDateTo}
+                                                    onChange={(e) => setGeoVictoriaExtraDateTo(e.target.value)}
+                                                    className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-300"
+                                                />
+                                            </div>
+                                            <div className="md:col-span-2">
+                                                <label className="text-xs font-black uppercase tracking-widest text-slate-500">Colaborador</label>
+                                                <select
+                                                    value={geoVictoriaExtraStaffFilter}
+                                                    onChange={(e) => setGeoVictoriaExtraStaffFilter(e.target.value)}
+                                                    className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-red-300"
+                                                >
+                                                    <option value="">Todos</option>
+                                                    {geoVictoriaExtraCollaborators.map((person) => (
+                                                        <option key={person.key} value={person.key}>
+                                                            {person.label}{person.dni ? ` - ${person.dni}` : ''}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        <div className="overflow-x-auto rounded-xl border border-slate-200">
+                                            <table className="w-full text-sm">
+                                                <thead className="bg-slate-100 text-slate-600 text-[11px] uppercase tracking-wider">
+                                                    <tr>
+                                                        <th className="px-4 py-3 text-left">Periodo</th>
+                                                        <th className="px-4 py-3 text-left">Colaborador</th>
+                                                        <th className="px-4 py-3 text-left">DNI</th>
+                                                        <th className="px-4 py-3 text-left">Turno</th>
+                                                        <th className="px-4 py-3 text-left">Entrada</th>
+                                                        <th className="px-4 py-3 text-left">TE Entrada</th>
+                                                        <th className="px-4 py-3 text-left">Salio</th>
+                                                        <th className="px-4 py-3 text-left">TE Salida</th>
+                                                        <th className="px-4 py-3 text-left">Total</th>
+                                                        <th className="px-4 py-3 text-left">PDF</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-slate-100 bg-white">
+                                                    {geoVictoriaExtraLoading ? (
+                                                        <tr>
+                                                            <td colSpan={10} className="px-4 py-8 text-center text-slate-500 font-semibold">Cargando registros...</td>
+                                                        </tr>
+                                                    ) : geoVictoriaExtraFilteredRecords.length === 0 ? (
+                                                        <tr>
+                                                            <td colSpan={10} className="px-4 py-8 text-center text-slate-500 font-semibold">No hay horas extra para los filtros seleccionados.</td>
+                                                        </tr>
+                                                    ) : (
+                                                        geoVictoriaExtraFilteredRecords.map((record) => (
+                                                            <tr key={record.id} className="hover:bg-slate-50">
+                                                                <td className="px-4 py-3 font-semibold text-slate-800">
+                                                                    {record.periodStart && record.periodEnd
+                                                                        ? `${record.periodStart} a ${record.periodEnd}`
+                                                                        : (record.fecha || '-')}
+                                                                </td>
+                                                                <td className="px-4 py-3 text-slate-800">{`${record.name || ''} ${record.lastName || ''}`.trim() || '-'}</td>
+                                                                <td className="px-4 py-3 font-mono text-xs text-slate-500">{record.dni || '-'}</td>
+                                                                <td className="px-4 py-3 text-slate-600">{record.turno || '-'}</td>
+                                                                <td className="px-4 py-3 text-slate-600">{record.entrada || record.inicio || '-'}</td>
+                                                                <td className="px-4 py-3 font-bold text-emerald-700">{formatDurationMinutes(record.extraMinutesPre)}</td>
+                                                                <td className="px-4 py-3 text-slate-600">{record.salida || record.fin || '-'}</td>
+                                                                <td className="px-4 py-3 font-bold text-orange-700">{formatDurationMinutes(record.extraMinutesPost)}</td>
+                                                                <td className="px-4 py-3">
+                                                                    <span className="inline-flex px-2 py-1 rounded-full bg-red-50 text-red-700 text-xs font-black">
+                                                                        {formatDurationMinutes(getExtraRecordMinutes(record))}
+                                                                    </span>
+                                                                </td>
+                                                                <td className="px-4 py-3">
+                                                                    <button
+                                                                        onClick={() => handleExportGeoVictoriaExtraPDF(record)}
+                                                                        className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-black hover:bg-red-700 transition-colors"
+                                                                        title="Descargar PDF"
+                                                                    >
+                                                                        <FaFilePdf className="w-3.5 h-3.5" />
+                                                                        PDF
+                                                                    </button>
+                                                                </td>
+                                                            </tr>
+                                                        ))
+                                                    )}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+                                    <div className="px-5 py-4 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                                        <div>
+                                            <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                                                <BarChart3 className="w-5 h-5 text-emerald-700" />
+                                                Analisis de tiempo
+                                            </h3>
+                                            <p className="text-sm text-slate-500 mt-1">
+                                                Sube Usuarios Activos y compara por DNI contra la plantilla del sistema.
+                                            </p>
+                                        </div>
+                                        <button
+                                            onClick={() => hrAnalysisInputRef.current?.click()}
+                                            disabled={hrAnalysisLoading}
+                                            className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-bold hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                                        >
+                                            <Upload className="w-4 h-4" />
+                                            {hrAnalysisLoading ? 'Analizando...' : 'Subir Usuarios Activos'}
+                                        </button>
+                                    </div>
+
+                                    <div className="p-5">
+                                        {hrAnalysisError && (
+                                            <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-100 text-red-700 text-sm font-semibold flex items-center gap-2">
+                                                <AlertCircle className="w-4 h-4" />
+                                                {hrAnalysisError}
+                                            </div>
+                                        )}
+
+                                        {!hrTimeAnalysis ? (
+                                            <div className="border-2 border-dashed border-slate-200 rounded-2xl p-8 text-center bg-slate-50">
+                                                <Clock className="w-10 h-10 mx-auto text-slate-300 mb-3" />
+                                                <p className="font-bold text-slate-700">Sin analisis cargado</p>
+                                                <p className="text-sm text-slate-500 mt-1">
+                                                    El archivo debe contener Identificador y Fecha ultimo estado de activacion.
+                                                </p>
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-5">
+                                                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                                                    <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+                                                        <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Emparejados</p>
+                                                        <p className="text-2xl font-black text-emerald-900">{hrTimeAnalysis.matched.length}</p>
+                                                    </div>
+                                                    <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
+                                                        <p className="text-[10px] font-black uppercase tracking-widest text-blue-700">Sistema activo</p>
+                                                        <p className="text-2xl font-black text-blue-900">{hrTimeAnalysis.totalProgram}</p>
+                                                    </div>
+                                                    <div className="rounded-xl border border-orange-100 bg-orange-50 px-4 py-3">
+                                                        <p className="text-[10px] font-black uppercase tracking-widest text-orange-700">Solo sistema</p>
+                                                        <p className="text-2xl font-black text-orange-900">{hrTimeAnalysis.missingInExcel.length + hrTimeAnalysis.missingDni.length}</p>
+                                                    </div>
+                                                    <div className="rounded-xl border border-purple-100 bg-purple-50 px-4 py-3">
+                                                        <p className="text-[10px] font-black uppercase tracking-widest text-purple-700">Solo Excel</p>
+                                                        <p className="text-2xl font-black text-purple-900">{hrTimeAnalysis.missingInProgram.length}</p>
+                                                    </div>
+                                                </div>
+
+                                                <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
+                                                    {hrTimeAnalysis.bucketSummary.map((bucket) => (
+                                                        <div key={bucket.label} className="rounded-xl border border-slate-200 bg-white p-4">
+                                                            <div className="flex justify-between items-center gap-3">
+                                                                <p className="text-xs font-black uppercase text-slate-600">{bucket.label}</p>
+                                                                <p className="text-lg font-black text-slate-900">{bucket.percentage}%</p>
+                                                            </div>
+                                                            <div className="w-full h-2 rounded-full bg-slate-100 mt-3 overflow-hidden">
+                                                                <div
+                                                                    className="h-full rounded-full bg-emerald-600"
+                                                                    style={{ width: `${bucket.percentage}%` }}
+                                                                />
+                                                            </div>
+                                                            <p className="text-xs text-slate-500 mt-2">{bucket.count} colaborador(es)</p>
+                                                        </div>
+                                                    ))}
+                                                </div>
+
+                                                {(hrTimeAnalysis.lessThanOneMonth > 0 || hrTimeAnalysis.invalidActivation > 0) && (
+                                                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 font-semibold">
+                                                        {hrTimeAnalysis.lessThanOneMonth > 0 && `${hrTimeAnalysis.lessThanOneMonth} colaborador(es) tienen menos de 1 mes. `}
+                                                        {hrTimeAnalysis.invalidActivation > 0 && `${hrTimeAnalysis.invalidActivation} emparejado(s) no tienen fecha de activacion valida.`}
+                                                    </div>
+                                                )}
+
+                                                {(hrTimeAnalysis.excludedManagementExcel > 0 || hrTimeAnalysis.excludedManagementStaff > 0) && (
+                                                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 font-semibold">
+                                                        Excluidos del analisis por jefatura/gerencia: {hrTimeAnalysis.excludedManagementStaff} en sistema y {hrTimeAnalysis.excludedManagementExcel} en Excel.
+                                                    </div>
+                                                )}
+
+                                                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                                                    <table className="w-full text-sm">
+                                                        <thead className="bg-slate-100 text-slate-600 text-[11px] uppercase tracking-wider">
+                                                            <tr>
+                                                                <th className="px-4 py-3 text-left">Colaborador</th>
+                                                                <th className="px-4 py-3 text-left">DNI</th>
+                                                                <th className="px-4 py-3 text-left">F. Activacion</th>
+                                                                <th className="px-4 py-3 text-left">Tiempo</th>
+                                                                <th className="px-4 py-3 text-left">Rango</th>
+                                                                <th className="px-4 py-3 text-left">Modalidad</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody className="divide-y divide-slate-100 bg-white">
+                                                            {hrTimeAnalysis.matched.map((row) => (
+                                                                <tr key={row.id} className="hover:bg-slate-50">
+                                                                    <td className="px-4 py-3 font-semibold text-slate-800">{row.name || '-'}</td>
+                                                                    <td className="px-4 py-3 font-mono text-xs text-slate-500">{row.dni}</td>
+                                                                    <td className="px-4 py-3 text-slate-700">{formatHrDate(row.activationDate)}</td>
+                                                                    <td className="px-4 py-3 text-slate-700">{row.tenure?.label || 'Sin fecha valida'}</td>
+                                                                    <td className="px-4 py-3">
+                                                                        <span className="inline-flex px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-black uppercase">
+                                                                            {row.bucket}
+                                                                        </span>
+                                                                    </td>
+                                                                    <td className="px-4 py-3 text-slate-600">{row.modality}</td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+
+                                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                                    <div className="rounded-xl border border-orange-100 bg-orange-50 p-4">
+                                                        <p className="text-xs font-black uppercase tracking-widest text-orange-700 mb-2">En sistema y no en Excel</p>
+                                                        <div className="space-y-1 text-sm text-orange-900 max-h-32 overflow-y-auto">
+                                                            {[...hrTimeAnalysis.missingInExcel, ...hrTimeAnalysis.missingDni].length === 0 ? (
+                                                                <p className="text-orange-700">Sin diferencias.</p>
+                                                            ) : (
+                                                                [...hrTimeAnalysis.missingInExcel, ...hrTimeAnalysis.missingDni].map((person) => (
+                                                                    <p key={person.id}>{person.name} {person.lastName} <span className="font-mono text-xs">({person.dni || 'sin DNI'})</span></p>
+                                                                ))
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                    <div className="rounded-xl border border-purple-100 bg-purple-50 p-4">
+                                                        <p className="text-xs font-black uppercase tracking-widest text-purple-700 mb-2">En Excel y no en sistema</p>
+                                                        <div className="space-y-1 text-sm text-purple-900 max-h-32 overflow-y-auto">
+                                                            {hrTimeAnalysis.missingInProgram.length === 0 ? (
+                                                                <p className="text-purple-700">Sin diferencias.</p>
+                                                            ) : (
+                                                                hrTimeAnalysis.missingInProgram.map((person) => (
+                                                                    <p key={person.dni}>{person.fullName || 'Sin nombre'} <span className="font-mono text-xs">({person.dni})</span></p>
+                                                                ))
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <p className="text-xs text-slate-400">
+                                                    Archivo: {hrTimeAnalysis.fileName} | Fecha base: {formatHrDate(new Date())} | Filas omitidas: {hrTimeAnalysis.skippedRows}
+                                                </p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 )}
 
@@ -1515,6 +2973,7 @@ function AdminDashboard() {
                             <div className="flex items-baseline gap-2">
                                 <p className="text-2xl font-black text-red-600">
                                     {staff.filter(s => {
+                                        if (!isActiveInSystem(s)) return false;
                                         if (!s.sanitaryCardDate) return false;
                                         const expiry = new Date(s.sanitaryCardDate + 'T00:00:00');
                                         const now = new Date();
@@ -1954,15 +3413,80 @@ function AdminDashboard() {
                     });
 
                     // Obtener meses únicos para el selector
+                    const isRealCese = (registro) => registro.cessationDate && !registro.isModalityChange;
+                    const getMonthLabel = (monthKey) => {
+                        if (!monthKey) return 'Todos los meses';
+                        const [yyyy, mm] = monthKey.split('-');
+                        const label = new Date(Number(yyyy), Number(mm) - 1, 1)
+                            .toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+                        return label.charAt(0).toUpperCase() + label.slice(1);
+                    };
+                    const getMonthEnd = (monthKey) => {
+                        const [yyyy, mm] = monthKey.split('-').map(Number);
+                        return new Date(yyyy, mm, 0);
+                    };
+                    const getActiveCountForMonth = (monthKey) => {
+                        if (!monthKey) return staff.filter(isStaffActiveForHr).filter(s => !s.isTrainee).length;
+                        const monthEnd = getMonthEnd(monthKey);
+
+                        return staff.filter((person) => {
+                            if (person.isTrainee) return false;
+
+                            const joinSource = person.joinDate || person.createdAt?.split?.('T')?.[0] || '';
+                            if (joinSource) {
+                                const joinDate = new Date(`${joinSource}T00:00:00`);
+                                if (!isNaN(joinDate.getTime()) && joinDate > monthEnd) return false;
+                            }
+
+                            const endSource = person.cessationDate || person.terminationDate || '';
+                            if (endSource) {
+                                const endDate = new Date(`${endSource}T00:00:00`);
+                                if (!isNaN(endDate.getTime()) && endDate <= monthEnd) return false;
+                            }
+
+                            return true;
+                        }).length;
+                    };
+                    const getRotation = (cesesCount, activeCount) => {
+                        const denominator = cesesCount + activeCount;
+                        return denominator > 0 ? (cesesCount / denominator) * 100 : 0;
+                    };
+
+                    const realCesesFiltered = filtered.filter(isRealCese);
+                    const realCesesFullTime = realCesesFiltered.filter(s => s.modality === 'Full-Time').length;
+                    const realCesesPartTime = realCesesFiltered.filter(s => s.modality === 'Part-Time').length;
+                    const activeForSelectedMonth = cesosFilterMonth ? getActiveCountForMonth(cesosFilterMonth) : getActiveCountForMonth('');
+                    const selectedRotation = cesosFilterMonth
+                        ? getRotation(realCesesFiltered.length, activeForSelectedMonth)
+                        : null;
+
                     const uniqueMonths = [...new Set(
                         cesosRegistros
                             .filter(s => s.cessationDate)
                             .map(s => s.cessationDate.slice(0, 7)) // "2026-02"
                     )].sort((a, b) => b.localeCompare(a)); // más reciente primero
 
+                    const monthlyRotation = uniqueMonths.map(monthKey => {
+                        const monthCeses = cesosRegistros.filter(s =>
+                            isRealCese(s) && s.cessationDate.startsWith(monthKey)
+                        );
+                        const activeCount = getActiveCountForMonth(monthKey);
+                        const fullTime = monthCeses.filter(s => s.modality === 'Full-Time').length;
+                        const partTime = monthCeses.filter(s => s.modality === 'Part-Time').length;
+                        return {
+                            monthKey,
+                            monthLabel: getMonthLabel(monthKey),
+                            ceses: monthCeses.length,
+                            fullTime,
+                            partTime,
+                            activeCount,
+                            rotation: getRotation(monthCeses.length, activeCount),
+                        };
+                    });
+
                     return (
                         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm px-4">
-                            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+                            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
 
                                 {/* Header */}
                                 <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-orange-500 to-orange-600 flex-shrink-0">
@@ -2021,6 +3545,74 @@ function AdminDashboard() {
                                     >
                                         ↻ Actualizar
                                     </button>
+                                </div>
+
+                                <div className="px-6 py-4 bg-white border-b border-gray-100 flex-shrink-0">
+                                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                                        <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-red-700">Ceses reales</p>
+                                            <p className="text-2xl font-black text-red-900">{realCesesFiltered.length}</p>
+                                            <p className="text-[11px] text-red-600 font-semibold mt-0.5">{getMonthLabel(cesosFilterMonth)}</p>
+                                        </div>
+                                        <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Full-Time</p>
+                                            <p className="text-2xl font-black text-emerald-900">{realCesesFullTime}</p>
+                                            <p className="text-[11px] text-emerald-600 font-semibold mt-0.5">Solo ceses</p>
+                                        </div>
+                                        <div className="rounded-xl border border-purple-100 bg-purple-50 px-4 py-3">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-purple-700">Part-Time</p>
+                                            <p className="text-2xl font-black text-purple-900">{realCesesPartTime}</p>
+                                            <p className="text-[11px] text-purple-600 font-semibold mt-0.5">Solo ceses</p>
+                                        </div>
+                                        <div className="rounded-xl border border-orange-100 bg-orange-50 px-4 py-3">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-orange-700">Rotacion</p>
+                                            <p className="text-2xl font-black text-orange-900">
+                                                {selectedRotation === null ? '-' : `${selectedRotation.toFixed(1)}%`}
+                                            </p>
+                                            <p className="text-[11px] text-orange-600 font-semibold mt-0.5">
+                                                {cesosFilterMonth ? `${realCesesFiltered.length} / (${realCesesFiltered.length} + ${activeForSelectedMonth})` : 'Selecciona un mes'}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    {monthlyRotation.length > 0 && (
+                                        <div className="mt-4 rounded-xl border border-gray-200 overflow-hidden">
+                                            <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                                                <p className="text-xs font-black uppercase tracking-widest text-gray-600">Rotacion por mes</p>
+                                                <p className="text-[11px] text-gray-400 font-semibold">Formula: ceses / (ceses + activos)</p>
+                                            </div>
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-xs">
+                                                    <thead className="bg-white text-gray-500 uppercase tracking-wider">
+                                                        <tr>
+                                                            <th className="px-4 py-2 text-left">Mes</th>
+                                                            <th className="px-4 py-2 text-center">Ceses</th>
+                                                            <th className="px-4 py-2 text-center">FT</th>
+                                                            <th className="px-4 py-2 text-center">PT</th>
+                                                            <th className="px-4 py-2 text-center">Activos</th>
+                                                            <th className="px-4 py-2 text-center">Rotacion</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-gray-100">
+                                                        {monthlyRotation.map((row) => (
+                                                            <tr key={row.monthKey} className={cesosFilterMonth === row.monthKey ? 'bg-orange-50' : 'bg-white'}>
+                                                                <td className="px-4 py-2 font-bold text-gray-800">{row.monthLabel}</td>
+                                                                <td className="px-4 py-2 text-center font-bold text-red-700">{row.ceses}</td>
+                                                                <td className="px-4 py-2 text-center text-emerald-700 font-semibold">{row.fullTime}</td>
+                                                                <td className="px-4 py-2 text-center text-purple-700 font-semibold">{row.partTime}</td>
+                                                                <td className="px-4 py-2 text-center text-gray-700 font-semibold">{row.activeCount}</td>
+                                                                <td className="px-4 py-2 text-center">
+                                                                    <span className="inline-flex px-2 py-1 rounded-full bg-orange-100 text-orange-800 font-black">
+                                                                        {row.rotation.toFixed(1)}%
+                                                                    </span>
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* Body */}

@@ -16,6 +16,21 @@ const hrs = (s, e) => {
     const [sh, sm] = s.split(':').map(Number), [eh, em] = e.split(':').map(Number);
     let t = (eh + em / 60) - (sh + sm / 60); if (t < 0) t += 24; return Math.round(t * 100) / 100;
 };
+const shiftHours = e => {
+    if (!e?.start || !e?.end) return 0;
+    let total = hrs(e.start, e.end);
+    if (e.splitShift && e.start2 && e.end2) {
+        total += hrs(e.start2, e.end2);
+    }
+    return total;
+};
+const formatShiftText = (e, start, end) => {
+    const first = `${start || e?.start}-${end || e?.end}`;
+    if (e?.splitShift && e.start2 && e.end2) {
+        return `${first}\n${e.start2}-${e.end2}`;
+    }
+    return first;
+};
 
 export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = false, showPositions = false) => {
     // Extraer la fecha de inicio del weekKey (formato: "2024-01-15_to_2024-01-21")
@@ -78,7 +93,7 @@ export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = f
             else if (e?.feriado) {
                 displayTxt = 'FERIADO';
                 if (e.start && e.end) {
-                    tot += hrs(e.start, e.end);
+                    tot += shiftHours(e);
                     if (isFullTime) daysWorkedFT++;
                 }
             }
@@ -106,7 +121,7 @@ export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = f
                     currentEnd = `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
                 }
 
-                displayTxt = `${currentStart}-${currentEnd}`;
+                displayTxt = formatShiftText(e, currentStart, currentEnd);
 
                 // Agregar posición si se solicita
                 if (showPositions && e.position) {
@@ -114,13 +129,19 @@ export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = f
                 }
 
                 // Sumar al total
-                tot += hrs(e.start, e.end) + extraPre + extraPost;
+                tot += shiftHours(e) + extraPre + extraPost;
                 if (isFullTime) daysWorkedFT++;
             }
 
             row.push(displayTxt);
         });
-        if (isFullTime) tot -= (daysWorkedFT * 0.75); // Ajuste FT 45 min por día trabajado
+        if (isFullTime) {
+            const breakDays = DAYS.filter(d => {
+                const e = schedules[p.id]?.[d];
+                return e?.start && e?.end && !e.off && !e.feriado && !e.splitShift;
+            }).length;
+            tot -= (breakDays * 0.75);
+        }
         row.push(tot.toFixed(2));
         return row;
     });
@@ -224,9 +245,12 @@ export const exportGroupedPositionsPDF = async (
         const finalStartStr = `${String(finalStartH).padStart(2, '0')}:${String(finalStartM).padStart(2, '0')}`;
         const finalEndStr = `${String(finalEndH).padStart(2, '0')}:${String(finalEndM).padStart(2, '0')}`;
 
-        const startMin = sh * 60 + sm;
+        const startMin = finalStartH * 60 + finalStartM;
         let endMin = eh * 60 + em;
-        if (endMin <= startMin) endMin += 1440;
+        if (endMin <= sh * 60 + sm) endMin += 1440;
+        const splitStartMin = info.splitShift && info.start2 ? info.start2.split(':').map(Number).reduce((h, m) => h * 60 + m) : null;
+        let splitEndMin = info.splitShift && info.end2 ? info.end2.split(':').map(Number).reduce((h, m) => h * 60 + m) : null;
+        if (splitStartMin !== null && splitEndMin !== null && splitEndMin <= splitStartMin) splitEndMin += 1440;
 
         const displayName = name.toUpperCase();
         let label = displayName;
@@ -237,7 +261,9 @@ export const exportGroupedPositionsPDF = async (
         const entry = { 
             n: label, 
             mod: modality, 
-            h: `${finalStartStr} - ${finalEndStr}`,
+            h: info.splitShift && info.start2 && info.end2
+                ? `${finalStartStr} - ${finalEndStr} / ${info.start2} - ${info.end2}`
+                : `${finalStartStr} - ${finalEndStr}`,
             startMin: finalStartH * 60 + finalStartM // Para ordenar internamente por hora de entrada
         };
 
@@ -249,13 +275,15 @@ export const exportGroupedPositionsPDF = async (
 
         // 2. Clasificar en Mañana / Tarde para los filtros específicos
         // Mañana: Inicia antes del corte
-        if (startMin < corte) {
+        const hasMorningSegment = startMin < corte || (splitStartMin !== null && splitStartMin < corte);
+        if (hasMorningSegment) {
             if (!grupos.mañana[pos]) grupos.mañana[pos] = [];
             grupos.mañana[pos].push(entry);
         }
 
         // Tarde: Inicia después de las 12:00, o después del corte, o termina después del corte
-        const enTarde = startMin >= minTarde || startMin >= corte || endMin > corte;
+        const enTarde = startMin >= minTarde || startMin >= corte || endMin > corte ||
+            (splitStartMin !== null && splitEndMin !== null && (splitStartMin >= minTarde || splitStartMin >= corte || splitEndMin > corte));
         if (enTarde) {
             if (!grupos.tarde[pos]) grupos.tarde[pos] = [];
             grupos.tarde[pos].push(entry);
@@ -589,3 +617,4 @@ export const exportExtraHoursReport = async (staff, schedules, weekKey) => {
 
     pdf.save(`Reporte_Extras_${weekKey}_v${Date.now()}.pdf`);
 };
+
