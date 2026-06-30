@@ -50,6 +50,10 @@ const DEFAULT_POSITIONS = [
     ticketAverage: DEFAULT_TICKET_AVERAGE,
     factor: 1,
   },
+  { id: 'limpieza', name: 'Limpieza', logic: 'fixed', fixedStaff: 1 },
+  { id: 'horno', name: 'Horno', logic: 'fixed', fixedStaff: 1 },
+  { id: 'lavado', name: 'Lavado', logic: 'fixed', fixedStaff: 1 },
+  { id: 'do_sheet', name: 'Do Sheet', logic: 'fixed', fixedStaff: 1 },
 ];
 
 const HOURS_RANGE = Array.from({ length: 15 }, (_, i) => {
@@ -66,7 +70,7 @@ const LOGIC_LABELS = {
   sales: 'Venta / capacidad',
   service: 'Servicio / punto de venta',
   driver: 'Driver modulo',
-  fixed: 'Fijo',
+  fixed: 'Fijo / no venta',
 };
 
 const createEmptyHourlySales = () =>
@@ -211,6 +215,16 @@ const makeStoredPosition = (position) => ({
   fixedStaff: position.fixedStaff ?? '',
 });
 
+const mergeDefaultFixedPositions = (storedPositions = []) => {
+  const stored = storedPositions.map(makeStoredPosition);
+  const existingIds = new Set(stored.map((position) => position.id));
+  const fixedDefaults = DEFAULT_POSITIONS
+    .filter((position) => position.logic === 'fixed' && !existingIds.has(position.id))
+    .map(makeStoredPosition);
+
+  return [...stored, ...fixedDefaults];
+};
+
 const compressRows = (rows) =>
   Object.fromEntries(
     rows.map((row, rowIndex) => [
@@ -249,7 +263,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
 
         if (snap.exists() && Array.isArray(snap.data().positions)) {
           const data = snap.data();
-          setPositions(data.positions.map(makeStoredPosition));
+          setPositions(mergeDefaultFixedPositions(data.positions));
           if (data.salesByDay) {
             setSalesByDay({
               ...createEmptySalesByDay(),
@@ -627,7 +641,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
         <div className="p-5 border-b border-slate-100 bg-slate-50/50">
           <h3 className="font-semibold text-slate-900">Distribucion de Personal e Ingresos por Hora</h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            Produccion usa venta/capacidad. Servicio usa venta/ticket promedio/transacciones por colaborador.
+            Produccion usa venta/capacidad. Servicio usa venta/ticket promedio/transacciones por colaborador. Las areas fijas no dependen de venta.
           </p>
         </div>
 
@@ -786,7 +800,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
                             <option value="sales">Venta / capacidad</option>
                             <option value="service">Servicio / punto de venta</option>
                             <option value="driver">Driver modulo</option>
-                            <option value="fixed">Fijo</option>
+                            <option value="fixed">Fijo / no venta</option>
                             </select>
                           </td>
                           <td className="p-2">
@@ -881,7 +895,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
                     <option value="sales">Venta / capacidad</option>
                     <option value="service">Servicio / punto de venta</option>
                     <option value="driver">Driver modulo</option>
-                    <option value="fixed">Fijo</option>
+                    <option value="fixed">Fijo / no venta</option>
                   </select>
                   <input
                     type="number"
@@ -931,7 +945,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
                   </button>
                 </div>
                 <p className="text-xs text-slate-500">
-                  Para Drivethru o Modulo usa la logica Servicio / punto de venta: venta dividida entre ticket promedio y luego entre transacciones por colaborador.
+                  Usa Fijo / no venta para areas como Limpieza, Horno, Lavado o Do Sheet. Estas posiciones mantienen una dotacion fija por hora y no dependen de la venta.
                 </p>
               </div>
             </div>

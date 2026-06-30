@@ -9,6 +9,7 @@ import {
   deleteDoc,
   updateDoc,
   getDocs,
+  writeBatch,
   updateDoc as updateFirestoreDoc
 } from 'firebase/firestore';
 import { initializeApp } from 'firebase/app';
@@ -162,6 +163,87 @@ function SuperAdminDashboard() {
       setStaffProfiles(prev => prev.map(p => p.id === id ? { ...p, email: '', uid: '' } : p));
     } catch (error) {
       toast.error('No se pudo desvincular el correo');
+    }
+  };
+
+  const deleteRefsInBatches = async (refs) => {
+    const uniqueRefs = Array.from(
+      new Map(refs.filter(Boolean).map(ref => [ref.path, ref])).values()
+    );
+
+    for (let i = 0; i < uniqueRefs.length; i += 450) {
+      const batch = writeBatch(db);
+      uniqueRefs.slice(i, i + 450).forEach(ref => batch.delete(ref));
+      await batch.commit();
+    }
+
+    return uniqueRefs.length;
+  };
+
+  const handleDeleteStaffCompletely = async (profile) => {
+    const fullName = `${profile.name || ''} ${profile.lastName || ''}`.trim() || 'este colaborador';
+    const confirm = window.confirm(
+      `Eliminar definitivamente a ${fullName}?\n\nSe borraran sus registros de Firestore: perfil, usuario, correo vinculado, horarios, solicitudes, feriados, ceses, horas extra y evaluaciones relacionadas.`
+    );
+    if (!confirm) return;
+
+    try {
+      const staffId = profile.id;
+      const uid = profile.uid || '';
+      const email = String(profile.email || '').trim().toLowerCase();
+      const refsToDelete = [doc(db, 'staff_profiles', staffId)];
+
+      if (uid) {
+        refsToDelete.push(doc(db, 'users', uid));
+        refsToDelete.push(doc(db, 'study_schedules', uid));
+      }
+
+      const relatedCollections = [
+        'users',
+        'schedules',
+        'feriados_trabajados',
+        'worked_holidays',
+        'extra_hours',
+        'nocturnidad',
+        'schedule_requests',
+        'training_evaluations',
+        'ceses',
+      ];
+
+      for (const collectionName of relatedCollections) {
+        const snap = await getDocs(collection(db, collectionName));
+        snap.forEach((docSnap) => {
+          const data = docSnap.data();
+          const docId = docSnap.id;
+          const docEmail = String(data.email || '').trim().toLowerCase();
+          const matchesStaff =
+            data.staffId === staffId ||
+            data.profileId === staffId ||
+            docId === staffId ||
+            docId.startsWith(`${staffId}_`);
+          const matchesUid =
+            !!uid && (
+              data.uid === uid ||
+              data.userId === uid ||
+              data.trainerId === uid ||
+              docId === uid ||
+              docId.startsWith(`${uid}_`)
+            );
+          const matchesEmail = !!email && docEmail === email;
+
+          if (matchesStaff || matchesUid || matchesEmail) {
+            refsToDelete.push(docSnap.ref);
+          }
+        });
+      }
+
+      const deletedCount = await deleteRefsInBatches(refsToDelete);
+      setStaffProfiles(prev => prev.filter(p => p.id !== staffId));
+      toast.success(`Usuario eliminado de Firestore (${deletedCount} registro(s)).`);
+      toast.info('Si existe una cuenta en Firebase Authentication, debe eliminarse con backend/Admin SDK.');
+    } catch (error) {
+      console.error('Error eliminando usuario completamente:', error);
+      toast.error('No se pudo eliminar el usuario por completo: ' + error.message);
     }
   };
 
@@ -479,8 +561,8 @@ function SuperAdminDashboard() {
                    </p>
                  </div>
 
-                 {profile.email && (
-                   <div className="mt-4 pt-3 border-t border-gray-100">
+                 <div className="mt-4 pt-3 border-t border-gray-100 space-y-2">
+                   {profile.email && (
                      <button 
                        onClick={() => handleUnlinkEmail(profile.id)} 
                        className="flex items-center justify-center gap-1 w-full text-xs font-bold text-red-600 hover:text-white border border-red-200 hover:bg-red-500 py-1.5 rounded transition-colors"
@@ -488,8 +570,16 @@ function SuperAdminDashboard() {
                        <Link2Off className="w-3 h-3" />
                        Desvincular Correo
                      </button>
-                   </div>
-                 )}
+                   )}
+                   <button
+                     onClick={() => handleDeleteStaffCompletely(profile)}
+                     className="flex items-center justify-center gap-1 w-full text-xs font-black text-white bg-red-600 hover:bg-red-700 border border-red-700 py-1.5 rounded transition-colors"
+                     title="Eliminar todos los registros Firestore vinculados a este colaborador"
+                   >
+                     <Trash2 className="w-3 h-3" />
+                     Eliminar definitivo
+                   </button>
+                 </div>
                </div>
              ))}
              

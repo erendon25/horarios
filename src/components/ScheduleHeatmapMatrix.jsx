@@ -124,11 +124,11 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
             ABS_MIN_TO_HOUR[totalMinutes] = h;
         });
 
-        // === REQUERIMIENTOS ===
+        // === PROYECCION ===
         const positions = Array.isArray(requirements.positions) ? requirements.positions : [];
         const compressed = requirements.matrix || {};
         
-        // Cada llave en el compressed es un index (0... 20). En PositionRequirements ahora arranca a las 08:00.
+        // Cada llave en el compressed es un index (0... 20) basado en la proyeccion desde las 08:00.
         // Pero el mapa de calor (HOURS) empieza a las 06:00. Hay 2 horas de diferencia (8 intervalos de 15 mins).
         // Rellenamos con 8 ceros primero para alinear, y luego expandimos repitiendo el valor 4 veces.
         const expanded = Object.keys(compressed)
@@ -449,8 +449,8 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                                             </svg>
                                         </div>
-                                        <p className="text-sm font-semibold text-gray-600">No hay requerimientos</p>
-                                        <p className="text-xs text-gray-500">Configura los requerimientos de posicionamiento</p>
+                                        <p className="text-sm font-semibold text-gray-600">No hay proyeccion</p>
+                                        <p className="text-xs text-gray-500">Configura la proyeccion horaria</p>
                                     </div>
                                 </td>
                             </tr>
@@ -577,8 +577,8 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                                                         </svg>
                                                     </div>
-                                                    <p className="text-sm font-semibold text-gray-600">No hay requerimientos</p>
-                                                    <p className="text-xs text-gray-500">Configura los requerimientos de posicionamiento</p>
+                                                    <p className="text-sm font-semibold text-gray-600">No hay proyeccion</p>
+                                                    <p className="text-xs text-gray-500">Configura la proyeccion horaria</p>
                                                 </div>
                                             </td>
                                         </tr>

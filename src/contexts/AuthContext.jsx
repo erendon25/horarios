@@ -69,8 +69,16 @@ export function AuthProvider({ children }) {
             setUserData(data);
           } else {
             console.log("No se encontró el documento del usuario. Asignando rol 'collaborator'.");
-            setUserRole('collaborator');
-            setUserData({ role: 'collaborator', email: user.email });
+            if (user.email === 'erickrendon18@gmail.com') {
+              setUserRole('superadmin');
+              setUserData({ role: 'superadmin', email: user.email });
+            } else {
+              await signOut(auth);
+              alert("Tu acceso no esta habilitado o fue eliminado del sistema.");
+              setUserRole(null);
+              setUserData(null);
+              return;
+            }
           }
         } else {
           setUserRole(null);

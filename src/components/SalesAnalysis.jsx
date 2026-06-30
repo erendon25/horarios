@@ -37,6 +37,21 @@ const getDatesInRange = (start, end) => {
     return dates;
 };
 
+const getPreviousFullIsoWeekDates = (dateStr) => {
+    const base = new Date(dateStr + 'T12:00:00');
+    const day = base.getDay();
+    const mondayOffset = day === 0 ? -6 : 1 - day;
+    const previousMonday = new Date(base);
+    previousMonday.setDate(base.getDate() + mondayOffset - 7);
+
+    const previousSunday = new Date(previousMonday);
+    previousSunday.setDate(previousMonday.getDate() + 6);
+
+    const start = `${previousMonday.getFullYear()}-${String(previousMonday.getMonth() + 1).padStart(2, '0')}-${String(previousMonday.getDate()).padStart(2, '0')}`;
+    const end = `${previousSunday.getFullYear()}-${String(previousSunday.getMonth() + 1).padStart(2, '0')}-${String(previousSunday.getDate()).padStart(2, '0')}`;
+    return getDatesInRange(start, end);
+};
+
 const recoverLegacyXlsRows = (bytes) => {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const u16 = (o) => view.getUint16(o, true);
@@ -333,7 +348,7 @@ export default function SalesAnalysis() {
         setLoading(true);
         try {
             const currentDates = getDatesInRange(startDate, endDate);
-            const prevWeekDates = currentDates.map(d => addDays(d, -7));
+            const prevWeekDates = getPreviousFullIsoWeekDates(startDate);
             const prevYearDates = currentDates.map(d => addDays(d, -364));
 
             const fetchRange = async (datesArr) => {

@@ -395,12 +395,14 @@ function AdminDashboard() {
     const geoVictoriaInputRef = useRef(null);
     const hrAnalysisInputRef = useRef(null);
     const geoVictoriaExtraInputRef = useRef(null);
+    const geoVictoriaLateInputRef = useRef(null);
     const [geoVictoriaImporting, setGeoVictoriaImporting] = useState(false);
     const [geoVictoriaImportResult, setGeoVictoriaImportResult] = useState(null);
     const [hrAnalysisLoading, setHrAnalysisLoading] = useState(false);
     const [hrAnalysisError, setHrAnalysisError] = useState('');
     const [hrTimeAnalysis, setHrTimeAnalysis] = useState(null);
     const [geoVictoriaExtraImporting, setGeoVictoriaExtraImporting] = useState(false);
+    const [geoVictoriaLateImporting, setGeoVictoriaLateImporting] = useState(false);
     const [geoVictoriaExtraImportResult, setGeoVictoriaExtraImportResult] = useState(null);
     const [geoVictoriaExtraRecords, setGeoVictoriaExtraRecords] = useState([]);
     const [geoVictoriaExtraLoading, setGeoVictoriaExtraLoading] = useState(false);
@@ -1102,8 +1104,8 @@ function AdminDashboard() {
                     modality,
                     day: detail.day || getGeoVictoriaDayLabel(detail.fecha),
                     shift: getShiftWithGeoVictoriaExtras(detail),
-                    extraHours: Math.round(((Number(detail.totalExtraMinutes) || 0) / 60) * 100) / 100,
-                    weekKey: getClosedWeekKey(detail.fecha || record.fecha),
+                    extraMinutes: Number(detail.totalExtraMinutes) || 0,
+                    weekKey: periodLabel,
                     sortKey: `${detail.fecha || record.fecha || ''}_${baseName}`,
                 }));
         }).sort((a, b) => a.sortKey.localeCompare(b.sortKey));
@@ -1117,6 +1119,69 @@ function AdminDashboard() {
             weekKey: periodLabel,
             fileName: `Reporte_Extras_${periodLabel}_GeoVictoria_${datePart}.pdf`,
         });
+    };
+
+    const handleGeoVictoriaLateUpload = async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        setGeoVictoriaLateImporting(true);
+        try {
+            const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+            const rows = readGeoVictoriaRows(workbook);
+            const reportRows = rows.filter((row) => {
+                const justifiedBy = String(getRowValue(row, ['Justificado por']) || '').trim();
+                return !justifiedBy;
+            }).map((row) => {
+                const dni = normalizeDni(getRowValue(row, ['DNI', 'Identificador']));
+                const profile = staff.find((person) => normalizeDni(person.dni) === dni) || {};
+                const rawDate = getRowValue(row, ['Fecha']);
+                const parsedDate = parseActivationDate(rawDate);
+                const date = parsedDate ? formatDateInput(parsedDate) : parseGeoVictoriaDate(rawDate);
+                const scheduledStart = parseGeoVictoriaTimeValue(getRowValue(row, ['Hora Inicio Turno']));
+                const arrival = parseGeoVictoriaTimeValue(getRowValue(row, ['Hora Llegada']));
+                const lateMinutes = parseGeoVictoriaDurationMinutes(getRowValue(row, ['Minutos de Atraso']));
+
+                return {
+                    name: `${getRowValue(row, ['Nombre'])} ${getRowValue(row, ['Apellidos'])}`.trim(),
+                    modality: profile.modality || (String(getRowValue(row, ['Grupo Usuario', 'Grupo marcacion'])).toUpperCase().includes('ENTRENADOR') ? 'Full-Time' : 'Part-Time'),
+                    day: getGeoVictoriaDayLabel(date),
+                    shift: `${scheduledStart || '--'} - ${arrival || '--'}`,
+                    extraMinutes: lateMinutes,
+                    sortKey: `${date}_${getRowValue(row, ['Apellidos'])}_${getRowValue(row, ['Nombre'])}`,
+                    date,
+                };
+            }).filter((row) => row.name && row.date && row.extraMinutes > 0);
+
+            if (reportRows.length === 0) {
+                alert('El archivo no contiene minutos de atraso válidos.');
+                return;
+            }
+
+            reportRows.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+            const dates = reportRows.map((row) => row.date).sort();
+            const periodLabel = `${dates[0]}_to_${dates[dates.length - 1]}`;
+            reportRows.forEach((row) => { row.weekKey = periodLabel; });
+            const datePart = new Date().toLocaleDateString('es-PE').replace(/\//g, '.');
+
+            await exportExtraHoursGroupedPDF(reportRows, {
+                weekKey: periodLabel,
+                fileName: `Reporte_Tardanzas_${periodLabel}_GeoVictoria_${datePart}.pdf`,
+                reportTitle: 'REPORTE DE TARDANZAS',
+                periodCaption: 'Periodo',
+                shiftHeader: 'Turno - Llegada',
+                durationHeader: 'Ingreso tarde',
+                collaboratorTotalHeader: 'Sumatoria tardanzas',
+                generalTotalLabel: 'TOTAL GENERAL TARDANZAS',
+                summaryOnly: true,
+            });
+        } catch (err) {
+            console.error('Error importando tardanzas GeoVictoria:', err);
+            alert(`No se pudo procesar el reporte de tardanzas: ${err.message}`);
+        } finally {
+            setGeoVictoriaLateImporting(false);
+            event.target.value = '';
+        }
     };
 
     const loadGeoVictoriaExtraHours = async () => {
@@ -2285,6 +2350,13 @@ function AdminDashboard() {
                                     className="hidden"
                                     onChange={handleGeoVictoriaExtraHoursUpload}
                                 />
+                                <input
+                                    ref={geoVictoriaLateInputRef}
+                                    type="file"
+                                    accept=".xlsx,.xls"
+                                    className="hidden"
+                                    onChange={handleGeoVictoriaLateUpload}
+                                />
                                 <button
                                     onClick={() => setShowRequestsModal(true)}
                                     className="relative flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-red-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
@@ -2520,6 +2592,14 @@ function AdminDashboard() {
                                             >
                                                 <Upload className="w-4 h-4" />
                                                 {geoVictoriaExtraImporting ? 'Importando...' : 'Subir Tiempo Extra'}
+                                            </button>
+                                            <button
+                                                onClick={() => geoVictoriaLateInputRef.current?.click()}
+                                                disabled={geoVictoriaLateImporting}
+                                                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 text-white text-sm font-bold hover:bg-amber-600 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                                            >
+                                                <Clock className="w-4 h-4" />
+                                                {geoVictoriaLateImporting ? 'Procesando tardanzas...' : 'Tardanzas'}
                                             </button>
                                             <button
                                                 onClick={loadGeoVictoriaExtraHours}

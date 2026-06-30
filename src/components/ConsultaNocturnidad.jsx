@@ -100,6 +100,35 @@ function calcularDuracionHoras(start, end) {
     return diffHoras;
 }
 
+function parseDuracionToHours(value) {
+    if (value === null || value === undefined || value === '') return 0;
+    if (typeof value === 'number') return value;
+
+    const text = String(value).trim().toLowerCase().replace(',', '.');
+    const hourMatch = text.match(/(\d+(?:\.\d+)?)\s*h/);
+    const minuteMatch = text.match(/(\d+)\s*m/);
+    if (hourMatch || minuteMatch) {
+        return (hourMatch ? Number(hourMatch[1]) : 0) + ((minuteMatch ? Number(minuteMatch[1]) : 0) / 60);
+    }
+
+    const clockMatch = text.match(/(\d{1,3}):(\d{2})(?::\d{2})?/);
+    if (clockMatch) {
+        return Number(clockMatch[1]) + (Number(clockMatch[2]) / 60);
+    }
+
+    const numeric = Number(text);
+    return isNaN(numeric) ? 0 : numeric;
+}
+
+function getExtraDurationHours(data) {
+    if (!data) return 0;
+    if (data.totalExtraMinutes !== undefined) return (Number(data.totalExtraMinutes) || 0) / 60;
+    if (data.durationMinutes !== undefined) return (Number(data.durationMinutes) || 0) / 60;
+    if (data.totalExtraHours !== undefined) return Number(data.totalExtraHours) || 0;
+    if (data.duracion) return parseDuracionToHours(data.duracion);
+    return calcularDuracionHoras(data.inicio, data.fin);
+}
+
 const ConsultaNocturnidad = () => {
     const [desde, setDesde] = useState('');
     const [hasta, setHasta] = useState('');
@@ -157,7 +186,7 @@ const ConsultaNocturnidad = () => {
                 if (f >= fechaInicio && f <= fechaFin) {
                     const uid = data.uid;
                     if (!uid) return;
-                    const duracion = calcularDuracionHoras(data.inicio, data.fin);
+                    const duracion = getExtraDurationHours(data);
                     extraMap[uid] = (extraMap[uid] || 0) + duracion;
                 }
             });
@@ -513,7 +542,7 @@ const ConsultaNocturnidad = () => {
                                                                         <td className="p-1">{d.fin}</td>
                                                                         <td className="p-1">
                                                                             {(() => {
-                                                                                const duracion = calcularDuracionHoras(d.inicio, d.fin);
+                                                                                const duracion = getExtraDurationHours(d);
                                                                                 const h = Math.floor(duracion);
                                                                                 const m = Math.round((duracion % 1) * 60);
                                                                                 return `${h}h ${m}m`;
