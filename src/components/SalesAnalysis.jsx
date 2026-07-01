@@ -5,7 +5,7 @@ import { ArrowLeft, Upload, Calendar, AlertCircle, Search } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import {
-    BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList
+    BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList
 } from 'recharts';
 import { startOfISOWeek, addWeeks, format, startOfYear } from 'date-fns';
 
@@ -50,6 +50,49 @@ const getPreviousFullIsoWeekDates = (dateStr) => {
     const start = `${previousMonday.getFullYear()}-${String(previousMonday.getMonth() + 1).padStart(2, '0')}-${String(previousMonday.getDate()).padStart(2, '0')}`;
     const end = `${previousSunday.getFullYear()}-${String(previousSunday.getMonth() + 1).padStart(2, '0')}-${String(previousSunday.getDate()).padStart(2, '0')}`;
     return getDatesInRange(start, end);
+};
+
+const getSmartComparisonPeriod = (start, end) => {
+    const startObj = new Date(`${start}T12:00:00`);
+    const endObj = new Date(`${end}T12:00:00`);
+    const isSameMonth =
+        startObj.getFullYear() === endObj.getFullYear()
+        && startObj.getMonth() === endObj.getMonth();
+    const lastDayOfMonth = new Date(
+        endObj.getFullYear(),
+        endObj.getMonth() + 1,
+        0
+    ).getDate();
+    const isFullMonth = isSameMonth && startObj.getDate() === 1 && endObj.getDate() === lastDayOfMonth;
+    const currentDates = getDatesInRange(start, end);
+
+    if (isFullMonth) {
+        const previousMonthStart = new Date(startObj.getFullYear(), startObj.getMonth() - 1, 1);
+        const previousMonthEnd = new Date(startObj.getFullYear(), startObj.getMonth(), 0);
+        const previousStart = format(previousMonthStart, 'yyyy-MM-dd');
+        const previousEnd = format(previousMonthEnd, 'yyyy-MM-dd');
+        return {
+            dates: getDatesInRange(previousStart, previousEnd),
+            title: 'Mes Anterior',
+            label: 'MES ANTERIOR',
+        };
+    }
+
+    if (currentDates.length === 7) {
+        return {
+            dates: getPreviousFullIsoWeekDates(start),
+            title: 'Semana Anterior',
+            label: 'SEM ANTERIOR',
+        };
+    }
+
+    const previousEnd = addDays(start, -1);
+    const previousStart = addDays(previousEnd, -(currentDates.length - 1));
+    return {
+        dates: getDatesInRange(previousStart, previousEnd),
+        title: 'Periodo Anterior',
+        label: 'PERIODO ANTERIOR',
+    };
 };
 
 const recoverLegacyXlsRows = (bytes) => {
@@ -305,9 +348,14 @@ export default function SalesAnalysis() {
 
     const [dataCurrent, setDataCurrent] = useState(null);
     const [dataPrevWeek, setDataPrevWeek] = useState(null);
+    const [previousPeriodMeta, setPreviousPeriodMeta] = useState({
+        title: 'Semana Anterior',
+        label: 'SEM ANTERIOR',
+    });
     const [dataPrevYear, setDataPrevYear] = useState(null);
     const [currentGoal, setCurrentGoal] = useState(0);
     const [viewMode, setViewMode] = useState('VTA');
+    const [selectedHourlyTxsDay, setSelectedHourlyTxsDay] = useState('all');
     const [dateError, setDateError] = useState('');
     const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
     const [selectedWeek, setSelectedWeek] = useState(1);
@@ -348,18 +396,31 @@ export default function SalesAnalysis() {
         setLoading(true);
         try {
             const currentDates = getDatesInRange(startDate, endDate);
-            const prevWeekDates = getPreviousFullIsoWeekDates(startDate);
+            const smartComparison = getSmartComparisonPeriod(startDate, endDate);
+            const prevWeekDates = smartComparison.dates;
+            setPreviousPeriodMeta({
+                title: smartComparison.title,
+                label: smartComparison.label,
+            });
             const prevYearDates = currentDates.map(d => addDays(d, -364));
 
             const fetchRange = async (datesArr) => {
                 const results = await Promise.all(datesArr.map(d => getDoc(doc(db, 'stores', storeId, 'sales_history', d))));
                 const agg = {
                     total: 0, txs: 0,
-                    canales: {}, canalesTxs: {}, turnos: {}, turnosTxs: {}, dias: {}, diasTxs: {}
+                    canales: {}, canalesTxs: {}, turnos: {}, turnosTxs: {}, dias: {}, diasTxs: {},
+                    horasTxs: {}, horasTxsPorDia: {}
                 };
 
                 TURNOS.forEach(t => { agg.turnos[t.key] = 0; agg.turnosTxs[t.key] = 0; });
                 DIAS_SEMANA.forEach((_, idx) => { agg.dias[idx] = 0; agg.diasTxs[idx] = 0; });
+                Array.from({ length: 24 }, (_, hour) => { agg.horasTxs[hour] = 0; });
+                DIAS_SEMANA.forEach((_, dayIndex) => {
+                    agg.horasTxsPorDia[dayIndex] = {};
+                    Array.from({ length: 24 }, (_, hour) => {
+                        agg.horasTxsPorDia[dayIndex][hour] = 0;
+                    });
+                });
 
                 results.forEach((snap, idx) => {
                     if (snap.exists()) {
@@ -389,6 +450,9 @@ export default function SalesAnalysis() {
                                 });
 
                                 const turnoObj = TURNOS.find(t => t.check(hour));
+                                agg.horasTxs[hour] = (agg.horasTxs[hour] || 0) + sumHourTxs;
+                                agg.horasTxsPorDia[dow][hour] =
+                                    (agg.horasTxsPorDia[dow][hour] || 0) + sumHourTxs;
                                 if (turnoObj) {
                                     agg.turnos[turnoObj.key] += sumHour;
                                     agg.turnosTxs[turnoObj.key] += sumHourTxs;
@@ -847,7 +911,7 @@ export default function SalesAnalysis() {
 
     const allCanales = CANALES_FIJOS;
 
-    const AnalysisSection = ({ title, compareData, compareLabel, colorCompare, colorCurrent, viewMode }) => {
+    const AnalysisSection = ({ title, compareData, compareLabel, colorCompare, colorCurrent, viewMode, showHourlyChart = false }) => {
         if (!dataCurrent || !compareData) return null;
         const isTxs = viewMode === 'TXS';
 
@@ -872,6 +936,30 @@ export default function SalesAnalysis() {
                 _realIdx: realIdx
             };
         });
+
+        const currentHourlyTxs = selectedHourlyTxsDay === 'all'
+            ? dataCurrent.horasTxs
+            : dataCurrent.horasTxsPorDia?.[selectedHourlyTxsDay];
+        const comparedHourlyTxs = selectedHourlyTxsDay === 'all'
+            ? compareData.horasTxs
+            : compareData.horasTxsPorDia?.[selectedHourlyTxsDay];
+        const businessHours = [...Array.from({ length: 18 }, (_, index) => index + 6), 0, 1, 2, 3, 4, 5];
+        const allHourlyTxs = businessHours.map((hour) => ({
+            name: `${String(hour).padStart(2, '0')}:00`,
+            [compareLabel]: comparedHourlyTxs?.[hour] || 0,
+            "PERIODO ACTUAL": currentHourlyTxs?.[hour] || 0,
+        }));
+        const firstTransactionIndex = allHourlyTxs.findIndex(
+            (item) => item[compareLabel] > 0 || item["PERIODO ACTUAL"] > 0
+        );
+        const lastTransactionIndex = allHourlyTxs.reduce(
+            (last, item, index) =>
+                item[compareLabel] > 0 || item["PERIODO ACTUAL"] > 0 ? index : last,
+            -1
+        );
+        const chartHourlyTxs = firstTransactionIndex >= 0
+            ? allHourlyTxs.slice(firstTransactionIndex, lastTransactionIndex + 1)
+            : allHourlyTxs;
 
         const calcVar = (act, ant) => {
             if (!ant || ant === 0) return { pct: 0, dif: act, color: 'text-gray-500', icon: '-' };
@@ -965,6 +1053,41 @@ export default function SalesAnalysis() {
                     </div>
 
                     <div className="flex-1 grid grid-cols-1 xl:grid-cols-2 gap-6">
+                        {isTxs && showHourlyChart && <div className="bg-white border border-gray-200 shadow-sm flex flex-col relative pt-4 xl:col-span-2">
+                            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mb-1 px-4">
+                                <h3 className="font-bold text-violet-700 italic">Tendencia lineal de transacciones por hora</h3>
+                                <select
+                                    value={selectedHourlyTxsDay}
+                                    onChange={(event) => setSelectedHourlyTxsDay(event.target.value)}
+                                    className="border border-violet-200 bg-violet-50 text-violet-800 rounded-md px-3 py-1.5 text-xs font-bold outline-none"
+                                >
+                                    <option value="all">Toda la semana</option>
+                                    {DIAS_SEMANA.map((day, index) => (
+                                        <option key={day} value={index}>{day}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <p className="text-center text-xs text-gray-500 mb-2">
+                                Evolución desde la primera hasta la última transacción del día seleccionado.
+                            </p>
+                            <div className="h-72 px-3">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <LineChart data={chartHourlyTxs} margin={{ top: 10, right: 20, left: 0, bottom: 5 }}>
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                                        <XAxis dataKey="name" interval={1} tick={{ fontSize: 9, fill: '#6b7280' }} axisLine={false} tickLine={false} />
+                                        <YAxis allowDecimals={false} width={45} tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
+                                        <Tooltip
+                                            contentStyle={{ fontSize: '12px' }}
+                                            formatter={(value, name) => [`${value} transacciones`, name]}
+                                        />
+                                        <Legend wrapperStyle={{ fontSize: '11px' }} />
+                                        <Line type="monotone" dataKey={compareLabel} stroke={colorCompare} strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 6 }} />
+                                        <Line type="monotone" dataKey="PERIODO ACTUAL" stroke={colorCurrent} strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 6 }} />
+                                    </LineChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </div>}
+
                         <div className="bg-white border border-gray-200 shadow-sm flex flex-col relative pt-4">
                             <h3 className="text-center font-bold text-red-700 italic mb-2">{isTxs ? 'Transacciones por canal' : 'Ventas por canal'}</h3>
                             <div className="h-64 px-2">
@@ -1244,7 +1367,7 @@ export default function SalesAnalysis() {
                     </div>
                 ) : (
                     <>
-                        <AnalysisSection title="Semana Anterior" compareData={dataPrevWeek} compareLabel="SEM ANTERIOR" colorCompare="#fcd34d" colorCurrent="#f97316" viewMode={viewMode} />
+                        <AnalysisSection title={previousPeriodMeta.title} compareData={dataPrevWeek} compareLabel={previousPeriodMeta.label} colorCompare="#fcd34d" colorCurrent="#f97316" viewMode={viewMode} showHourlyChart />
                         <AnalysisSection title="Año Anterior" compareData={dataPrevYear} compareLabel="AÑO ANTERIOR" colorCompare="#d1d5db" colorCurrent="#f97316" viewMode={viewMode} />
                     </>
                 )}

@@ -4,6 +4,33 @@ import { useAuth } from '../contexts/AuthContext';
 import { Save, Calendar, Clock, DollarSign, Activity, TrendingUp, ArrowLeft, Upload } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
+
+const normalizeNumericInput = (value) => {
+    let text = String(value ?? '').trim().replace(/[^\d.,-]/g, '');
+    if (!text) return '';
+    const lastComma = text.lastIndexOf(',');
+    const lastDot = text.lastIndexOf('.');
+    const commaCount = (text.match(/,/g) || []).length;
+    const dotCount = (text.match(/\./g) || []).length;
+
+    if (lastComma >= 0 && lastDot >= 0) {
+        const decimalSeparator = lastComma > lastDot ? ',' : '.';
+        text = text.replaceAll(decimalSeparator === ',' ? '.' : ',', '');
+        if (decimalSeparator === ',') text = text.replace(',', '.');
+    } else if (commaCount > 1 || dotCount > 1) {
+        const separator = commaCount > 1 ? ',' : '.';
+        const parts = text.split(separator);
+        const decimalPart = parts.pop();
+        text = `${parts.join('')}.${decimalPart}`;
+    } else if (lastComma >= 0) {
+        text = /^\-?\d{1,3}(,\d{3})+$/.test(text) ? text.replaceAll(',', '') : text.replace(',', '.');
+    } else if (lastDot >= 0 && /^\-?\d{1,3}(\.\d{3})+$/.test(text)) {
+        text = text.replaceAll('.', '');
+    }
+
+    const numeric = Number(text);
+    return Number.isFinite(numeric) ? String(numeric) : '';
+};
 // Horas de jornada comercial: 06:00 → 05:00 (cubre turno de cierre + trasnoche)
 
 export default function SalesConfig() {
@@ -53,7 +80,17 @@ export default function SalesConfig() {
 
                 if (snap.exists()) {
                     const data = snap.data();
-                    setMonthlyData(data.monthlyData || {});
+                    const sanitizedMonthlyData = Object.fromEntries(
+                        Object.entries(data.monthlyData || {}).map(([day, values]) => [
+                            day,
+                            {
+                                ...values,
+                                vta: normalizeNumericInput(values?.vta),
+                                txs: normalizeNumericInput(values?.txs),
+                            },
+                        ])
+                    );
+                    setMonthlyData(sanitizedMonthlyData);
                     setDailyHourlyParts(data.dailyHourlyParts || {});
                     setRealSalesData(data.realSalesData || {});
                 } else {
@@ -91,13 +128,14 @@ export default function SalesConfig() {
 
     const handleMonthlyDataChange = (day, field, value) => {
         // Permitir solo números y decimales
-        if (!/^\d*\.?\d*$/.test(value)) return;
+        if (!/^\d*[.,]?\d*$/.test(value)) return;
+        const normalized = value.replace(',', '.');
 
         setMonthlyData(prev => ({
             ...prev,
             [day]: {
                 ...prev[day],
-                [field]: value
+                [field]: normalized
             }
         }));
     };
@@ -112,7 +150,9 @@ export default function SalesConfig() {
         
         for (const val of rows) {
             // Removemos S/ y espacios, permitiendo puntos y comas numéricos
-            const cleanVal = val.replace(/[^\d.,]/g, '').replace(',', '.'); 
+            const firstCell = val.split('\t').find(cell => cell.trim() !== '') || '';
+            const cleanVal = normalizeNumericInput(firstCell);
+            if (cleanVal === '') continue;
             if (currentDay <= days.length) {
                 newMonthlyData[currentDay] = {
                     ...newMonthlyData[currentDay],
@@ -413,8 +453,14 @@ export default function SalesConfig() {
     }
 
     // Totales calculados en vivo para la cabecera
-    const totalVentaMes = Object.values(monthlyData).reduce((sum, item) => sum + Number(item?.vta || 0), 0);
-    const totalTxsMes = Object.values(monthlyData).reduce((sum, item) => sum + Number(item?.txs || 0), 0);
+    const totalVentaMes = Object.values(monthlyData).reduce((sum, item) => {
+        const value = Number(normalizeNumericInput(item?.vta || 0));
+        return sum + (Number.isFinite(value) ? value : 0);
+    }, 0);
+    const totalTxsMes = Object.values(monthlyData).reduce((sum, item) => {
+        const value = Number(normalizeNumericInput(item?.txs || 0));
+        return sum + (Number.isFinite(value) ? value : 0);
+    }, 0);
     return (
         <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 min-h-screen bg-gray-50 relative">
             {/* Pantalla de carga superpuesta al guardar */}

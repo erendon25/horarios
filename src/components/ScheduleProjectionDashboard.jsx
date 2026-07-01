@@ -235,6 +235,9 @@ const compressRows = (rows) =>
 
 export default function ScheduleProjectionDashboard({ staffList = [], storeId }) {
   const [salesByDay, setSalesByDay] = useState(createEmptySalesByDay);
+  const [projectedSalesByDay, setProjectedSalesByDay] = useState(
+    () => DAYS.reduce((acc, day) => ({ ...acc, [day.key]: 0 }), {})
+  );
   const [selectedDay, setSelectedDay] = useState('lunes');
   const [positions, setPositions] = useState(DEFAULT_POSITIONS);
   const [isPositionsModalOpen, setIsPositionsModalOpen] = useState(false);
@@ -279,6 +282,59 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
     };
 
     loadProjectionConfig();
+    return () => {
+      cancelled = true;
+    };
+  }, [storeId]);
+
+  useEffect(() => {
+    if (!storeId) return;
+
+    let cancelled = false;
+    const loadProjectedSales = async () => {
+      try {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const monday = new Date(today);
+        monday.setDate(today.getDate() + (today.getDay() === 0 ? -6 : 1 - today.getDay()));
+
+        const dates = DAYS.map((day, index) => {
+          const date = new Date(monday);
+          date.setDate(monday.getDate() + index);
+          return { ...day, date };
+        });
+        const months = [...new Set(dates.map(({ date }) =>
+          `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+        ))];
+        const snapshots = await Promise.all(
+          months.map((month) => getDoc(doc(db, 'stores', storeId, 'sales_config', month)))
+        );
+        const configs = Object.fromEntries(
+          months.map((month, index) => [month, snapshots[index].exists() ? snapshots[index].data() : {}])
+        );
+
+        const projected = dates.reduce((acc, { key, date }) => {
+          const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+          const rawValue = configs[month]?.monthlyData?.[date.getDate()]?.vta;
+          const normalized = String(rawValue ?? '').replace(/[^\d.,-]/g, '');
+          let value = Number(normalized);
+          if (!Number.isFinite(value)) {
+            const lastSeparator = Math.max(normalized.lastIndexOf(','), normalized.lastIndexOf('.'));
+            const integerPart = normalized.slice(0, lastSeparator).replace(/[.,]/g, '');
+            const decimalPart = normalized.slice(lastSeparator + 1);
+            value = Number(`${integerPart}.${decimalPart}`);
+          }
+          acc[key] = Number.isFinite(value) ? value : 0;
+          return acc;
+        }, {});
+
+        if (!cancelled) setProjectedSalesByDay(projected);
+      } catch (error) {
+        console.error('Error al cargar ventas proyectadas:', error);
+      }
+    };
+
+    loadProjectedSales();
     return () => {
       cancelled = true;
     };
@@ -479,8 +535,12 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
     }, {});
   }, [salesByDay]);
 
-  const weeklySales = Object.values(dailyTotals).reduce((sum, value) => sum + value, 0);
   const selectedDaySales = dailyTotals[selectedDay] || 0;
+  const selectedDayProjectedSales = projectedSalesByDay[selectedDay] || 0;
+  const weeklyProjectedSales = Object.values(projectedSalesByDay).reduce(
+    (sum, value) => sum + (Number(value) || 0),
+    0
+  );
   const selectedDayRequiredHours = scheduleMatrix.totalRequiredHours;
   const selectedDayPeakStaff = Math.max(
     ...scheduleMatrix.columns.map((column) => column.totalStaffAtHour),
@@ -564,14 +624,24 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-6 mb-6">
         <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 flex items-center gap-4">
           <div className="p-3 bg-orange-100 text-orange-600 rounded-lg">
             <Calculator className="w-6 h-6" />
           </div>
           <div>
-            <span className="text-sm text-slate-500 block font-medium">Venta Dia Seleccionado</span>
+            <span className="text-sm text-slate-500 block font-medium">Venta Real del Dia</span>
             <span className="text-2xl font-bold text-slate-900">S/. {selectedDaySales.toFixed(2)}</span>
+          </div>
+        </div>
+
+        <div className="bg-white p-5 rounded-xl shadow-sm border border-emerald-200 flex items-center gap-4">
+          <div className="p-3 bg-emerald-100 text-emerald-600 rounded-lg">
+            <Calculator className="w-6 h-6" />
+          </div>
+          <div>
+            <span className="text-sm text-slate-500 block font-medium">Venta Proyectada del Dia</span>
+            <span className="text-2xl font-bold text-emerald-700">S/. {selectedDayProjectedSales.toFixed(2)}</span>
           </div>
         </div>
 
@@ -581,7 +651,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
           </div>
           <div>
             <span className="text-sm text-slate-500 block font-medium">Venta Semanal Proyectada</span>
-            <span className="text-2xl font-bold text-slate-900">S/. {weeklySales.toFixed(2)}</span>
+            <span className="text-2xl font-bold text-slate-900">S/. {weeklyProjectedSales.toFixed(2)}</span>
           </div>
         </div>
 
@@ -631,8 +701,13 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
                 : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
             }`}
           >
-            {day.label}
-            <span className="ml-2 text-xs opacity-75">S/. {(dailyTotals[day.key] || 0).toFixed(0)}</span>
+            <span>{day.label}</span>
+            <span className="ml-2 text-xs opacity-80">
+              Real S/. {(dailyTotals[day.key] || 0).toFixed(0)}
+            </span>
+            <span className="ml-2 text-xs opacity-80">
+              Proy. S/. {(projectedSalesByDay[day.key] || 0).toFixed(0)}
+            </span>
           </button>
         ))}
       </div>
