@@ -240,6 +240,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
   );
   const [selectedDay, setSelectedDay] = useState('lunes');
   const [positions, setPositions] = useState(DEFAULT_POSITIONS);
+  const [manualStaffByDay, setManualStaffByDay] = useState({});
   const [isPositionsModalOpen, setIsPositionsModalOpen] = useState(false);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [saveState, setSaveState] = useState('idle');
@@ -272,6 +273,9 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
               ...createEmptySalesByDay(),
               ...data.salesByDay,
             });
+          }
+          if (data.manualStaffByDay) {
+            setManualStaffByDay(data.manualStaffByDay);
           }
         }
       } catch (error) {
@@ -399,7 +403,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
     return Math.ceil((sale / capacity) * factor);
   };
 
-  const buildScheduleMatrix = (hourlySales) => {
+  const buildScheduleMatrix = (hourlySales, dayKey) => {
     let totalRequiredHours = 0;
 
     const columns = HOURS_RANGE.map((hour) => {
@@ -408,7 +412,11 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
       let totalStaffAtHour = 0;
 
       positions.forEach((position) => {
-        const requiredStaff = calculateRequiredStaff(sale, position);
+        const calculatedStaff = calculateRequiredStaff(sale, position);
+        const manualStaff = manualStaffByDay?.[dayKey]?.[position.id]?.[hour];
+        const requiredStaff = manualStaff === undefined
+          ? calculatedStaff
+          : Math.max(0, getNumber(manualStaff) || 0);
         requiredByPosition[position.id] = requiredStaff;
         totalStaffAtHour += requiredStaff;
       });
@@ -429,7 +437,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
   const buildProjectionRequirements = () => {
     return DAYS.reduce((acc, day) => {
       const hourlySales = salesByDay[day.key] || createEmptyHourlySales();
-      const matrix = buildScheduleMatrix(hourlySales);
+      const matrix = buildScheduleMatrix(hourlySales, day.key);
       const rows = positions.map((position) =>
         REQUIREMENT_HOURS.map((hour) => {
           const column = matrix.columns.find((col) => col.hour === hour);
@@ -460,6 +468,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
             positions,
             requirements: buildProjectionRequirements(),
             salesByDay,
+            manualStaffByDay,
             updatedAt: new Date().toISOString(),
           },
           { merge: true }
@@ -472,7 +481,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
     }, 700);
 
     return () => clearTimeout(saveTimerRef.current);
-  }, [positions, salesByDay, storeId, configLoaded]);
+  }, [positions, salesByDay, manualStaffByDay, storeId, configLoaded]);
 
   const handleInforestUpload = (e) => {
     const file = e.target.files[0];
@@ -523,8 +532,8 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
   };
 
   const scheduleMatrix = useMemo(
-    () => buildScheduleMatrix(salesByDay[selectedDay] || createEmptyHourlySales()),
-    [salesByDay, selectedDay, positions]
+    () => buildScheduleMatrix(salesByDay[selectedDay] || createEmptyHourlySales(), selectedDay),
+    [salesByDay, selectedDay, positions, manualStaffByDay]
   );
 
   const dailyTotals = useMemo(() => {
@@ -549,10 +558,10 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
 
   const weeklyRequiredHours = useMemo(() => {
     return DAYS.reduce((sum, day) => {
-      const matrix = buildScheduleMatrix(salesByDay[day.key] || createEmptyHourlySales());
+      const matrix = buildScheduleMatrix(salesByDay[day.key] || createEmptyHourlySales(), day.key);
       return sum + matrix.totalRequiredHours;
     }, 0);
-  }, [salesByDay, positions]);
+  }, [salesByDay, positions, manualStaffByDay]);
 
   const isOverCapacity = weeklyRequiredHours > totalAvailableHours;
 
@@ -560,6 +569,22 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
     setPositions((prev) =>
       prev.map((position) => (position.id === id ? { ...position, ...changes } : position))
     );
+  };
+
+  const handleStaffCellClick = (event, positionId, hour, currentValue) => {
+    const change = event.ctrlKey || event.metaKey ? -1 : 1;
+    const nextValue = Math.max(0, currentValue + change);
+
+    setManualStaffByDay((prev) => ({
+      ...prev,
+      [selectedDay]: {
+        ...(prev[selectedDay] || {}),
+        [positionId]: {
+          ...(prev[selectedDay]?.[positionId] || {}),
+          [hour]: nextValue,
+        },
+      },
+    }));
   };
 
   const handleAddPosition = () => {
@@ -716,7 +741,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
         <div className="p-5 border-b border-slate-100 bg-slate-50/50">
           <h3 className="font-semibold text-slate-900">Distribucion de Personal e Ingresos por Hora</h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            Produccion usa venta/capacidad. Servicio usa venta/ticket promedio/transacciones por colaborador. Las areas fijas no dependen de venta.
+            Haz clic en una celda para sumar una persona y Ctrl + clic para restarla. Los cambios se guardan por dia y hora.
           </p>
         </div>
 
@@ -758,7 +783,11 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId })
                     return (
                       <td
                         key={col.hour}
-                        className={`p-3 text-center font-bold transition-all ${
+                        onClick={(event) =>
+                          handleStaffCellClick(event, position.id, col.hour, requiredStaff)
+                        }
+                        title="Clic: sumar | Ctrl + clic: restar"
+                        className={`p-3 text-center font-bold transition-all cursor-pointer select-none hover:ring-2 hover:ring-inset hover:ring-orange-400 ${
                           requiredStaff > 2
                             ? 'bg-red-100 text-red-700'
                             : requiredStaff > 0
