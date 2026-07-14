@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarDays, Check, Copy, Save, Sparkles } from "lucide-react";
+import { AlertTriangle, CalendarDays, Check, CircleHelp, Copy, Save, Sparkles, Trash2, Undo2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import type { Json } from "@/types/database";
 import { ScheduleCoverageMatrix } from "@/components/schedule-coverage-matrix";
@@ -10,7 +10,7 @@ import { expandProjectionMatrix, type CoverageAssignment } from "@/lib/schedule-
 import { exportExtraHoursPdf, exportGeoVictoriaExcel, exportPositioningPdf, exportWeeklySchedulePdf } from "@/lib/weekly-exports";
 import {
   WEEKDAYS, WEEKDAY_LABELS, addIsoDays, effectiveModality, emptyStaffWeek, mondayOf,
-  normalizePosition, serializeShift, shiftConflicts, shiftMinutes, timeMinutes,
+  emptyShift, normalizePosition, serializeShift, shiftConflicts, shiftMinutes, timeMinutes,
   type Shift, type StaffWeek, type StudyDay, type Weekday,
 } from "@/lib/weekly-schedule";
 
@@ -26,6 +26,23 @@ type ScheduleContext = { stores: Array<{ id: string; name: string; is_active: bo
 
 const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const clock = (value: string | null) => value?.slice(0, 5) ?? "";
+const shortDate = (value: string) => `${value.slice(8, 10)}/${value.slice(5, 7)}`;
+
+function shiftLabel(shift: Shift | undefined) {
+  if (!shift) return "Sin horario registrado";
+  if (shift.off) return "Descanso";
+  if (shift.holiday) return "Feriado";
+  if (!shift.start || !shift.end) return "Sin horario asignado";
+  const secondBlock = shift.splitShift && shift.start2 && shift.end2 ? ` · ${shift.start2}–${shift.end2}` : "";
+  return `${shift.start}–${shift.end}${secondBlock}${shift.position ? ` · ${shift.position}` : ""}`;
+}
+
+function studyLabel(study: StudyDay | undefined) {
+  if (!study) return "Sin horario de estudios registrado";
+  const blocks = study.blocks.map((block) => `${block.start}–${block.end}`).join(" · ");
+  if (study.free) return blocks ? `Solicita día libre · ${blocks}` : "Solicita día libre por estudios";
+  return blocks || "Sin clases registradas";
+}
 
 function limaToday() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -61,11 +78,18 @@ function hydrateWeek(weekStart: string, staff: Staff[], weeks: Array<Record<stri
   return result;
 }
 
-async function loadScheduleContext(): Promise<ScheduleContext> {
+async function loadScheduleContext(forcedStoreId?: string): Promise<ScheduleContext> {
   const supabase = createClient();
-  const profile = await supabase.from("user_profiles").select("role,store_id").single();
+  if (forcedStoreId) {
+    const stores = await supabase.from("stores").select("id,name,is_active").eq("id", forcedStoreId);
+    if (stores.error) throw stores.error;
+    return { stores: stores.data, defaultStoreId: forcedStoreId };
+  }
+  const auth = await supabase.auth.getUser();
+  if (auth.error || !auth.data.user) throw auth.error ?? new Error("missing_authenticated_user");
+  const profile = await supabase.from("user_profiles").select("role,store_id").eq("id", auth.data.user.id).single();
   if (profile.error) throw profile.error;
-  let storesQuery = supabase.from("stores").select("id,name,is_active").order("name");
+  let storesQuery = supabase.from("stores").select("id,name,is_active").eq("is_active", true).order("name");
   if (profile.data.role !== "superadmin" && profile.data.store_id) storesQuery = storesQuery.eq("id", profile.data.store_id);
   const stores = await storesQuery;
   if (stores.error) throw stores.error;
@@ -76,16 +100,18 @@ async function loadWeeklySchedule(weekStart: string, storeId: string): Promise<L
   const supabase = createClient();
   const previousStart = addIsoDays(weekStart, -7);
   const weekEnd = addIsoDays(weekStart, 6);
-  const [staffResult, weeksResult, studyResult, projectionResult, holidaysResult, requestsResult, shiftMapResult] = await Promise.all([
-    supabase.from("staff_profiles").select("id,first_name,last_name,dni,modality,modality_change_date,next_modality,position,birth_date,cessation_date,is_trainee,training_end_date,staff_skills(skill_code)").eq("store_id", storeId).order("first_name"),
+  const staffResult = await supabase.from("staff_profiles").select("id,first_name,last_name,dni,modality,modality_change_date,next_modality,position,birth_date,cessation_date,is_trainee,training_end_date,staff_skills(skill_code)").eq("store_id", storeId).order("first_name");
+  if (staffResult.error) throw staffResult.error;
+  const staffIds = (staffResult.data ?? []).map((person) => person.id);
+  const [weeksResult, studyResult, projectionResult, holidaysResult, requestsResult, shiftMapResult] = await Promise.all([
     supabase.from("schedule_weeks").select("id,staff_id,week_start,schedule_shifts(work_date,start_time,end_time,position,is_day_off,is_holiday,notes,metadata)").eq("store_id", storeId).in("week_start", [weekStart, previousStart]),
-    supabase.from("study_schedule_days").select("id,staff_id,weekday,requests_day_off,study_schedule_blocks(start_time,end_time)"),
+    staffIds.length ? supabase.from("study_schedule_days").select("id,staff_id,weekday,requests_day_off,study_schedule_blocks(start_time,end_time)").in("staff_id", staffIds) : Promise.resolve({ data: [], error: null }),
     supabase.from("sales_projection_templates").select("positions,requirements").eq("store_id", storeId).maybeSingle(),
     supabase.from("official_holidays").select("holiday_date,name").gte("holiday_date", weekStart).lte("holiday_date", weekEnd),
     supabase.from("schedule_requests").select("id,staff_id,requested_date,shift_type,start_time,end_time,reason").eq("store_id", storeId).eq("status", "approved").gte("requested_date", weekStart).lte("requested_date", weekEnd),
     supabase.from("store_configs").select("value").eq("store_id", storeId).eq("config_key", "geovictoria_turnos").maybeSingle(),
   ]);
-  for (const result of [staffResult, weeksResult, studyResult, projectionResult, holidaysResult, requestsResult, shiftMapResult]) if (result.error) throw result.error;
+  for (const result of [weeksResult, studyResult, projectionResult, holidaysResult, requestsResult, shiftMapResult]) if (result.error) throw result.error;
 
   const rawStaff = (staffResult.data ?? []) as unknown as Array<Record<string, unknown>>;
   const studyByStaff = new Map<string, Partial<Record<Weekday, StudyDay>>>();
@@ -135,8 +161,8 @@ function projectionForDay(projection: Projection, day: Weekday) {
   return { positions, matrix };
 }
 
-export function WeeklyScheduleEditor() {
-  const context = useQuery({ queryKey: ["weekly-schedule", "context"], queryFn: loadScheduleContext });
+export function WeeklyScheduleEditor({ storeId }: { storeId?: string } = {}) {
+  const context = useQuery({ queryKey: ["weekly-schedule", "context", storeId ?? "role"], queryFn: () => loadScheduleContext(storeId) });
   if (context.isPending) return <div className="study-loading">Cargando tiendas…</div>;
   if (context.error || !context.data?.defaultStoreId) return <p className="form-alert error">No hay una tienda disponible para administrar horarios.</p>;
   return <WeeklyScheduleStoreSelector context={context.data}/>;
@@ -163,14 +189,17 @@ function LoadedWeeklySchedule({ weekStart, onWeekChange, data }: { weekStart: st
   const [showPositions, setShowPositions] = useState(false);
   const [positionTurn, setPositionTurn] = useState<"mañana" | "tarde" | "ambos">("ambos");
   const [exportingExcel, setExportingExcel] = useState(false);
+  const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
   const [dirty, setDirty] = useState<Set<string>>(() => new Set());
-  const [schedule, setSchedule] = useState<Record<string, StaffWeek>>(() => {
+  const [savedDraft, setSavedDraft] = useState<Record<string, StaffWeek> | null>(() => {
     try {
       const saved = window.localStorage.getItem(draftKey);
-      return saved ? { ...data.current, ...JSON.parse(saved) } : data.current;
-    } catch { return data.current; }
+      return saved ? JSON.parse(saved) as Record<string, StaffWeek> : null;
+    } catch { return null; }
   });
+  const [schedule, setSchedule] = useState<Record<string, StaffWeek>>(data.current);
   const [message, setMessage] = useState("");
+  const [history, setHistory] = useState<Array<{ schedule: Record<string, StaffWeek>; dirty: Set<string>; selectedDay: Weekday }>>([]);
 
   useEffect(() => {
     if (!dirty.size) return;
@@ -204,7 +233,49 @@ function LoadedWeeklySchedule({ weekStart, onWeekChange, data }: { weekStart: st
     return result;
   }), [schedule, selectedDay, visibleStaff]);
 
+  function rememberCurrentState() {
+    setHistory((current) => [...current.slice(-19), { schedule, dirty: new Set(dirty), selectedDay }]);
+  }
+
+  function restoreSavedDraft() {
+    if (!savedDraft) return;
+    const restored = { ...data.current, ...savedDraft };
+    const changedStaff = Object.keys(restored).filter((staffId) =>
+      JSON.stringify(restored[staffId]) !== JSON.stringify(data.current[staffId]),
+    );
+    setSchedule(restored);
+    setDirty(new Set(changedStaff));
+    setHistory([]);
+    setSavedDraft(null);
+    setMessage(changedStaff.length
+      ? `Borrador recuperado para ${changedStaff.length} colaboradores. Revisa y guarda los cambios.`
+      : "El borrador era igual al horario guardado; no hay cambios pendientes.");
+    if (!changedStaff.length) window.localStorage.removeItem(draftKey);
+  }
+
+  function discardSavedDraft() {
+    window.localStorage.removeItem(draftKey);
+    setSavedDraft(null);
+    setSchedule(data.current);
+    setDirty(new Set());
+    setHistory([]);
+    setMessage("Borrador descartado. Se muestra el horario vigente guardado en Supabase.");
+  }
+
+  function undoLastChange() {
+    const previous = history.at(-1);
+    if (!previous) return;
+    setSchedule(previous.schedule);
+    setDirty(new Set(previous.dirty));
+    setSelectedDay(previous.selectedDay);
+    setHistory((current) => current.slice(0, -1));
+    if (previous.dirty.size) window.localStorage.setItem(draftKey, JSON.stringify(previous.schedule));
+    else window.localStorage.removeItem(draftKey);
+    setMessage("Se deshizo el último cambio y se restauró el horario anterior.");
+  }
+
   function changeShift(staffId: string, update: Partial<Shift>) {
+    rememberCurrentState();
     setSchedule((current) => ({ ...current, [staffId]: { ...current[staffId], [selectedDay]: { ...current[staffId][selectedDay], ...update } } }));
     setDirty((current) => new Set(current).add(staffId));
     setMessage("");
@@ -226,6 +297,7 @@ function LoadedWeeklySchedule({ weekStart, onWeekChange, data }: { weekStart: st
   }
 
   function replicatePrevious() {
+    rememberCurrentState();
     const next = { ...schedule };
     const changed = new Set(dirty);
     for (const person of data.staff) {
@@ -250,6 +322,7 @@ function LoadedWeeklySchedule({ weekStart, onWeekChange, data }: { weekStart: st
 
   function generateIdeal() {
     if (!positions.length || !projection.matrix.length) { setMessage("La proyección de este día todavía no tiene una matriz utilizable."); return; }
+    rememberCurrentState();
     const slots = Array.from({ length: 77 }, (_, index) => ({ minute: 360 + index * 15, assigned: positions.map(() => 0) }));
     const next = { ...schedule };
     const changed = new Set(dirty);
@@ -283,6 +356,27 @@ function LoadedWeeklySchedule({ weekStart, onWeekChange, data }: { weekStart: st
     setSchedule(next); setDirty(changed); setMessage(`Horario ideal generado para ${WEEKDAY_LABELS[WEEKDAYS.indexOf(selectedDay)]}. Revisa los conflictos antes de guardar.`);
   }
 
+  function deleteSelectedDaySchedule() {
+    const affected = data.staff.filter((person) => {
+      const shift = schedule[person.id]?.[selectedDay];
+      return Boolean(shift && (shift.start || shift.end || shift.position || shift.off || shift.holiday || shift.notes || shift.splitShift || shift.start2 || shift.end2 || shift.extraHoursPre || shift.extraHoursPost));
+    });
+    if (!affected.length) {
+      setMessage(`El horario seleccionado (${selectedDate}) ya está vacío.`);
+      return;
+    }
+    const dayLabel = WEEKDAY_LABELS[WEEKDAYS.indexOf(selectedDay)];
+    if (!window.confirm(`¿Eliminar el horario del ${dayLabel} ${selectedDate} para ${affected.length} colaboradores? Podrás deshacerlo antes de guardar.`)) return;
+    rememberCurrentState();
+    setSchedule((current) => {
+      const next = { ...current };
+      for (const person of affected) next[person.id] = { ...next[person.id], [selectedDay]: emptyShift(selectedDate) };
+      return next;
+    });
+    setDirty((current) => new Set([...current, ...affected.map((person) => person.id)]));
+    setMessage(`Horario del ${dayLabel} ${selectedDate} eliminado para ${affected.length} colaboradores. Pulsa Deshacer para recuperarlo o Guardar para confirmar.`);
+  }
+
   const save = useMutation({
     mutationFn: async () => {
       if (!dirty.size) throw new Error("no_changes");
@@ -297,12 +391,12 @@ function LoadedWeeklySchedule({ weekStart, onWeekChange, data }: { weekStart: st
     },
     onSuccess: async () => {
       window.localStorage.removeItem(draftKey);
-      setDirty(new Set()); setMessage("Horario guardado y feriados sincronizados.");
+      setDirty(new Set()); setHistory([]); setMessage("Horario guardado y feriados sincronizados.");
       await queryClient.invalidateQueries({ queryKey: ["weekly-schedule", data.storeId, weekStart] });
     },
   });
 
-  return <section className="weekly-editor">
+  return <section className={`weekly-editor ${leftPanelCollapsed ? "left-panel-collapsed" : ""}`}><div className="weekly-editor-main">
     <header className="weekly-header"><div><p className="eyebrow">PLANIFICACIÓN OPERATIVA</p><h2>Horario semanal</h2><p className="muted">Los cambios se guardan por colaborador en una sola transacción.</p></div><CalendarDays size={30}/></header>
     <div className="weekly-toolbar">
       <label>Semana<input type="date" value={weekStart} onChange={(event) => onWeekChange(event.target.value)}/></label>
@@ -311,8 +405,9 @@ function LoadedWeeklySchedule({ weekStart, onWeekChange, data }: { weekStart: st
       <select aria-label="Filtrar modalidad" value={modality} onChange={(event) => setModality(event.target.value)}><option>Todos</option><option>Full-Time</option><option>Part-Time</option></select>
       <select aria-label="Filtrar posición" value={position} onChange={(event) => setPosition(event.target.value)}><option>Todas</option>{positions.map((item) => <option key={item}>{item}</option>)}</select>
     </div>
-    <div className="weekly-actions"><button className="plain-button" onClick={replicatePrevious}><Copy size={16}/> Replicar semana anterior</button><button className="secondary-button" onClick={generateIdeal}><Sparkles size={16}/> Generar día desde proyección</button><button className="primary-button" disabled={save.isPending || !dirty.size} onClick={() => save.mutate()}><Save size={16}/> {save.isPending ? "Guardando…" : `Guardar ${dirty.size || ""}`}</button></div>
+    <div className="weekly-actions"><button className="plain-button" disabled={!history.length || save.isPending} onClick={undoLastChange}><Undo2 size={16}/> Deshacer</button><button className="danger-button" disabled={save.isPending} onClick={deleteSelectedDaySchedule}><Trash2 size={16}/> Eliminar día seleccionado</button><button className="plain-button" onClick={replicatePrevious}><Copy size={16}/> Replicar semana anterior</button><button className="secondary-button" onClick={generateIdeal}><Sparkles size={16}/> Generar día desde proyección</button><button className="primary-button" disabled={save.isPending || !dirty.size} onClick={() => save.mutate()}><Save size={16}/> {save.isPending ? "Guardando…" : `Guardar ${dirty.size || ""}`}</button></div>
     <div className="export-toolbar"><label><input type="checkbox" checked={excludeTrainees} onChange={(event) => setExcludeTrainees(event.target.checked)}/> Excluir personal en entrenamiento</label><label><input type="checkbox" checked={showPositions} onChange={(event) => setShowPositions(event.target.checked)}/> Mostrar posiciones en PDF</label><label>Turno<select value={positionTurn} onChange={(event) => setPositionTurn(event.target.value as typeof positionTurn)}><option value="mañana">Mañana</option><option value="tarde">Tarde</option><option value="ambos">Día completo</option></select></label><button className="plain-button" onClick={() => exportWeeklySchedulePdf(activeWeekStaff, schedule, weekStart, { excludeTrainees, showPositions })}>PDF semanal</button><button className="plain-button" onClick={() => exportPositioningPdf(activeWeekStaff, schedule, selectedDay, selectedDate, positionTurn, positions)}>PDF posiciones</button><button className="plain-button" onClick={() => exportExtraHoursPdf(activeWeekStaff, schedule, weekStart)}>PDF horas extra</button><button className="plain-button" disabled={exportingExcel || !Object.keys(data.shiftMap).length} onClick={async () => { setExportingExcel(true); try { await exportGeoVictoriaExcel(activeWeekStaff, schedule, weekStart, data.shiftMap); } finally { setExportingExcel(false); } }}>{exportingExcel ? "Generando…" : "Excel GeoVictoria"}</button></div>
+    {savedDraft && <div className="restriction-banner draft-banner"><AlertTriangle size={17}/><span>Hay un borrador local anterior. Se está mostrando el horario vigente guardado.</span><button className="plain-button" onClick={restoreSavedDraft}>Recuperar borrador</button><button className="plain-button" onClick={discardSavedDraft}>Descartar</button></div>}
     {message && <p className="restriction-banner success"><Check size={17}/>{message}</p>}
     {save.error && <p className="form-alert error">{save.error.message === "no_changes" ? "No hay cambios pendientes." : save.error.message === "invalid_shift" ? "Hay turnos incompletos o con horas iguales." : save.error.message === "invalid_split" ? "Completa correctamente ambos bloques del turno partido." : "El servidor rechazó el guardado por validación o permisos."}</p>}
     <div className="table-scroll"><table className="weekly-table"><thead><tr><th>Colaborador</th><th>Modalidad</th><th>Entrada</th><th>Salida</th><th>Posición</th><th>Extra antes</th><th>Extra después</th><th>Partido</th><th>Libre</th><th>Feriado</th><th>Horas semana</th></tr></thead><tbody>
@@ -321,16 +416,28 @@ function LoadedWeeklySchedule({ weekStart, onWeekChange, data }: { weekStart: st
         const endDate = person.is_trainee ? person.training_end_date : person.cessation_date;
         const ceased = Boolean(endDate && selectedDate > endDate);
         const conflicts = shiftConflicts(day, person.study[selectedDay], person.skills);
+        const selectedDayIndex = WEEKDAYS.indexOf(selectedDay);
+        const previousDay = selectedDayIndex === 0 ? data.previous[person.id]?.sunday : schedule[person.id][WEEKDAYS[selectedDayIndex - 1]];
+        const previousDate = addIsoDays(selectedDate, -1);
+        const previousLabel = shiftLabel(previousDay);
+        const weeklyDetails = WEEKDAYS.map((weekday, index) => ({
+          day: WEEKDAY_LABELS[index],
+          date: addIsoDays(weekStart, index),
+          dateLabel: shortDate(addIsoDays(weekStart, index)),
+          work: shiftLabel(schedule[person.id][weekday]),
+          study: studyLabel(person.study[weekday]),
+        }));
+        const tooltipId = `schedule-detail-${person.id}`;
         const requests = data.requests.filter((request) => request.staff_id === person.id && request.requested_date === selectedDate);
         const weeklyTotal = WEEKDAYS.reduce((total, key) => total + shiftMinutes(schedule[person.id][key], effectiveModality(person, schedule[person.id][key].date) === "Full-Time"), 0);
-        return <tr key={person.id} className={ceased ? "ceased-row" : dirty.has(person.id) ? "dirty-row" : ""}><td><strong>{person.first_name} {person.last_name}</strong><small>{person.position}</small>{conflicts.map((conflict) => <span className="schedule-alert" key={conflict}><AlertTriangle size={12}/>{conflict}</span>)}{requests.map((request) => <span className="request-alert" key={request.id}>{request.shift_type}{request.start_time ? ` ${clock(request.start_time)}–${clock(request.end_time)}` : ""}{request.reason ? ` · ${request.reason}` : ""}</span>)}{ceased && <span className="schedule-alert">Cesado desde {endDate}</span>}</td><td><span className="status-pill active">{effectiveModality(person, selectedDate)}</span></td>
+        return <tr key={person.id} className={ceased ? "ceased-row" : dirty.has(person.id) ? "dirty-row" : ""}><td><div className="schedule-tooltip-trigger" tabIndex={0} aria-describedby={tooltipId}><span className="schedule-person-name"><strong>{person.first_name} {person.last_name}</strong><CircleHelp size={14} aria-hidden="true"/></span><small>{person.position}</small><span className="previous-shift-summary">Anterior {previousDate}: {previousLabel}</span><div className="schedule-tooltip weekly" id={tooltipId} role="tooltip"><strong>Semana {shortDate(weekStart)}–{shortDate(addIsoDays(weekStart, 6))}</strong><div className="weekly-tooltip-header"><span>Día</span><span>Trabajo</span><span>Estudios</span></div>{weeklyDetails.map((detail) => <div className="weekly-tooltip-row" key={detail.date}><span><b>{detail.day}</b><small>{detail.dateLabel}</small></span><span>{detail.work}</span><span>{detail.study}</span></div>)}</div></div>{conflicts.map((conflict) => <span className="schedule-alert" key={conflict}><AlertTriangle size={12}/>{conflict}</span>)}{requests.map((request) => <span className="request-alert" key={request.id}>{request.shift_type}{request.start_time ? ` ${clock(request.start_time)}–${clock(request.end_time)}` : ""}{request.reason ? ` · ${request.reason}` : ""}</span>)}{ceased && <span className="schedule-alert">Cesado desde {endDate}</span>}</td><td><span className="status-pill active">{effectiveModality(person, selectedDate)}</span></td>
           <td><input type="time" disabled={ceased || day.off} value={day.start} onChange={(event) => changeShift(person.id, { start: event.target.value, off: false })}/>{day.splitShift && <input type="time" disabled={ceased} value={day.start2} onChange={(event) => changeShift(person.id, { start2: event.target.value })}/>}</td>
           <td><input type="time" disabled={ceased || day.off} value={day.end} onChange={(event) => changeShift(person.id, { end: event.target.value, off: false })}/>{day.splitShift && <input type="time" disabled={ceased} value={day.end2} onChange={(event) => changeShift(person.id, { end2: event.target.value })}/>}</td>
           <td><select disabled={ceased || day.off || day.holiday} value={day.position} onChange={(event) => changeShift(person.id, { position: event.target.value })}><option value="">—</option>{positions.map((item) => <option key={item}>{item}</option>)}</select></td>
           <td><input className="number-input" type="number" min="0" step="0.25" disabled={ceased || day.off} value={day.extraHoursPre} onChange={(event) => changeShift(person.id, { extraHoursPre: Number(event.target.value) })}/></td><td><input className="number-input" type="number" min="0" step="0.25" disabled={ceased || day.off} value={day.extraHoursPost} onChange={(event) => changeShift(person.id, { extraHoursPost: Number(event.target.value) })}/></td>
           <td><input type="checkbox" disabled={ceased || day.off} checked={day.splitShift} onChange={(event) => changeShift(person.id, event.target.checked ? { splitShift: true, off: false, holiday: false } : { splitShift: false, start2: "", end2: "" })}/></td><td><input type="checkbox" disabled={ceased} checked={day.off} onChange={(event) => toggleOff(person, event.target.checked)}/></td><td><input type="checkbox" disabled={ceased} checked={day.holiday} onChange={(event) => toggleHoliday(person, event.target.checked)}/>{data.holidays[selectedDate] && <small>{data.holidays[selectedDate]}</small>}</td><td><strong>{Math.floor(weeklyTotal / 60)}:{String(weeklyTotal % 60).padStart(2, "0")}</strong></td></tr>;
       })}
-    </tbody></table></div>
-    <ScheduleCoverageMatrix positions={positions} matrix={projection.matrix} assignments={coverageAssignments}/>
+    </tbody></table></div></div>
+    <ScheduleCoverageMatrix positions={positions} matrix={projection.matrix} assignments={coverageAssignments} leftPanelCollapsed={leftPanelCollapsed} onToggleLeftPanel={() => setLeftPanelCollapsed((current) => !current)}/>
   </section>;
 }

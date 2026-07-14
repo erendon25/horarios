@@ -16,6 +16,11 @@ describe("weekly exports", () => {
     expect(buildPositioningPdf(staff, schedules, "monday", "2026-07-13", "ambos", ["CAJA"]).output("arraybuffer").byteLength).toBeGreaterThan(2000);
     expect(buildExtraHoursPdf(staff, schedules, "2026-07-13").output("arraybuffer").byteLength).toBeGreaterThan(2000);
   });
+  it("mantiene el PDF de posiciones en una sola hoja", () => {
+    const manyStaff = Array.from({ length: 60 }, (_, index) => ({ ...staff[0], id: `staff-${index}`, first_name: `Colaborador ${index + 1}` }));
+    const manySchedules = Object.fromEntries(manyStaff.map((person) => [person.id, week]));
+    expect(buildPositioningPdf(manyStaff, manySchedules, "monday", "2026-07-13", "ambos", ["CAJA"]).getNumberOfPages()).toBe(1);
+  });
   it("genera el libro GeoVictoria con descanso y turno mapeado", async () => {
     const workbook = await buildGeoVictoriaWorkbook(staff, schedules, "2026-07-13", { "22:00-06:00": 99 });
     const sheet = workbook.getWorksheet("Planificacion")!;

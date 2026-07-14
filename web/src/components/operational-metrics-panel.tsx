@@ -33,13 +33,18 @@ function hours(minutes: number) {
   return (minutes / 60).toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-async function loadContext(): Promise<Context> {
+async function loadContext(forcedStoreId?: string): Promise<Context> {
   const supabase = createClient();
+  if (forcedStoreId) {
+    const stores = await supabase.from("stores").select("id,name,is_active").eq("id", forcedStoreId);
+    if (stores.error) throw stores.error;
+    return { stores: stores.data, defaultStoreId: forcedStoreId };
+  }
   const user = await supabase.auth.getUser();
   if (!user.data.user) throw new Error("not_authenticated");
   const profile = await supabase.from("user_profiles").select("role,store_id").eq("id", user.data.user.id).single();
   if (profile.error) throw profile.error;
-  const stores = await supabase.from("stores").select("id,name,is_active").order("name");
+  const stores = await supabase.from("stores").select("id,name,is_active").eq("is_active", true).order("name");
   if (stores.error) throw stores.error;
   const allowed = profile.data.role === "superadmin" ? stores.data : stores.data.filter((store) => store.id === profile.data.store_id);
   return { stores: allowed, defaultStoreId: profile.data.store_id ?? allowed[0]?.id ?? "" };
@@ -81,8 +86,8 @@ async function loadOperationalData(storeId: string, start: string, end: string, 
   return { staff, shifts, extras, holidays, salesDays, metrics: calculateOperationalMetrics({ staff, shifts, extras, holidays, salesDays, start, end, excludeTrainees }) };
 }
 
-export function OperationalMetricsPanel() {
-  const context = useQuery({ queryKey: ["operational-metrics", "context"], queryFn: loadContext });
+export function OperationalMetricsPanel({ storeId }: { storeId?: string } = {}) {
+  const context = useQuery({ queryKey: ["operational-metrics", "context", storeId ?? "role"], queryFn: () => loadContext(storeId) });
   if (context.isPending) return <div className="study-loading">Cargando contexto operativo…</div>;
   if (context.error || !context.data) return <p className="form-alert error">No se pudo cargar el contexto de tiendas.</p>;
   return <OperationalMetricsWorkspace context={context.data}/>;
@@ -104,7 +109,7 @@ function OperationalMetricsWorkspace({ context }: { context: Context }) {
   const query = useQuery({ queryKey, queryFn: () => loadOperationalData(storeId, bounds.start, bounds.end, excludeTrainees), enabled: Boolean(storeId) });
   const removeExtra = useMutation({
     mutationFn: async (id: number) => {
-      const result = await createClient().from("extra_hours").delete().eq("id", id);
+      const result = await createClient().from("extra_hours").delete().eq("id", id).eq("store_id", storeId);
       if (result.error) throw result.error;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["operational-metrics", storeId] }),

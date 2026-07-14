@@ -8,7 +8,14 @@ import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persist
 export function QueryProvider({ children, userId }: { children: ReactNode; userId: string }) {
   const [queryClient] = useState(() => new QueryClient({
     defaultOptions: {
-      queries: { staleTime: 5 * 60_000, gcTime: 30 * 60_000, retry: 1, refetchOnWindowFocus: false },
+      queries: {
+        staleTime: 5 * 60_000,
+        gcTime: 30 * 60_000,
+        retry: 1,
+        refetchOnWindowFocus: false,
+        refetchOnMount: false,
+        refetchOnReconnect: true,
+      },
     },
   }));
   const persister = typeof window === "undefined" ? null : createSyncStoragePersister({
@@ -18,7 +25,7 @@ export function QueryProvider({ children, userId }: { children: ReactNode; userI
 
   if (!persister) return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   return (
-    <PersistQueryClientProvider client={queryClient} persistOptions={{ persister, buster: `v1:${userId}`, maxAge: 30 * 60_000 }}>
+    <PersistQueryClientProvider client={queryClient} persistOptions={{ persister, buster: `v2:${userId}`, maxAge: 30 * 60_000 }}>
       {children}
     </PersistQueryClientProvider>
   );

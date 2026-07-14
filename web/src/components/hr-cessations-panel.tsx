@@ -24,12 +24,12 @@ const emptyForm = {
   extraHours: "0", holidays: "0", discounts: "0",
 };
 
-async function loadHrRows(): Promise<HrRow[]> {
+async function loadHrRows(storeId: string): Promise<HrRow[]> {
   const supabase = createClient();
   const [staffResult, cessationResult, storesResult] = await Promise.all([
-    supabase.from("staff_profiles").select("id,store_id,first_name,last_name,dni,gender,modality,position,join_date,cessation_date,is_trainee").order("first_name"),
-    supabase.from("cessations").select("*").eq("is_modality_change", false),
-    supabase.from("stores").select("id,name"),
+    supabase.from("staff_profiles").select("id,store_id,first_name,last_name,dni,gender,modality,position,join_date,cessation_date,is_trainee").eq("store_id", storeId).order("first_name"),
+    supabase.from("cessations").select("*").eq("store_id", storeId).eq("is_modality_change", false),
+    supabase.from("stores").select("id,name").eq("id", storeId),
   ]);
   if (staffResult.error) throw staffResult.error;
   if (cessationResult.error) throw cessationResult.error;
@@ -58,19 +58,22 @@ function csvCell(value: string | number | null | undefined) {
   return `"${String(value ?? "").replaceAll('"', '""')}"`;
 }
 
-export function HrCessationsPanel() {
+export function HrCessationsPanel({ storeId }: { storeId: string }) {
   const queryClient = useQueryClient();
-  const { data = [], isPending, error, dataUpdatedAt } = useQuery({ queryKey: ["hr", "cessations"], queryFn: loadHrRows });
+  const { data = [], isPending, error, dataUpdatedAt } = useQuery({ queryKey: ["hr", "cessations", storeId], queryFn: () => loadHrRows(storeId) });
   const [search, setSearch] = useState("");
   const [onlyCessations, setOnlyCessations] = useState(false);
+  const [cessationMonth, setCessationMonth] = useState("all");
   const [selected, setSelected] = useState<HrRow | null>(null);
   const [form, setForm] = useState(emptyForm);
 
+  const availableMonths = useMemo(() => [...new Set(data.flatMap((row) => row.cessation_date ? [row.cessation_date.slice(0, 7)] : []))].sort().reverse(), [data]);
   const rows = useMemo(() => data.filter((row) => {
     if (onlyCessations && !row.cessation_date) return false;
+    if (cessationMonth !== "all" && row.cessation_date?.slice(0, 7) !== cessationMonth) return false;
     const text = `${row.first_name} ${row.last_name} ${row.dni ?? ""} ${row.storeName}`.toLocaleLowerCase("es");
     return text.includes(search.trim().toLocaleLowerCase("es"));
-  }), [data, onlyCessations, search]);
+  }), [cessationMonth, data, onlyCessations, search]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -118,7 +121,7 @@ export function HrCessationsPanel() {
   }
 
   function downloadCompleteReport() {
-    const cessationRows = data.filter((row) => row.cessation_date && row.cessation);
+    const cessationRows = rows.filter((row) => row.cessation_date && row.cessation);
     const headers = ["TIENDA", "PUESTO", "MOD", "DNI", "NOMBRE DE COLABORADOR", "SEXO", "FECHA DE INGRESO", "FECHA DE CESE", "DIAS DESCANSO MEDICO", "INASISTENCIA", "TARDANZAS (MINUTOS, HORAS)", "HORAS NOCTURNAS", "HORAS EXTRAS", "FERIADOS", "DESCUENTOS", "DESEMPEÑO", "MOTIVO DE CESE", "MOTIVO REAL", "COMENTARIO TIENDA"];
     const lines = [headers.map(csvCell).join(";")];
     cessationRows.forEach((row) => {
@@ -143,7 +146,8 @@ export function HrCessationsPanel() {
     <section className="hr-toolbar">
       <label className="search-box"><Search size={17}/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por nombre, DNI o tienda"/></label>
       <label className="filter-check"><input type="checkbox" checked={onlyCessations} onChange={(event) => setOnlyCessations(event.target.checked)}/> Solo con fecha de cese</label>
-      <button className="secondary-button" onClick={downloadCompleteReport} disabled={!data.some((row) => row.cessation)}><Download size={17}/> Descargar reporte completo</button>
+      <label className="compact-filter">Mes de cese<select value={cessationMonth} onChange={(event) => { setCessationMonth(event.target.value); if (event.target.value !== "all") setOnlyCessations(true); }}><option value="all">Todos los meses</option>{availableMonths.map((month) => <option key={month} value={month}>{new Intl.DateTimeFormat("es-PE", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${month}-01T00:00:00Z`))}</option>)}</select></label>
+      <button className="secondary-button" onClick={downloadCompleteReport} disabled={!rows.some((row) => row.cessation)}><Download size={17}/> Descargar reporte filtrado</button>
     </section>
 
     {error && <p className="form-alert error">No se pudo cargar la información de RR. HH.</p>}

@@ -64,7 +64,7 @@ export function buildWeeklySchedulePdf(staff: ExportStaff[], schedules: Schedule
 }
 
 export function buildPositioningPdf(staff: ExportStaff[], schedules: ScheduleMap, selectedDay: Weekday, date: string, turn: PositionTurn, orderedPositions: string[]) {
-  const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+  const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
   type Entry = { name: string; details: string; start: number };
   const groups = new Map<string, Entry[]>();
   for (const person of staff) {
@@ -85,16 +85,38 @@ export function buildPositioningPdf(staff: ExportStaff[], schedules: ScheduleMap
   }
   const order = (position: string) => { const index = orderedPositions.indexOf(position); return index < 0 ? 9999 : index; };
   const entries = [...groups.entries()].sort(([a], [b]) => order(a) - order(b) || a.localeCompare(b));
-  const addHeader = () => { pdf.setFillColor(248, 250, 252); pdf.rect(0, 0, 595, 70, "F"); pdf.setTextColor(30, 58, 95); pdf.setFont("helvetica", "bold"); pdf.setFontSize(17); pdf.text("POSICIONAMIENTO DIARIO", 565, 30, { align: "right" }); pdf.setFont("helvetica", "normal"); pdf.setFontSize(10); pdf.text(`${date} | ${turn === "ambos" ? "DÍA COMPLETO" : turn.toUpperCase()}`, 565, 49, { align: "right" }); };
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const addHeader = () => { pdf.setFillColor(248, 250, 252); pdf.rect(0, 0, pageWidth, 54, "F"); pdf.setTextColor(30, 58, 95); pdf.setFont("helvetica", "bold"); pdf.setFontSize(15); pdf.text("POSICIONAMIENTO DIARIO", pageWidth - 24, 24, { align: "right" }); pdf.setFont("helvetica", "normal"); pdf.setFontSize(8.5); pdf.text(`${date} | ${turn === "ambos" ? "DÍA COMPLETO" : turn.toUpperCase()}`, pageWidth - 24, 40, { align: "right" }); };
   addHeader();
-  if (!entries.length) pdf.text("No hay asignaciones para este turno.", 30, 95);
-  let currentY = 85;
-  entries.forEach(([position, rows]) => {
-    autoTable(pdf, { startY: currentY, margin: { left: 30, right: 30, top: 80 }, head: [[position.toUpperCase(), "Horario"]], body: rows.sort((a, b) => a.start - b.start).map((row) => [row.name, row.details]), theme: "grid", styles: { fontSize: 8.5, cellPadding: 4 }, headStyles: { fillColor: [37, 99, 235], textColor: 255 }, alternateRowStyles: { fillColor: [241, 245, 249] }, didDrawPage: addHeader });
-    currentY = ((pdf as AutoTableDocument).lastAutoTable?.finalY ?? currentY) + 12;
+  const rows = entries.flatMap(([position, people]) => people.sort((a, b) => a.start - b.start).map((row) => [position.toUpperCase(), row.name, row.details]));
+  if (!rows.length) pdf.text("No hay asignaciones para este turno.", 24, 78);
+  const columns = rows.length > 42 ? 2 : 1;
+  const splitAt = Math.ceil(rows.length / columns);
+  const chunks = columns === 1 ? [rows] : [rows.slice(0, splitAt), rows.slice(splitAt)];
+  const gap = 12;
+  const tableWidth = (pageWidth - 48 - gap * (columns - 1)) / columns;
+  const maxRows = Math.max(...chunks.map((chunk) => chunk.length), 1);
+  const availableHeight = pageHeight - 76;
+  const fontSize = Math.max(4.5, Math.min(7.2, (availableHeight / (maxRows + 1) - 1.4) / 1.15));
+  chunks.forEach((chunk, index) => {
+    const left = 24 + index * (tableWidth + gap);
+    autoTable(pdf, {
+      startY: 62,
+      margin: { left, right: pageWidth - left - tableWidth },
+      tableWidth,
+      head: [["Posición", "Colaborador", "Horario"]],
+      body: chunk,
+      theme: "grid",
+      pageBreak: "avoid",
+      rowPageBreak: "avoid",
+      styles: { fontSize, cellPadding: .7, overflow: "ellipsize", valign: "middle" },
+      headStyles: { fillColor: [37, 99, 235], textColor: 255, fontSize: Math.max(fontSize, 5.2) },
+      alternateRowStyles: { fillColor: [241, 245, 249] },
+      columnStyles: columns === 1 ? { 0: { cellWidth: 150 }, 1: { cellWidth: 330 }, 2: { cellWidth: "auto" } } : { 0: { cellWidth: tableWidth * .25 }, 1: { cellWidth: tableWidth * .45 }, 2: { cellWidth: tableWidth * .3 } },
+    });
   });
-  const pages = pdf.getNumberOfPages();
-  for (let page = 1; page <= pages; page++) { pdf.setPage(page); pdf.setFontSize(8); pdf.setTextColor(120); pdf.text(`Página ${page} de ${pages}`, 297, 825, { align: "center" }); }
+  pdf.setFontSize(7); pdf.setTextColor(120); pdf.text("Hoja única", pageWidth / 2, pageHeight - 7, { align: "center" });
   return pdf;
 }
 

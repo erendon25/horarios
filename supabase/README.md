@@ -11,6 +11,7 @@ El proyecto activo de Supabase ya fue creado y el esquema, la importación y el 
 - `hr_cessation_sync.sql`: reconciliación y sincronización transaccional entre `staff_profiles` y `cessations`.
 - `staff_management.sql`: alta y edición transaccional de colaboradores y vínculo interno con Auth.
 - `study_schedule_management.sql`: reemplazo atómico de disponibilidad con bloqueos de carnet y tienda.
+- `migrations/*_training_signatures_storage.sql`: bucket privado y políticas RLS para firmas de evaluaciones.
 
 Las futuras modificaciones deben aplicarse como migraciones y mantener estos archivos declarativos alineados con producción.
 
@@ -54,10 +55,10 @@ La Edge Function `staff-account-admin` requiere el secreto `APP_URL` con la URL 
 
 ## Pendientes de la migración funcional
 
-1. Migrar las pantallas restantes de horarios, estudios, ventas, proyección, feriados y capacitación a Next.js.
-2. Confirmar si las firmas de capacitación se trasladarán a Supabase Storage. El diseño guarda rutas, no imágenes Base64.
-3. Ejecutar pruebas de aceptación por rol antes del corte definitivo de Firebase.
-4. Activar la protección de contraseñas filtradas desde la configuración de Supabase Auth.
+1. Aplicar y verificar la migración del bucket privado de firmas en el proyecto remoto.
+2. Configurar `APP_URL` para invitaciones y activar la protección de contraseñas filtradas en Supabase Auth.
+3. Ejecutar pruebas de aceptación por rol contra el proyecto remoto.
+4. Hacer una exportación incremental, conciliar duplicados y completar el corte definitivo de Firebase.
 
 ## Orden de migración recomendado
 
