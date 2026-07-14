@@ -83,3 +83,15 @@ android-app/.idea/
 *.aab
 *.jks
 *.keystore
+
+# Secretos y exportaciones temporales de la migración Firebase -> Supabase
+migration/secrets/
+migration/exports/
+migration/transformed/
+migration/reports/private/
+output/
+tmp/
+*firebase-service*.json
+*service-account*.json
+*scrypt*.txt
+*hash-config*.txt

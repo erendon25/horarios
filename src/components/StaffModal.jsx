@@ -1,6 +1,9 @@
 // ✅ StaffModal.jsx
 import { useState } from 'react';
-import { getFirestore, doc, setDoc, addDoc, collection, getDoc, updateDoc } from 'firebase/firestore';
+import {
+  getFirestore, doc, setDoc, addDoc, collection, getDoc, updateDoc,
+  getDocs, query, where, writeBatch
+} from 'firebase/firestore';
 
 function StaffModal({ staff = null, userData, onClose, onSaved }) {
   const [form, setForm] = useState({
@@ -33,6 +36,7 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
     setLoading(true);
 
     try {
+      let profileId = staff?.id;
       if (staff) {
         const needsCompletion = staff.needsCompletion
           ? !(form.modality && form.sanitaryCardDate)
@@ -43,12 +47,55 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
           needsCompletion,
         });
       } else {
-        await addDoc(collection(db, 'staff_profiles'), {
+        const profileRef = await addDoc(collection(db, 'staff_profiles'), {
           ...form,
           storeId: userData?.storeId,
           status: 'pending',
           createdAt: new Date().toISOString(),
         });
+        profileId = profileRef.id;
+      }
+
+      // Mantener RR. HH. sincronizado con la fecha de cese del perfil.
+      // Si solo cambia la fecha, se conservan los motivos y demás datos ya llenados.
+      if (profileId) {
+        const cesesSnap = await getDocs(query(
+          collection(db, 'ceses'),
+          where('staffId', '==', profileId)
+        ));
+        const cesesNormales = cesesSnap.docs.filter(snapshot => !snapshot.data().isModalityChange);
+        const registroAnterior = cesesNormales.find(snapshot => snapshot.id === `${profileId}_${staff?.cessationDate}`)
+          || cesesNormales[0];
+        const datosAnteriores = registroAnterior?.data() || {};
+        const batch = writeBatch(db);
+        const nuevoCeseId = form.cessationDate ? `${profileId}_${form.cessationDate}` : null;
+
+        cesesNormales
+          .filter(snapshot => snapshot.id !== nuevoCeseId)
+          .forEach(snapshot => batch.delete(snapshot.ref));
+
+        if (form.cessationDate) {
+          batch.set(doc(db, 'ceses', nuevoCeseId), {
+            ...datosAnteriores,
+            staffId: profileId,
+            name: form.name || '',
+            lastName: form.lastName || '',
+            modality: form.modality || '',
+            dni: form.dni || '',
+            gender: form.gender || '',
+            position: form.position || 'TEAM MEMBER',
+            joinDate: form.joinDate || '',
+            cessationDate: form.cessationDate,
+            storeId: userData?.storeId || staff?.storeId || '',
+            motivoCese: datosAnteriores.motivoCese || 'RENUNCIA VOLUNTARIA',
+            motivoReal: datosAnteriores.motivoReal || 'MEJORA ECONÓMICA',
+            registeredAt: datosAnteriores.registeredAt || new Date().toISOString(),
+            migratedFromProfile: true,
+            lastUpdated: new Date().toISOString(),
+          });
+        }
+
+        await batch.commit();
       }
 
       // Sync role as a secondary operation

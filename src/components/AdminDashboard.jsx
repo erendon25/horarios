@@ -1860,6 +1860,8 @@ function AdminDashboard() {
                             joinDate: s.joinDate || s.createdAt?.split?.('T')?.[0] || '',
                             cessationDate: s.cessationDate,
                             storeId: userData.storeId,
+                            motivoCese: 'RENUNCIA VOLUNTARIA',
+                            motivoReal: 'MEJORA ECONÓMICA',
                             registeredAt: new Date().toISOString(),
                             migratedFromProfile: true
                         };
@@ -2109,8 +2111,8 @@ function AdminDashboard() {
                 s.feriados || '0',
                 s.descuentos || '0',
                 s.desempenio || '',
-                s.motivoCese || '',
-                s.motivoReal || '',
+                s.motivoCese || 'RENUNCIA VOLUNTARIA',
+                s.motivoReal || 'MEJORA ECONÓMICA',
                 s.comentario || ''
             ]);
         });
