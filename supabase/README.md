@@ -15,6 +15,8 @@ El proyecto activo de Supabase ya fue creado y el esquema, la importación y el 
 
 Las futuras modificaciones deben aplicarse como migraciones y mantener estos archivos declarativos alineados con producción.
 
+El procedimiento de rate limiting, alertas, backup y recuperación se mantiene en `operations/PRODUCTION_RUNBOOK.md`; la verificación posterior a una restauración está en `operations/recovery/verify_restore.sql`.
+
 La Edge Function `staff-account-admin` requiere el secreto `APP_URL` con la URL pública de Next.js. Hasta configurarlo no enviará invitaciones, evitando enlaces que redirijan por error a la aplicación Firebase anterior.
 
 ## Decisiones principales

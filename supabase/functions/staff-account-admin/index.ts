@@ -39,6 +39,25 @@ Deno.serve(async (request) => {
     return json(403, { error: "forbidden" });
   }
 
+  const { data: limitRows, error: limitError } = await service.rpc("consume_rate_limit", {
+    p_bucket_key: `staff-account-admin:${authData.user.id}`,
+    p_max_requests: 5,
+    p_window_seconds: 900,
+  });
+  if (limitError) return json(503, { error: "rate_limit_unavailable" });
+  const limit = limitRows?.[0];
+  if (!limit?.allowed) {
+    return new Response(JSON.stringify({ error: "rate_limited", retryAfter: limit?.retry_after_seconds ?? 900 }), {
+      status: 429,
+      headers: {
+        ...corsHeaders,
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "retry-after": String(limit?.retry_after_seconds ?? 900),
+      },
+    });
+  }
+
   const body = await request.json().catch(() => null);
   if (!body || body.operation !== "invite_staff" || typeof body.staffId !== "string") {
     return json(400, { error: "invalid_payload" });

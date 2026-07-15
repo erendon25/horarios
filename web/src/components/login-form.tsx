@@ -22,7 +22,11 @@ export function LoginForm() {
     event.preventDefault(); setLoading(true); setError(""); setNotice("");
     const normalizedEmail = email.trim().toLocaleLowerCase("es");
     const { error: loginError } = await createClient().auth.signInWithPassword({ email: normalizedEmail, password });
-    if (loginError) { setError("Credenciales incorrectas o contraseña aún no configurada."); setLoading(false); return; }
+    if (loginError) {
+      setError(loginError.status === 429 ? "Demasiados intentos. Espera unos minutos antes de volver a intentar." : "Credenciales incorrectas o contraseña aún no configurada.");
+      setLoading(false);
+      return;
+    }
     if (rememberAccount) window.localStorage.setItem(rememberedAccountKey, normalizedEmail);
     else window.localStorage.removeItem(rememberedAccountKey);
     router.replace("/portal"); router.refresh();
@@ -34,7 +38,7 @@ export function LoginForm() {
     const redirectTo = `${window.location.origin}/auth/callback?next=/update-password`;
     const { error: resetError } = await createClient().auth.resetPasswordForEmail(email.trim(), { redirectTo });
     setLoading(false);
-    if (resetError) setError("No se pudo solicitar el restablecimiento.");
+    if (resetError) setError(resetError.status === 429 ? "Ya se solicitó un enlace recientemente. Espera antes de pedir otro." : "No se pudo solicitar el restablecimiento.");
     else setNotice("Si el correo está registrado, recibirás un enlace para crear tu contraseña.");
   }
 
