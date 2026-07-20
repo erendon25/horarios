@@ -1835,13 +1835,42 @@ function AdminDashboard() {
             // 1. Leer solo los ceses de ESTA tienda
             const qCeses = query(collection(db, 'ceses'), where('storeId', '==', userData.storeId));
             const snap = await getDocs(qCeses);
-            const existingIds = new Set(snap.docs.map(d => d.id));
-            const lista = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            const existingIds = new Set(
+                snap.docs.filter(snapshot => !snapshot.data().isCancelled).map(snapshot => snapshot.id)
+            );
+            let lista = snap.docs
+                .map(d => ({ id: d.id, ...d.data() }))
+                .filter(registro => !registro.isCancelled);
 
             // 2. Migrar solo colaboradores de ESTA tienda
             const staffQuery = query(collection(db, 'staff_profiles'), where('storeId', '==', userData.storeId));
             const staffSnap = await getDocs(staffQuery);
             const migraciones = [];
+            const staffActual = new Map(staffSnap.docs.map(snapshot => [snapshot.id, snapshot.data()]));
+            const cesesObsoletos = snap.docs.filter(snapshot => {
+                const registro = snapshot.data();
+                if (registro.isCancelled) return true;
+                if (registro.isModalityChange) return false;
+
+                const perfil = staffActual.get(registro.staffId);
+                if (!perfil) return false; // Mantener el historial de perfiles ya eliminados.
+
+                return !perfil.cessationDate || perfil.cessationDate !== registro.cessationDate;
+            });
+
+            if (cesesObsoletos.length > 0) {
+                const idsObsoletos = new Set(cesesObsoletos.map(snapshot => snapshot.id));
+                lista = lista.filter(registro => !idsObsoletos.has(registro.id));
+                cesesObsoletos.forEach(snapshot => existingIds.delete(snapshot.id));
+
+                // Corregir la vista aunque una regla antigua todavía impida limpiar Firestore.
+                await Promise.allSettled(cesesObsoletos.map(snapshot =>
+                    deleteDoc(snapshot.ref).catch(error => {
+                        console.warn(`No se pudo depurar el cese obsoleto ${snapshot.id}:`, error);
+                    })
+                ));
+            }
+
             staffSnap.docs.forEach(d => {
                 const s = d.data();
 
