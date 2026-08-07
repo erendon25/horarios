@@ -347,7 +347,7 @@ function columnsFor(root, data, previous = {}) {
     }
     const column = mapping[key];
     if (column && ["collaborator_signature_path", "trainer_signature_path"].includes(column) && typeof value === "string" && /^https?:/.test(value)) continue;
-    if (column) columns[column] = value === "" && ["cessation_date", "join_date", "birth_date", "training_end_date", "modality_change_date"].includes(column) ? null : value;
+    if (column) columns[column] = value === "" && ["cessation_date", "join_date", "birth_date", "training_end_date", "modality_change_date", "next_modality", "sanitary_card_expiry", "sanitary_card_unlock", "last_evaluation_date", "last_station_evaluated"].includes(column) ? null : value;
     else if (key !== "id" && key !== "firestore_path") unhandled[key] = value;
   }
   if (Object.keys(unhandled).length) columns.legacy_data = { ...(previous ?? {}), ...unhandled };
