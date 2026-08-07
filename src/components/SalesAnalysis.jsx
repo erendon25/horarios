@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { getFirestore, doc, getDoc, writeBatch } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, writeBatch, collection, getDocs, query, orderBy, limit } from '../lib/supabase/firestoreCompat';
 import { useAuth } from '../contexts/AuthContext';
-import { ArrowLeft, Upload, Calendar, AlertCircle, Search } from 'lucide-react';
+import { ArrowLeft, Upload, AlertCircle, Search, Database } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import {
     BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList
 } from 'recharts';
-import { startOfISOWeek, addWeeks, format, startOfYear } from 'date-fns';
+import { startOfISOWeek, endOfISOWeek, format, startOfMonth, endOfMonth, startOfYear, endOfYear, subMonths, subDays } from 'date-fns';
 
 const TURNOS = [
     { key: 'Apertura a 1pm', check: (h) => h >= 6 && h < 13 },
@@ -18,11 +18,18 @@ const TURNOS = [
 ];
 
 const CANALES_FIJOS = ['SALÓN', 'DELIVERY', 'DRIVE THRU', 'SERV. FILA'];
-const DIAS_SEMANA = ['Dom', 'Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab'];
+const DIAS_SEMANA = ['Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab', 'Dom'];
+const DIAS_SEMANA_GETDAY = [1, 2, 3, 4, 5, 6, 0];
 
 const addDays = (dateStr, days) => {
     const d = new Date(dateStr + 'T12:00:00');
     d.setDate(d.getDate() + days);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+const subtractYear = (dateStr) => {
+    const d = new Date(dateStr + 'T12:00:00');
+    d.setFullYear(d.getFullYear() - 1);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 
@@ -74,6 +81,18 @@ const getSmartComparisonPeriod = (start, end) => {
         return {
             dates: getDatesInRange(previousStart, previousEnd),
             title: 'Mes Anterior',
+            label: 'MES ANTERIOR',
+        };
+    }
+
+    if (isSameMonth) {
+        const previousMonthStart = new Date(startObj.getFullYear(), startObj.getMonth() - 1, startObj.getDate());
+        const previousMonthEnd = new Date(endObj.getFullYear(), endObj.getMonth() - 1, endObj.getDate());
+        const previousStart = format(previousMonthStart, 'yyyy-MM-dd');
+        const previousEnd = format(previousMonthEnd, 'yyyy-MM-dd');
+        return {
+            dates: getDatesInRange(previousStart, previousEnd),
+            title: 'Mes Anterior (Mismo Rango)',
             label: 'MES ANTERIOR',
         };
     }
@@ -348,6 +367,7 @@ export default function SalesAnalysis() {
 
     const [dataCurrent, setDataCurrent] = useState(null);
     const [dataPrevWeek, setDataPrevWeek] = useState(null);
+    const [dataPrevMonth, setDataPrevMonth] = useState(null);
     const [previousPeriodMeta, setPreviousPeriodMeta] = useState({
         title: 'Semana Anterior',
         label: 'SEM ANTERIOR',
@@ -357,8 +377,12 @@ export default function SalesAnalysis() {
     const [viewMode, setViewMode] = useState('VTA');
     const [selectedHourlyTxsDay, setSelectedHourlyTxsDay] = useState('all');
     const [dateError, setDateError] = useState('');
-    const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
-    const [selectedWeek, setSelectedWeek] = useState(1);
+    const [selectedCanalDetail, setSelectedCanalDetail] = useState(null);
+    const [selectedDayDetail, setSelectedDayDetail] = useState(null);
+    const [comparePeriod, setComparePeriod] = useState('week');
+    const [availableRange, setAvailableRange] = useState({ min: null, max: null });
+    const [lastUploadInfo, setLastUploadInfo] = useState(null);
+    const [activeQuickFilter, setActiveQuickFilter] = useState('week');
 
     useEffect(() => {
         const fetchStore = async () => {
@@ -373,16 +397,77 @@ export default function SalesAnalysis() {
         fetchStore();
     }, [currentUser, db]);
 
-    const handleWeekChange = (year, week) => {
-        setSelectedYear(year);
-        setSelectedWeek(week);
-        let d = new Date(year, 0, 4);
-        d = startOfISOWeek(d);
-        d = addWeeks(d, week - 1);
-        setStartDate(format(d, 'yyyy-MM-dd'));
-        const dEnd = new Date(d);
-        dEnd.setDate(dEnd.getDate() + 6);
-        setEndDate(format(dEnd, 'yyyy-MM-dd'));
+    const fetchAvailableRange = async (targetStoreId = storeId) => {
+        if (!targetStoreId) return null;
+        try {
+            const salesRef = collection(db, 'stores', targetStoreId, 'sales_history');
+            const firstQ = query(salesRef, orderBy('__name__'), limit(1));
+            const lastQ = query(salesRef, orderBy('__name__', 'desc'), limit(1));
+            const [firstSnap, lastSnap] = await Promise.all([getDocs(firstQ), getDocs(lastQ)]);
+            const min = firstSnap.docs[0]?.id || null;
+            const max = lastSnap.docs[0]?.id || null;
+            setAvailableRange({ min, max });
+            return { min, max };
+        } catch (err) {
+            console.error("Error detectando rango disponible:", err);
+            return null;
+        }
+    };
+
+    useEffect(() => {
+        if (storeId) fetchAvailableRange(storeId);
+    }, [storeId]);
+
+    const todayStr = () => {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+
+    const applyQuickFilter = (key) => {
+        const today = new Date();
+        let start, end;
+        switch (key) {
+            case 'today':
+                start = end = todayStr();
+                break;
+            case 'yesterday':
+                start = end = format(subDays(today, 1), 'yyyy-MM-dd');
+                break;
+            case 'week':
+                start = format(startOfISOWeek(today), 'yyyy-MM-dd');
+                end = format(endOfISOWeek(today), 'yyyy-MM-dd');
+                break;
+            case 'prevWeek': {
+                const prev = subDays(today, 7);
+                start = format(startOfISOWeek(prev), 'yyyy-MM-dd');
+                end = format(endOfISOWeek(prev), 'yyyy-MM-dd');
+                break;
+            }
+            case 'month':
+                start = format(startOfMonth(today), 'yyyy-MM-dd');
+                end = format(endOfMonth(today), 'yyyy-MM-dd');
+                break;
+            case 'prevMonth': {
+                const prev = subMonths(today, 1);
+                start = format(startOfMonth(prev), 'yyyy-MM-dd');
+                end = format(endOfMonth(prev), 'yyyy-MM-dd');
+                break;
+            }
+            case 'year':
+                start = format(startOfYear(today), 'yyyy-MM-dd');
+                end = format(endOfYear(today), 'yyyy-MM-dd');
+                break;
+            case 'all':
+                if (!availableRange.min || !availableRange.max) return;
+                start = availableRange.min;
+                end = availableRange.max;
+                break;
+            default:
+                return;
+        }
+        setActiveQuickFilter(key);
+        setStartDate(start);
+        setEndDate(end);
         setDateError('');
     };
 
@@ -397,19 +482,35 @@ export default function SalesAnalysis() {
         try {
             const currentDates = getDatesInRange(startDate, endDate);
             const smartComparison = getSmartComparisonPeriod(startDate, endDate);
-            const prevWeekDates = smartComparison.dates;
+            const prevWeekDates = currentDates.map(d => addDays(d, -7));
+
             setPreviousPeriodMeta({
                 title: smartComparison.title,
                 label: smartComparison.label,
             });
-            const prevYearDates = currentDates.map(d => addDays(d, -364));
+
+            const prevMonthDates = currentDates.map(d => {
+                const date = new Date(d + 'T12:00:00');
+                date.setMonth(date.getMonth() - 1);
+                return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+            });
+            const prevYearDates = currentDates.map(d => subtractYear(d));
+
+            const compareDatesMap = {
+                week: prevWeekDates,
+                month: prevMonthDates,
+                year: prevYearDates
+            };
 
             const fetchRange = async (datesArr) => {
                 const results = await Promise.all(datesArr.map(d => getDoc(doc(db, 'stores', storeId, 'sales_history', d))));
                 const agg = {
                     total: 0, txs: 0,
                     canales: {}, canalesTxs: {}, turnos: {}, turnosTxs: {}, dias: {}, diasTxs: {},
-                    horasTxs: {}, horasTxsPorDia: {}
+                    horasTxs: {}, horasTxsPorDia: {},
+                    canalesHoras: {}, canalesHorasTxs: {}, canalesDias: {}, canalesDiasTxs: {},
+                    canalesHorasPorFecha: {}, canalesHorasTxsPorFecha: {},
+                    ventasPorFecha: {}, txsPorFecha: {}
                 };
 
                 TURNOS.forEach(t => { agg.turnos[t.key] = 0; agg.turnosTxs[t.key] = 0; });
@@ -419,6 +520,22 @@ export default function SalesAnalysis() {
                     agg.horasTxsPorDia[dayIndex] = {};
                     Array.from({ length: 24 }, (_, hour) => {
                         agg.horasTxsPorDia[dayIndex][hour] = 0;
+                    });
+                });
+                CANALES_FIJOS.forEach(c => {
+                    agg.canalesHoras[c] = {};
+                    agg.canalesHorasTxs[c] = {};
+                    agg.canalesDias[c] = {};
+                    agg.canalesDiasTxs[c] = {};
+                    agg.canalesHorasPorFecha[c] = {};
+                    agg.canalesHorasTxsPorFecha[c] = {};
+                    Array.from({ length: 24 }, (_, hour) => {
+                        agg.canalesHoras[c][hour] = 0;
+                        agg.canalesHorasTxs[c][hour] = 0;
+                    });
+                    DIAS_SEMANA.forEach((_, dayIndex) => {
+                        agg.canalesDias[c][dayIndex] = 0;
+                        agg.canalesDiasTxs[c][dayIndex] = 0;
                     });
                 });
 
@@ -432,6 +549,9 @@ export default function SalesAnalysis() {
                         const dow = dateObj.getDay();
                         agg.dias[dow] += dayData.totalSales || 0;
                         agg.diasTxs[dow] += dayData.totalTxs || 0;
+
+                        agg.ventasPorFecha[datesArr[idx]] = dayData.totalSales || 0;
+                        agg.txsPorFecha[datesArr[idx]] = dayData.totalTxs || 0;
 
                         if (dayData.hourlyData) {
                             Object.entries(dayData.hourlyData).forEach(([hourStr, canalData]) => {
@@ -447,6 +567,18 @@ export default function SalesAnalysis() {
                                     if (!agg.canalesTxs[canal]) agg.canalesTxs[canal] = 0;
                                     agg.canalesTxs[canal] += txsVal;
                                     sumHourTxs += txsVal;
+
+                                    agg.canalesHoras[canal][hour] = (agg.canalesHoras[canal][hour] || 0) + val;
+                                    agg.canalesHorasTxs[canal][hour] = (agg.canalesHorasTxs[canal][hour] || 0) + txsVal;
+                                    agg.canalesDias[canal][dow] = (agg.canalesDias[canal][dow] || 0) + val;
+                                    agg.canalesDiasTxs[canal][dow] = (agg.canalesDiasTxs[canal][dow] || 0) + txsVal;
+
+                                    if (!agg.canalesHorasPorFecha[canal][datesArr[idx]]) {
+                                        agg.canalesHorasPorFecha[canal][datesArr[idx]] = {};
+                                        agg.canalesHorasTxsPorFecha[canal][datesArr[idx]] = {};
+                                    }
+                                    agg.canalesHorasPorFecha[canal][datesArr[idx]][hour] = (agg.canalesHorasPorFecha[canal][datesArr[idx]][hour] || 0) + val;
+                                    agg.canalesHorasTxsPorFecha[canal][datesArr[idx]][hour] = (agg.canalesHorasTxsPorFecha[canal][datesArr[idx]][hour] || 0) + txsVal;
                                 });
 
                                 const turnoObj = TURNOS.find(t => t.check(hour));
@@ -482,11 +614,23 @@ export default function SalesAnalysis() {
                 return totalGoal;
             };
 
-            const [resCurr, resPrev, resYear, goal] = await Promise.all([
-                fetchRange(currentDates), fetchRange(prevWeekDates), fetchRange(prevYearDates), fetchConfig()
+            const [resCurr, resPrev, resPrevMonth, resYear, goal] = await Promise.all([
+                fetchRange(currentDates), fetchRange(prevWeekDates), fetchRange(prevMonthDates), fetchRange(prevYearDates), fetchConfig()
             ]);
 
-            setDataCurrent(resCurr); setDataPrevWeek(resPrev); setDataPrevYear(resYear); setCurrentGoal(goal);
+            setDataCurrent(resCurr);
+            setDataPrevWeek(resPrev);
+            setDataPrevMonth(resPrevMonth);
+            setDataPrevYear(resYear);
+            setCurrentGoal(goal);
+
+            setPreviousPeriodMeta(
+                comparePeriod === 'month'
+                    ? { title: 'Mes Anterior', label: 'MES ANTERIOR' }
+                    : comparePeriod === 'year'
+                    ? { title: 'Año Anterior', label: 'AÑO ANTERIOR' }
+                    : { title: 'Semana Anterior', label: 'SEM ANTERIOR' }
+            );
         } catch (err) {
             console.error("Error fetching data", err);
         } finally {
@@ -495,10 +639,21 @@ export default function SalesAnalysis() {
     };
 
     useEffect(() => {
-        if (storeId) {
-            loadAnalysisData();
+        if (!storeId || !startDate || !endDate) return;
+        if (startDate > endDate) return;
+        const t = setTimeout(() => { loadAnalysisData(); }, 350);
+        return () => clearTimeout(t);
+    }, [storeId, comparePeriod, startDate, endDate]);
+
+    useEffect(() => {
+        if (comparePeriod === 'month') {
+            setPreviousPeriodMeta({ title: 'Mes Anterior', label: 'MES ANTERIOR' });
+        } else if (comparePeriod === 'year') {
+            setPreviousPeriodMeta({ title: 'Año Anterior', label: 'AÑO ANTERIOR' });
+        } else {
+            setPreviousPeriodMeta({ title: 'Semana Anterior', label: 'SEM ANTERIOR' });
         }
-    }, [storeId]);
+    }, [comparePeriod, startDate, endDate]);
 
     const parseHTMLTable = (text) => {
         const parser = new DOMParser();
@@ -857,6 +1012,12 @@ export default function SalesAnalysis() {
             else if (canalRawStr.includes('LOCAL') || canalRawStr.includes('SALON') || canalRawStr.includes('SALÓN')) canal = 'SALÓN';
             else if (canalRawStr !== '') canal = 'SALÓN';
 
+            // El resumen de Inforest excluye pedidos sin comprobante en los
+            // canales fiscales. SERV. FILA es la excepción: los pedidos de
+            // kiosko pueden formar parte del total aun sin número de documento.
+            const hasDocument = String(dataP.documento || '').trim() !== '';
+            if (!hasDocument && canal !== 'SERV. FILA') continue;
+
             if (!dailyAggregations[fecha]) {
                 dailyAggregations[fecha] = { totalSales: 0, hourlyData: {}, _pedidosGlobal: new Set(), _pedidosHoraCanal: {} };
             }
@@ -906,7 +1067,26 @@ export default function SalesAnalysis() {
             }
         }
         if (count > 0) await batch.commit();
-        alert(`¡Datos procesados con éxito!\n\nVenta Total Verificada: S/ ${debugSum.toLocaleString('es-PE', { minimumFractionDigits: 2 })}\nTransacciones Finales: ${Object.keys(dailyAggregations).reduce((acc, k) => acc + dailyAggregations[k]._pedidosGlobal.size, 0)}`);
+
+        const fechasArchivo = Object.keys(dailyAggregations).sort();
+        const totalTxs = Object.keys(dailyAggregations).reduce((acc, k) => acc + dailyAggregations[k]._pedidosGlobal.size, 0);
+
+        if (fechasArchivo.length > 0) {
+            const min = fechasArchivo[0];
+            const max = fechasArchivo[fechasArchivo.length - 1];
+            setLastUploadInfo({
+                min, max,
+                dias: fechasArchivo.length,
+                ventas: debugSum,
+                txs: totalTxs,
+            });
+            setStartDate(min);
+            setEndDate(max);
+            setActiveQuickFilter(null);
+            await fetchAvailableRange(storeId);
+        }
+
+        alert(`¡Datos procesados con éxito!\n\nRango detectado: ${fechasArchivo[0] || '-'} a ${fechasArchivo[fechasArchivo.length - 1] || '-'}\nDías cargados: ${fechasArchivo.length}\nVenta Total Verificada: S/ ${debugSum.toLocaleString('es-PE', { minimumFractionDigits: 2 })}\nTransacciones Finales: ${totalTxs}`);
     };
 
     const allCanales = CANALES_FIJOS;
@@ -915,27 +1095,257 @@ export default function SalesAnalysis() {
         if (!dataCurrent || !compareData) return null;
         const isTxs = viewMode === 'TXS';
 
+        const getTurnosByCanal = (data, canal) => {
+            if (!canal) {
+                return TURNOS.map(t => ({
+                    name: t.key,
+                    value: isTxs ? (data.turnosTxs[t.key] || 0) : (data.turnos[t.key] || 0)
+                }));
+            }
+            return TURNOS.map(t => {
+                let sum = 0;
+                for (let h = 0; h < 24; h++) {
+                    if (t.check(h)) {
+                        sum += isTxs ? (data.canalesHorasTxs[canal]?.[h] || 0) : (data.canalesHoras[canal]?.[h] || 0);
+                    }
+                }
+                return {
+                    name: t.key,
+                    value: sum
+                };
+            });
+        };
+
+        const getDayDetails = () => {
+            if (selectedDayDetail === null) return null;
+
+            const targetDayOfWeek = DIAS_SEMANA_GETDAY[selectedDayDetail];
+            const currentDates = getDatesInRange(startDate, endDate);
+            const compareDates = comparePeriod === 'month' ? currentDates.map(d => {
+                const date = new Date(d + 'T12:00:00');
+                date.setMonth(date.getMonth() - 1);
+                return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+            }) : comparePeriod === 'year' ? currentDates.map(d => subtractYear(d)) : currentDates.map(d => addDays(d, -7));
+
+            let currentSum = 0, currentCount = 0, compareSum = 0, compareCount = 0;
+            const currentDayData = [];
+            const compareDayData = [];
+
+            currentDates.forEach((d) => {
+                const dateObj = new Date(d + 'T12:00:00');
+                if (dateObj.getDay() === targetDayOfWeek) {
+                    const val = isTxs ? (dataCurrent.txsPorFecha[d] || 0) : (dataCurrent.ventasPorFecha[d] || 0);
+                    currentSum += val;
+                    currentCount++;
+                    currentDayData.push({ fecha: d, valor: val });
+                }
+            });
+
+            compareDates.forEach((d) => {
+                const dateObj = new Date(d + 'T12:00:00');
+                if (dateObj.getDay() === targetDayOfWeek) {
+                    const val = isTxs ? (compareData.txsPorFecha[d] || 0) : (compareData.ventasPorFecha[d] || 0);
+                    compareSum += val;
+                    compareCount++;
+                    compareDayData.push({ fecha: d, valor: val });
+                }
+            });
+
+            const currentAvg = currentCount > 0 ? currentSum / currentCount : 0;
+            const compareAvg = compareCount > 0 ? compareSum / compareCount : 0;
+            const diff = currentAvg - compareAvg;
+            const pct = compareAvg > 0 ? (diff / compareAvg) * 100 : 0;
+
+            const canalesBreakdown = allCanales.map(canal => {
+                const currentCanalData = isTxs
+                    ? (dataCurrent.canalesDiasTxs[canal] || {})
+                    : (dataCurrent.canalesDias[canal] || {});
+                const compareCanalData = isTxs
+                    ? (compareData.canalesDiasTxs[canal] || {})
+                    : (compareData.canalesDias[canal] || {});
+
+                const currentVal = currentCanalData[targetDayOfWeek] || 0;
+                const compareVal = compareCanalData[targetDayOfWeek] || 0;
+                const canalDiff = currentVal - compareVal;
+                const canalPct = compareVal > 0 ? (canalDiff / compareVal) * 100 : 0;
+
+                return {
+                    canal,
+                    currentVal,
+                    compareVal,
+                    diff: canalDiff,
+                    pct: canalPct
+                };
+            }).sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+
+            const sumHorasCanalFecha = (dataObj, canal, fecha) => {
+                if (!dataObj) return 0;
+                const src = isTxs
+                    ? (dataObj.canalesHorasTxsPorFecha?.[canal]?.[fecha] || {})
+                    : (dataObj.canalesHorasPorFecha?.[canal]?.[fecha] || {});
+                let total = 0;
+                for (const h in src) total += src[h] || 0;
+                return total;
+            };
+
+            const fechaCanalBreakdown = currentDayData.map(({ fecha }) => {
+                const canales = {};
+                let total = 0;
+                allCanales.forEach(canal => {
+                    const v = sumHorasCanalFecha(dataCurrent, canal, fecha);
+                    canales[canal] = v;
+                    total += v;
+                });
+                return { fecha, canales, total };
+            });
+
+            const canalTotalsActual = {};
+            const canalTotalsCompare = {};
+            allCanales.forEach(c => { canalTotalsActual[c] = 0; canalTotalsCompare[c] = 0; });
+            currentDayData.forEach(({ fecha }) => {
+                allCanales.forEach(c => { canalTotalsActual[c] += sumHorasCanalFecha(dataCurrent, c, fecha); });
+            });
+            compareDayData.forEach(({ fecha }) => {
+                allCanales.forEach(c => { canalTotalsCompare[c] += sumHorasCanalFecha(compareData, c, fecha); });
+            });
+
+            return {
+                dayName: DIAS_SEMANA[selectedDayDetail],
+                currentDayData,
+                compareDayData,
+                currentAvg,
+                compareAvg,
+                diff,
+                pct,
+                canalesBreakdown,
+                fechaCanalBreakdown,
+                canalTotalsActual,
+                canalTotalsCompare,
+            };
+        };
+
         const chartCanal = allCanales.map(c => ({
             name: c,
             [compareLabel]: isTxs ? (compareData.canalesTxs[c] || 0) : parseFloat((compareData.canales[c] || 0).toFixed(2)),
             "PERIODO ACTUAL": isTxs ? (dataCurrent.canalesTxs[c] || 0) : parseFloat((dataCurrent.canales[c] || 0).toFixed(2))
         }));
 
-        const chartTurno = TURNOS.map(t => ({
-            name: t.key,
-            [compareLabel]: isTxs ? (compareData.turnosTxs[t.key] || 0) : parseFloat((compareData.turnos[t.key] || 0).toFixed(2)),
-            "PERIODO ACTUAL": isTxs ? (dataCurrent.turnosTxs[t.key] || 0) : parseFloat((dataCurrent.turnos[t.key] || 0).toFixed(2))
-        }));
+        const getChartTurno = () => {
+            if (selectedCanalDetail) {
+                const horasData = isTxs ? (dataCurrent.canalesHorasTxs[selectedCanalDetail] || {}) : (dataCurrent.canalesHoras[selectedCanalDetail] || {});
+                const horasDataCompare = isTxs ? (compareData.canalesHorasTxs[selectedCanalDetail] || {}) : (compareData.canalesHoras[selectedCanalDetail] || {});
 
-        const chartDia = DIAS_SEMANA.map((d, i) => {
-            const realIdx = (i + 1) % 7;
-            return {
-                name: `${i + 1}. ${DIAS_SEMANA[realIdx]}`,
-                [compareLabel]: isTxs ? (compareData.diasTxs[realIdx] || 0) : parseFloat((compareData.dias[realIdx] || 0).toFixed(2)),
-                "PERIODO ACTUAL": isTxs ? (dataCurrent.diasTxs[realIdx] || 0) : parseFloat((dataCurrent.dias[realIdx] || 0).toFixed(2)),
-                _realIdx: realIdx
-            };
-        });
+                return TURNOS.map(t => {
+                    let current = 0, compare = 0;
+                    for (let h = 0; h < 24; h++) {
+                        if (t.check(h)) {
+                            current += horasData[h] || 0;
+                            compare += horasDataCompare[h] || 0;
+                        }
+                    }
+                    return {
+                        name: t.key,
+                        [compareLabel]: compare,
+                        "PERIODO ACTUAL": current
+                    };
+                });
+            }
+            return TURNOS.map(t => ({
+                name: t.key,
+                [compareLabel]: isTxs ? (compareData.turnosTxs[t.key] || 0) : parseFloat((compareData.turnos[t.key] || 0).toFixed(2)),
+                "PERIODO ACTUAL": isTxs ? (dataCurrent.turnosTxs[t.key] || 0) : parseFloat((dataCurrent.turnos[t.key] || 0).toFixed(2))
+            }));
+        };
+
+        const getActiveCompareData = () => {
+            if (comparePeriod === 'month') return dataPrevMonth;
+            if (comparePeriod === 'year') return dataPrevYear;
+            return dataPrevWeek;
+        };
+
+        const getActiveCompareLabel = () => {
+            if (comparePeriod === 'month') return 'MES ANTERIOR';
+            if (comparePeriod === 'year') return 'AÑO ANTERIOR';
+            return previousPeriodMeta.label;
+        };
+
+        const getChartTurnoByDay = () => {
+            if (!selectedCanalDetail || selectedDayDetail === null) return getChartTurno();
+
+            const activeCompareData = getActiveCompareData();
+            const activeCompareLabel = getActiveCompareLabel();
+            const targetDayOfWeek = DIAS_SEMANA_GETDAY[selectedDayDetail];
+
+            const currentDates = getDatesInRange(startDate, endDate);
+            const compareDates = comparePeriod === 'month' ? currentDates.map(d => {
+                const date = new Date(d + 'T12:00:00');
+                date.setMonth(date.getMonth() - 1);
+                return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+            }) : comparePeriod === 'year' ? currentDates.map(d => subtractYear(d)) : currentDates.map(d => addDays(d, -7));
+
+            return TURNOS.map(t => {
+                let current = 0, compare = 0;
+
+                currentDates.forEach((d) => {
+                    const dateObj = new Date(d + 'T12:00:00');
+                    if (dateObj.getDay() === targetDayOfWeek) {
+                        const horasData = isTxs ? (dataCurrent.canalesHorasTxsPorFecha[selectedCanalDetail]?.[d] || {}) : (dataCurrent.canalesHorasPorFecha[selectedCanalDetail]?.[d] || {});
+                        for (let h = 0; h < 24; h++) {
+                            if (t.check(h)) {
+                                current += horasData[h] || 0;
+                            }
+                        }
+                    }
+                });
+
+                compareDates.forEach((d) => {
+                    const dateObj = new Date(d + 'T12:00:00');
+                    if (dateObj.getDay() === targetDayOfWeek) {
+                        const horasData = isTxs ? (activeCompareData.canalesHorasTxsPorFecha[selectedCanalDetail]?.[d] || {}) : (activeCompareData.canalesHorasPorFecha[selectedCanalDetail]?.[d] || {});
+                        for (let h = 0; h < 24; h++) {
+                            if (t.check(h)) {
+                                compare += horasData[h] || 0;
+                            }
+                        }
+                    }
+                });
+
+                return {
+                    name: t.key,
+                    [activeCompareLabel]: compare,
+                    "PERIODO ACTUAL": current
+                };
+            });
+        };
+
+        const getChartDia = () => {
+            if (selectedCanalDetail) {
+                const diasData = isTxs ? (dataCurrent.canalesDiasTxs[selectedCanalDetail] || {}) : (dataCurrent.canalesDias[selectedCanalDetail] || {});
+                const diasDataCompare = isTxs ? (compareData.canalesDiasTxs[selectedCanalDetail] || {}) : (compareData.canalesDias[selectedCanalDetail] || {});
+
+                return DIAS_SEMANA.map((d, i) => {
+                    const getDayValue = DIAS_SEMANA_GETDAY[i];
+                    return {
+                        name: `${i + 1}. ${d}`,
+                        [compareLabel]: diasDataCompare[getDayValue] || 0,
+                        "PERIODO ACTUAL": diasData[getDayValue] || 0,
+                        _realIdx: getDayValue
+                    };
+                });
+            }
+            return DIAS_SEMANA.map((d, i) => {
+                const getDayValue = DIAS_SEMANA_GETDAY[i];
+                return {
+                    name: `${i + 1}. ${d}`,
+                    [compareLabel]: isTxs ? (compareData.diasTxs[getDayValue] || 0) : parseFloat((compareData.dias[getDayValue] || 0).toFixed(2)),
+                    "PERIODO ACTUAL": isTxs ? (dataCurrent.diasTxs[getDayValue] || 0) : parseFloat((dataCurrent.dias[getDayValue] || 0).toFixed(2)),
+                    _realIdx: getDayValue
+                };
+            });
+        };
+
+        const chartTurno = getChartTurno();
+        const chartDia = getChartDia();
 
         const currentHourlyTxs = selectedHourlyTxsDay === 'all'
             ? dataCurrent.horasTxs
@@ -1008,16 +1418,20 @@ export default function SalesAnalysis() {
                                         const act = isTxs ? (dataCurrent.canalesTxs[c] || 0) : (dataCurrent.canales[c] || 0);
                                         const ant = isTxs ? (compareData.canalesTxs[c] || 0) : (compareData.canales[c] || 0);
                                         const v = calcVar(act, ant);
+                                        const isSelected = selectedCanalDetail === c;
                                         return (
-                                            <tr key={c} className="border-b border-gray-50 hover:bg-gray-50">
-                                                <td className="p-2 text-gray-700 font-semibold">{c}</td>
+                                            <tr key={c} className={`border-b border-gray-50 cursor-pointer transition-colors ${isSelected ? 'bg-blue-100' : 'hover:bg-blue-50'}`} onClick={() => setSelectedCanalDetail(isSelected ? null : c)}>
+                                                <td className={`p-2 font-semibold flex items-center gap-2 ${isSelected ? 'text-blue-700' : 'text-gray-700'}`}>
+                                                    {isSelected && <span className="text-lg">✓</span>}
+                                                    {c}
+                                                </td>
                                                 <td className={`p-2 text-right font-bold ${v.color}`}>{v.icon} {fmtPct(v.pct)}</td>
                                                 <td className={`p-2 text-right font-bold ${v.color}`}>{isTxs ? v.dif : fmtNum(v.dif)}</td>
                                             </tr>
                                         );
                                     })}
-                                    <tr className="bg-gray-50 border-t-2 border-gray-200">
-                                        <td className="p-2 font-black text-gray-800">Total general</td>
+                                    <tr className={`border-t-2 border-gray-200 ${selectedCanalDetail ? 'bg-gray-100' : 'bg-gray-50'} cursor-pointer`} onClick={() => setSelectedCanalDetail(null)}>
+                                        <td className="p-2 font-black text-gray-800">Total general {selectedCanalDetail && <span className="text-xs font-normal text-gray-600">(click para limpiar)</span>}</td>
                                         <td className={`p-2 text-right font-black ${totalVar.color}`}>{totalVar.icon} {fmtPct(totalVar.pct)}</td>
                                         <td className={`p-2 text-right font-black ${totalVar.color}`}>{isTxs ? totalVar.dif : fmtNum(totalVar.dif)}</td>
                                     </tr>
@@ -1035,23 +1449,181 @@ export default function SalesAnalysis() {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {TURNOS.map(t => {
-                                        const act = isTxs ? (dataCurrent.turnosTxs[t.key] || 0) : (dataCurrent.turnos[t.key] || 0);
-                                        const ant = isTxs ? (compareData.turnosTxs[t.key] || 0) : (compareData.turnos[t.key] || 0);
-                                        const v = calcVar(act, ant);
-                                        return (
-                                            <tr key={t.key} className="border-b border-gray-50 hover:bg-gray-50">
-                                                <td className="p-2 text-gray-700 italic">{t.key}</td>
-                                                <td className={`p-2 text-right font-bold ${v.color}`}>{v.icon} {fmtPct(v.pct)}</td>
-                                                <td className={`p-2 text-right font-bold ${v.color}`}>{isTxs ? v.dif : fmtNum(v.dif)}</td>
-                                            </tr>
-                                        );
-                                    })}
+                                    {(() => {
+                                        const currentTurnos = getTurnosByCanal(dataCurrent, selectedCanalDetail);
+                                        const compareTurnos = getTurnosByCanal(compareData, selectedCanalDetail);
+                                        return TURNOS.map((t, idx) => {
+                                            const act = currentTurnos[idx].value;
+                                            const ant = compareTurnos[idx].value;
+                                            const v = calcVar(act, ant);
+                                            return (
+                                                <tr key={t.key} className="border-b border-gray-50 hover:bg-gray-50">
+                                                    <td className="p-2 text-gray-700 italic">{t.key}</td>
+                                                    <td className={`p-2 text-right font-bold ${v.color}`}>{v.icon} {fmtPct(v.pct)}</td>
+                                                    <td className={`p-2 text-right font-bold ${v.color}`}>{isTxs ? v.dif : fmtNum(v.dif)}</td>
+                                                </tr>
+                                            );
+                                        });
+                                    })()}
                                 </tbody>
                             </table>
                         </div>
                     </div>
 
+                    {selectedCanalDetail ? (
+                        <div className="flex-1 space-y-6">
+                            <div className="bg-white border border-gray-200 shadow-sm rounded p-4">
+                                <h3 className="text-center font-bold text-gray-800 mb-3 uppercase">Seleccionar Día - {selectedCanalDetail}</h3>
+                                <div className="overflow-x-auto">
+                                    <div className="flex gap-2 pb-2">
+                                        {DIAS_SEMANA.map((d, idx) => {
+                                            const isSelected = selectedDayDetail === idx;
+                                            return (
+                                                <button
+                                                    key={idx}
+                                                    onClick={() => setSelectedDayDetail(isSelected ? null : idx)}
+                                                    className={`px-4 py-2 rounded font-bold text-sm transition-all ${
+                                                        isSelected
+                                                            ? 'bg-green-500 text-white'
+                                                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                                    }`}
+                                                >
+                                                    {d}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="bg-white border border-gray-200 shadow-sm flex flex-col relative pt-4">
+                                <h3 className="text-center font-bold text-red-700 italic mb-2">{isTxs ? 'Transacciones por turno' : 'Ventas por turno'}</h3>
+                                <p className="text-center text-xs text-gray-500 mb-2">Comparando con: {getActiveCompareLabel()}</p>
+                                <div className="h-64 px-2">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <BarChart data={selectedDayDetail !== null ? getChartTurnoByDay() : chartTurno} margin={{ top: 10, right: 0, left: 0, bottom: 5 }}>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                                            <XAxis dataKey="name" tick={{ fontSize: 9, fill: '#6b7280' }} axisLine={false} tickLine={false} interval={0} />
+                                            <YAxis width={100} tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
+                                            <Tooltip cursor={{ fill: 'transparent' }} contentStyle={{ fontSize: '12px' }} formatter={(val) => isTxs ? val : `S/ ${val.toLocaleString()}`} labelFormatter={(label) => `Turno: ${label}`} />
+                                            <Bar dataKey={compareLabel} fill={colorCompare}>
+                                                {isTxs && <LabelList dataKey={compareLabel} position="top" style={{ fontSize: '10px', fill: '#6b7280' }} />}
+                                            </Bar>
+                                            <Bar dataKey="PERIODO ACTUAL" fill={colorCurrent}>
+                                                {isTxs && <LabelList dataKey="PERIODO ACTUAL" position="top" style={{ fontSize: '10px', fill: '#6b7280' }} />}
+                                            </Bar>
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </div>
+
+                            <div className="bg-white border border-gray-200 shadow-sm flex flex-col relative pt-4">
+                                <table className="w-full text-xs">
+                                    <thead className="bg-gray-50 border-b">
+                                        <tr>
+                                            <th className="p-2 text-left font-bold text-gray-600">TURNO</th>
+                                            <th className="p-2 text-right font-bold text-gray-600">VAR</th>
+                                            <th className="p-2 text-right font-bold text-gray-600">DIF {isTxs ? 'TXS' : 'S/.'}</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {(selectedDayDetail !== null ? getChartTurnoByDay() : chartTurno).map(t => {
+                                            const activeLabel = selectedDayDetail !== null ? getActiveCompareLabel() : compareLabel;
+                                            const act = t['PERIODO ACTUAL'];
+                                            const ant = t[activeLabel];
+                                            const v = calcVar(act, ant);
+                                            return (
+                                                <tr key={t.name} className="border-b hover:bg-gray-50">
+                                                    <td className="p-2 font-semibold text-gray-700">{t.name}</td>
+                                                    <td className={`p-2 text-right font-bold ${v.color}`}>{v.icon} {fmtPct(v.pct)}</td>
+                                                    <td className={`p-2 text-right font-bold ${v.color}`}>{isTxs ? v.dif : fmtNum(v.dif)}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            {selectedDayDetail !== null && (
+                                <div className="bg-white border border-gray-200 shadow-sm flex flex-col relative pt-4">
+                                    <h3 className="text-center font-bold text-purple-700 italic mb-2">
+                                        {DIAS_SEMANA[selectedDayDetail]} - {isTxs ? 'Transacciones por hora' : 'Ventas por hora'} - {selectedCanalDetail}
+                                    </h3>
+                                    <div className="h-64 px-2">
+                                        {(() => {
+                                            const businessHours = [...Array.from({ length: 18 }, (_, index) => index + 6), 0, 1, 2, 3, 4, 5];
+                                            const activeCompareData = getActiveCompareData();
+                                            const activeCompareLabel = getActiveCompareLabel();
+                                            const targetDayOfWeek = DIAS_SEMANA_GETDAY[selectedDayDetail];
+
+                                            const currDates = getDatesInRange(startDate, endDate);
+                                            const cmpDates = comparePeriod === 'month'
+                                                ? currDates.map(d => {
+                                                    const dd = new Date(d + 'T12:00:00');
+                                                    dd.setMonth(dd.getMonth() - 1);
+                                                    return `${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, '0')}-${String(dd.getDate()).padStart(2, '0')}`;
+                                                })
+                                                : comparePeriod === 'year'
+                                                    ? currDates.map(d => subtractYear(d))
+                                                    : currDates.map(d => addDays(d, -7));
+
+                                            const sumHours = (dataObj, fechas) => {
+                                                const acc = {};
+                                                for (let h = 0; h < 24; h++) acc[h] = 0;
+                                                if (!dataObj) return acc;
+                                                const src = isTxs
+                                                    ? (dataObj.canalesHorasTxsPorFecha?.[selectedCanalDetail] || {})
+                                                    : (dataObj.canalesHorasPorFecha?.[selectedCanalDetail] || {});
+                                                fechas.forEach(d => {
+                                                    const dow = new Date(d + 'T12:00:00').getDay();
+                                                    if (dow !== targetDayOfWeek) return;
+                                                    const hh = src[d] || {};
+                                                    for (let h = 0; h < 24; h++) {
+                                                        acc[h] += hh[h] || 0;
+                                                    }
+                                                });
+                                                return acc;
+                                            };
+
+                                            const horasActual = sumHours(dataCurrent, currDates);
+                                            const horasCompare = sumHours(activeCompareData, cmpDates);
+
+                                            const lineChartData = businessHours.map(h => ({
+                                                name: `${String(h).padStart(2, '0')}:00`,
+                                                [activeCompareLabel]: horasCompare[h] || 0,
+                                                'ACTUAL': horasActual[h] || 0,
+                                                diferencia: (horasActual[h] || 0) - (horasCompare[h] || 0)
+                                            }));
+
+                                            return (
+                                                <ResponsiveContainer width="100%" height="100%">
+                                                    <LineChart data={lineChartData} margin={{ top: 10, right: 20, left: 0, bottom: 5 }}>
+                                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                                                        <XAxis dataKey="name" interval={2} tick={{ fontSize: 9, fill: '#6b7280' }} axisLine={false} tickLine={false} />
+                                                        <YAxis allowDecimals={false} width={45} tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
+                                                        <Tooltip
+                                                            contentStyle={{ fontSize: '12px' }}
+                                                            formatter={(value, name) => {
+                                                                if (name === 'diferencia') return [`${isTxs ? value : fmtNum(value)}`, 'Diferencia'];
+                                                                return [`${isTxs ? value : fmtNum(value)}`, name];
+                                                            }}
+                                                        />
+                                                        <Legend wrapperStyle={{ fontSize: '11px' }} />
+                                                        <Line type="monotone" dataKey={activeCompareLabel} stroke="#a78bfa" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />
+                                                        <Line type="monotone" dataKey="ACTUAL" stroke="#f97316" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />
+                                                        <Line type="monotone" dataKey="diferencia" stroke="#8b5cf6" strokeWidth={2} strokeDasharray="5 5" dot={false} activeDot={{ r: 5 }} />
+                                                    </LineChart>
+                                                </ResponsiveContainer>
+                                            );
+                                        })()}
+                                    </div>
+                                    <p className="text-center text-xs text-gray-500 mt-2 pb-2">
+                                        Línea punteada = Diferencia (Actual - {getActiveCompareLabel().toUpperCase()})
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+                    ) : (
                     <div className="flex-1 grid grid-cols-1 xl:grid-cols-2 gap-6">
                         {isTxs && showHourlyChart && <div className="bg-white border border-gray-200 shadow-sm flex flex-col relative pt-4 xl:col-span-2">
                             <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mb-1 px-4">
@@ -1089,13 +1661,21 @@ export default function SalesAnalysis() {
                         </div>}
 
                         <div className="bg-white border border-gray-200 shadow-sm flex flex-col relative pt-4">
-                            <h3 className="text-center font-bold text-red-700 italic mb-2">{isTxs ? 'Transacciones por canal' : 'Ventas por canal'}</h3>
+                            <div className="flex items-center justify-center gap-3 mb-2">
+                                <h3 className="text-center font-bold text-red-700 italic">{selectedCanalDetail ? `${selectedCanalDetail} - ${isTxs ? 'Transacciones' : 'Ventas'}` : (isTxs ? 'Transacciones por canal' : 'Ventas por canal')}</h3>
+                                {selectedCanalDetail && (
+                                    <span className="bg-blue-100 text-blue-700 px-3 py-1 rounded text-xs font-bold">
+                                        Filtrado
+                                    </span>
+                                )}
+                            </div>
                             <div className="h-64 px-2">
                                 <ResponsiveContainer width="100%" height="100%">
-                                    <BarChart data={chartCanal} margin={{ top: 10, right: 0, left: 0, bottom: 0 }}>
+                                    <BarChart data={selectedCanalDetail ? [chartCanal.find(c => c.name === selectedCanalDetail)] : chartCanal} margin={{ top: 10, right: 0, left: 0, bottom: 5 }}>
                                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                                        <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#6b7280' }} axisLine={false} tickLine={false} interval={0} />
                                         <YAxis width={100} tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
-                                        <Tooltip cursor={{ fill: 'transparent' }} contentStyle={{ fontSize: '12px' }} formatter={(val) => isTxs ? val : `S/ ${val.toLocaleString()}`} />
+                                        <Tooltip cursor={{ fill: 'transparent' }} contentStyle={{ fontSize: '12px' }} formatter={(val) => isTxs ? val : `S/ ${val.toLocaleString()}`} labelFormatter={(label) => `Canal: ${label}`} />
                                         <Bar dataKey={compareLabel} fill={colorCompare}>
                                             {isTxs && <LabelList dataKey={compareLabel} position="top" style={{ fontSize: '10px', fill: '#6b7280' }} />}
                                         </Bar>
@@ -1110,7 +1690,7 @@ export default function SalesAnalysis() {
                                     <thead>
                                         <tr className="border-b text-gray-500">
                                             <th className="p-1 border-r border-gray-100 bg-white" style={{ width: '100px' }}></th>
-                                            {allCanales.map(c => <th key={c} className="p-1 font-bold border-r border-gray-100 uppercase truncate" title={c}>{c}</th>)}
+                                            {(selectedCanalDetail ? [selectedCanalDetail] : allCanales).map(c => <th key={c} className="p-1 font-bold border-r border-gray-100 uppercase truncate" title={c}>{c}</th>)}
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -1118,7 +1698,7 @@ export default function SalesAnalysis() {
                                             <td className="p-1 text-left font-bold border-r border-gray-100 pl-2 text-gray-500 flex items-center gap-1">
                                                 <span className="w-2 h-2 inline-block" style={{ backgroundColor: colorCompare }}></span> {compareLabel}
                                             </td>
-                                            {allCanales.map(c => {
+                                            {(selectedCanalDetail ? [selectedCanalDetail] : allCanales).map(c => {
                                                 const val = isTxs ? (compareData.canalesTxs[c] || 0) : (compareData.canales[c] || 0);
                                                 return <td key={c} className="p-1 border-r border-gray-100">{isTxs ? val : fmtNum(val)}</td>
                                             })}
@@ -1127,7 +1707,7 @@ export default function SalesAnalysis() {
                                             <td className="p-1 text-left font-bold border-r border-gray-100 pl-2 text-gray-500 flex items-center gap-1">
                                                 <span className="w-2 h-2 inline-block" style={{ backgroundColor: colorCurrent }}></span> ACTUAL
                                             </td>
-                                            {allCanales.map(c => {
+                                            {(selectedCanalDetail ? [selectedCanalDetail] : allCanales).map(c => {
                                                 const val = isTxs ? (dataCurrent.canalesTxs[c] || 0) : (dataCurrent.canales[c] || 0);
                                                 return <td key={c} className="p-1 border-r border-gray-100">{isTxs ? val : fmtNum(val)}</td>
                                             })}
@@ -1141,10 +1721,11 @@ export default function SalesAnalysis() {
                             <h3 className="text-center font-bold text-red-700 italic mb-2">{isTxs ? 'Transacciones por turno' : 'Ventas por turno'}</h3>
                             <div className="h-64 px-2">
                                 <ResponsiveContainer width="100%" height="100%">
-                                    <BarChart data={chartTurno} margin={{ top: 10, right: 0, left: 0, bottom: 0 }}>
+                                    <BarChart data={chartTurno} margin={{ top: 10, right: 0, left: 0, bottom: 5 }}>
                                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                                        <XAxis dataKey="name" tick={{ fontSize: 9, fill: '#6b7280' }} axisLine={false} tickLine={false} interval={0} />
                                         <YAxis width={100} tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
-                                        <Tooltip cursor={{ fill: 'transparent' }} contentStyle={{ fontSize: '12px' }} formatter={(val) => isTxs ? val : `S/ ${val.toLocaleString()}`} />
+                                        <Tooltip cursor={{ fill: 'transparent' }} contentStyle={{ fontSize: '12px' }} formatter={(val) => isTxs ? val : `S/ ${val.toLocaleString()}`} labelFormatter={(label) => `Turno: ${label}`} />
                                         <Bar dataKey={compareLabel} fill={colorCompare}>
                                             {isTxs && <LabelList dataKey={compareLabel} position="top" style={{ fontSize: '10px', fill: '#6b7280' }} />}
                                         </Bar>
@@ -1167,18 +1748,16 @@ export default function SalesAnalysis() {
                                             <td className="p-1 text-left font-bold border-r border-gray-100 pl-2 text-gray-500 flex items-center gap-1">
                                                 <span className="w-2 h-2 inline-block shrink-0" style={{ backgroundColor: colorCompare }}></span> {compareLabel.split(' ')[1] || 'ANT'}
                                             </td>
-                                            {TURNOS.map(t => {
-                                                const val = isTxs ? (compareData.turnosTxs[t.key] || 0) : (compareData.turnos[t.key] || 0);
-                                                return <td key={t.key} className="p-1 border-r border-gray-100">{isTxs ? val : fmtNum(val)}</td>
+                                            {chartTurno.map(t => {
+                                                return <td key={t.name} className="p-1 border-r border-gray-100">{isTxs ? t[compareLabel] : fmtNum(t[compareLabel])}</td>
                                             })}
                                         </tr>
                                         <tr className="bg-white">
                                             <td className="p-1 text-left font-bold border-r border-gray-100 pl-2 text-gray-500 flex items-center gap-1">
                                                 <span className="w-2 h-2 inline-block shrink-0" style={{ backgroundColor: colorCurrent }}></span> ACT
                                             </td>
-                                            {TURNOS.map(t => {
-                                                const val = isTxs ? (dataCurrent.turnosTxs[t.key] || 0) : (dataCurrent.turnos[t.key] || 0);
-                                                return <td key={t.key} className="p-1 border-r border-gray-100">{isTxs ? val : fmtNum(val)}</td>
+                                            {chartTurno.map(t => {
+                                                return <td key={t.name} className="p-1 border-r border-gray-100">{isTxs ? t["PERIODO ACTUAL"] : fmtNum(t["PERIODO ACTUAL"])}</td>
                                             })}
                                         </tr>
                                     </tbody>
@@ -1187,13 +1766,21 @@ export default function SalesAnalysis() {
                         </div>
 
                         <div className="bg-white border border-gray-200 shadow-sm flex flex-col relative pt-4 xl:col-span-2 mt-4">
-                            <h3 className="text-center font-bold text-red-700 italic mb-2">{isTxs ? 'Transacciones por día' : 'Ventas por día'}</h3>
+                            <div className="flex items-center justify-center gap-3 mb-2">
+                                <h3 className="text-center font-bold text-red-700 italic">{isTxs ? 'Transacciones por día' : 'Ventas por día'}</h3>
+                                {selectedCanalDetail && selectedDayDetail && (
+                                    <span className="bg-green-100 text-green-700 px-3 py-1 rounded text-xs font-bold">
+                                        {DIAS_SEMANA[selectedDayDetail]} seleccionado
+                                    </span>
+                                )}
+                            </div>
                             <div className="h-64 px-2">
                                 <ResponsiveContainer width="100%" height="100%">
-                                    <BarChart data={chartDia} margin={{ top: 10, right: 0, left: 0, bottom: 0 }}>
+                                    <BarChart data={chartDia} margin={{ top: 10, right: 0, left: 0, bottom: 5 }}>
                                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                                        <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#6b7280' }} axisLine={false} tickLine={false} interval={0} />
                                         <YAxis width={100} tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
-                                        <Tooltip cursor={{ fill: 'transparent' }} contentStyle={{ fontSize: '12px' }} formatter={(val) => isTxs ? val : `S/ ${val.toLocaleString()}`} />
+                                        <Tooltip cursor={{ fill: 'transparent' }} contentStyle={{ fontSize: '12px' }} formatter={(val) => isTxs ? val : `S/ ${val.toLocaleString()}`} labelFormatter={(label) => `Día: ${label}`} />
                                         <Bar dataKey={compareLabel} fill={colorCompare}>
                                             {isTxs && <LabelList dataKey={compareLabel} position="top" style={{ fontSize: '10px', fill: '#6b7280' }} />}
                                         </Bar>
@@ -1217,8 +1804,14 @@ export default function SalesAnalysis() {
                                                 <span className="w-2 h-2 inline-block shrink-0" style={{ backgroundColor: colorCompare }}></span> {compareLabel}
                                             </td>
                                             {chartDia.map(d => {
-                                                const val = isTxs ? (compareData.diasTxs[d._realIdx] || 0) : (compareData.dias[d._realIdx] || 0);
-                                                return <td key={d.name} className="p-1 border-r border-gray-100">{isTxs ? val : fmtNum(val)}</td>
+                                                let val;
+                                                if (selectedCanalDetail) {
+                                                    val = isTxs ? (compareData.canalesDiasTxs[selectedCanalDetail]?.[d._realIdx] || 0) : (compareData.canalesDias[selectedCanalDetail]?.[d._realIdx] || 0);
+                                                } else {
+                                                    val = isTxs ? (compareData.diasTxs[d._realIdx] || 0) : (compareData.dias[d._realIdx] || 0);
+                                                }
+                                                const isSelected = selectedCanalDetail && selectedDayDetail === d._realIdx;
+                                                return <td key={d.name} className={`p-1 border-r border-gray-100 ${isSelected ? 'bg-green-100' : ''} ${selectedCanalDetail ? 'cursor-pointer hover:bg-green-50' : ''}`} onClick={() => selectedCanalDetail && setSelectedDayDetail(isSelected ? null : d._realIdx)}>{isTxs ? val : fmtNum(val)}</td>
                                             })}
                                         </tr>
                                         <tr className="border-b bg-white">
@@ -1226,33 +1819,244 @@ export default function SalesAnalysis() {
                                                 <span className="w-2 h-2 inline-block shrink-0" style={{ backgroundColor: colorCurrent }}></span> ACTUAL
                                             </td>
                                             {chartDia.map(d => {
-                                                const val = isTxs ? (dataCurrent.diasTxs[d._realIdx] || 0) : (dataCurrent.dias[d._realIdx] || 0);
-                                                return <td key={d.name} className="p-1 border-r border-gray-100">{isTxs ? val : fmtNum(val)}</td>
+                                                let val;
+                                                if (selectedCanalDetail) {
+                                                    val = isTxs ? (dataCurrent.canalesDiasTxs[selectedCanalDetail]?.[d._realIdx] || 0) : (dataCurrent.canalesDias[selectedCanalDetail]?.[d._realIdx] || 0);
+                                                } else {
+                                                    val = isTxs ? (dataCurrent.diasTxs[d._realIdx] || 0) : (dataCurrent.dias[d._realIdx] || 0);
+                                                }
+                                                const isSelected = selectedCanalDetail && selectedDayDetail === d._realIdx;
+                                                return <td key={d.name} className={`p-1 border-r border-gray-100 ${isSelected ? 'bg-green-100' : ''} ${selectedCanalDetail ? 'cursor-pointer hover:bg-green-50' : ''}`} onClick={() => selectedCanalDetail && setSelectedDayDetail(isSelected ? null : d._realIdx)}>{isTxs ? val : fmtNum(val)}</td>
                                             })}
                                         </tr>
                                         <tr className="border-b bg-gray-50">
                                             <td className="p-1 text-left font-bold border-r border-gray-100 pl-2 text-gray-600 italic">VAR</td>
                                             {chartDia.map(d => {
-                                                const act = isTxs ? (dataCurrent.diasTxs[d._realIdx] || 0) : (dataCurrent.dias[d._realIdx] || 0);
-                                                const ant = isTxs ? (compareData.diasTxs[d._realIdx] || 0) : (compareData.dias[d._realIdx] || 0);
+                                                let act, ant;
+                                                if (selectedCanalDetail) {
+                                                    act = isTxs ? (dataCurrent.canalesDiasTxs[selectedCanalDetail]?.[d._realIdx] || 0) : (dataCurrent.canalesDias[selectedCanalDetail]?.[d._realIdx] || 0);
+                                                    ant = isTxs ? (compareData.canalesDiasTxs[selectedCanalDetail]?.[d._realIdx] || 0) : (compareData.canalesDias[selectedCanalDetail]?.[d._realIdx] || 0);
+                                                } else {
+                                                    act = isTxs ? (dataCurrent.diasTxs[d._realIdx] || 0) : (dataCurrent.dias[d._realIdx] || 0);
+                                                    ant = isTxs ? (compareData.diasTxs[d._realIdx] || 0) : (compareData.dias[d._realIdx] || 0);
+                                                }
                                                 const v = calcVar(act, ant);
-                                                return <td key={d.name} className={`p-1 font-bold border-r border-gray-100 ${v.color}`}>{v.icon} {fmtPct(v.pct)}</td>
+                                                const isSelected = selectedCanalDetail && selectedDayDetail === d._realIdx;
+                                                return <td key={d.name} className={`p-1 font-bold border-r border-gray-100 ${v.color} ${isSelected ? 'bg-green-100' : ''} ${selectedCanalDetail ? 'cursor-pointer hover:bg-green-50' : ''}`} onClick={() => selectedCanalDetail && setSelectedDayDetail(isSelected ? null : d._realIdx)}>{v.icon} {fmtPct(v.pct)}</td>
                                             })}
                                         </tr>
                                         <tr className="bg-gray-50">
                                             <td className="p-1 text-left font-bold border-r border-gray-100 pl-2 text-gray-600 italic">DIF {isTxs ? 'TXS' : 'S/.'}</td>
                                             {chartDia.map(d => {
-                                                const act = isTxs ? (dataCurrent.diasTxs[d._realIdx] || 0) : (dataCurrent.dias[d._realIdx] || 0);
-                                                const ant = isTxs ? (compareData.diasTxs[d._realIdx] || 0) : (compareData.dias[d._realIdx] || 0);
+                                                let act, ant;
+                                                if (selectedCanalDetail) {
+                                                    act = isTxs ? (dataCurrent.canalesDiasTxs[selectedCanalDetail]?.[d._realIdx] || 0) : (dataCurrent.canalesDias[selectedCanalDetail]?.[d._realIdx] || 0);
+                                                    ant = isTxs ? (compareData.canalesDiasTxs[selectedCanalDetail]?.[d._realIdx] || 0) : (compareData.canalesDias[selectedCanalDetail]?.[d._realIdx] || 0);
+                                                } else {
+                                                    act = isTxs ? (dataCurrent.diasTxs[d._realIdx] || 0) : (dataCurrent.dias[d._realIdx] || 0);
+                                                    ant = isTxs ? (compareData.diasTxs[d._realIdx] || 0) : (compareData.dias[d._realIdx] || 0);
+                                                }
                                                 const v = calcVar(act, ant);
-                                                return <td key={d.name} className={`p-1 font-bold border-r border-gray-100 ${v.color}`}>{isTxs ? v.dif : fmtNum(v.dif)}</td>
+                                                const isSelected = selectedCanalDetail && selectedDayDetail === d._realIdx;
+                                                return <td key={d.name} className={`p-1 font-bold border-r border-gray-100 ${v.color} ${isSelected ? 'bg-green-100' : ''} ${selectedCanalDetail ? 'cursor-pointer hover:bg-green-50' : ''}`} onClick={() => selectedCanalDetail && setSelectedDayDetail(isSelected ? null : d._realIdx)}>{isTxs ? v.dif : fmtNum(v.dif)}</td>
                                             })}
                                         </tr>
                                     </tbody>
                                 </table>
                             </div>
                         </div>
+
+                        {!selectedCanalDetail && (
+                            <div className="bg-white border border-gray-200 shadow-sm rounded p-4 mt-4 xl:col-span-2">
+                                <h3 className="text-center font-bold text-gray-800 mb-3 uppercase">Detalle por Día</h3>
+                                <div className="overflow-x-auto mb-4">
+                                    <div className="flex gap-2 pb-2">
+                                        {DIAS_SEMANA.map((d, idx) => {
+                                            const isSelected = selectedDayDetail === idx;
+                                            return (
+                                                <button
+                                                    key={idx}
+                                                    onClick={() => setSelectedDayDetail(isSelected ? null : idx)}
+                                                    className={`px-4 py-2 rounded font-bold text-sm transition-all whitespace-nowrap ${
+                                                        isSelected
+                                                            ? 'bg-blue-500 text-white'
+                                                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                                    }`}
+                                                >
+                                                    {d}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+
+                                {selectedDayDetail !== null && getDayDetails() && (() => {
+                                    const details = getDayDetails();
+                                    return (
+                                        <div className="space-y-4">
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                                <div className="bg-blue-50 border border-blue-200 rounded p-3">
+                                                    <p className="text-xs font-bold text-blue-600 uppercase mb-1">Promedio Actual ({details.currentDayData.length} {details.dayName})</p>
+                                                    <p className="text-2xl font-black text-blue-700">{isTxs ? details.currentAvg.toFixed(0) : fmtMoney(details.currentAvg)}</p>
+                                                </div>
+                                                <div className="bg-gray-50 border border-gray-200 rounded p-3">
+                                                    <p className="text-xs font-bold text-gray-600 uppercase mb-1">Promedio {compareLabel.toUpperCase()} ({details.compareDayData.length} {details.dayName})</p>
+                                                    <p className="text-2xl font-black text-gray-700">{isTxs ? details.compareAvg.toFixed(0) : fmtMoney(details.compareAvg)}</p>
+                                                </div>
+                                                <div className={`${details.diff >= 0 ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'} border rounded p-3`}>
+                                                    <p className="text-xs font-bold uppercase mb-1" style={{color: details.diff >= 0 ? '#059669' : '#dc2626'}}>Variación</p>
+                                                    <p className="text-2xl font-black" style={{color: details.diff >= 0 ? '#059669' : '#dc2626'}}>
+                                                        {isTxs ? details.diff.toFixed(0) : fmtNum(details.diff)}
+                                                    </p>
+                                                    <p className="text-sm font-bold" style={{color: details.diff >= 0 ? '#059669' : '#dc2626'}}>
+                                                        {details.diff >= 0 ? '▲' : '▼'} {Math.abs(details.pct).toFixed(1)}%
+                                                    </p>
+                                                </div>
+                                            </div>
+
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                <div className="overflow-x-auto">
+                                                    <h4 className="text-xs font-bold text-gray-700 uppercase mb-2">Fechas ({details.dayName})</h4>
+                                                    <table className="w-full text-xs">
+                                                        <thead className="bg-gray-50 border-b">
+                                                            <tr>
+                                                                <th className="p-2 text-left font-bold text-gray-600">Fecha</th>
+                                                                <th className="p-2 text-right font-bold text-gray-600">Valor</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {details.currentDayData.map(d => (
+                                                                <tr key={d.fecha} className="border-b hover:bg-gray-50">
+                                                                    <td className="p-2 font-semibold text-gray-700">{d.fecha}</td>
+                                                                    <td className="p-2 text-right font-bold text-blue-600">
+                                                                        {isTxs ? d.valor.toFixed(0) : fmtNum(d.valor)}
+                                                                    </td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+
+                                                <div className="overflow-x-auto">
+                                                    <h4 className="text-xs font-bold text-gray-700 uppercase mb-2">Diferencias por Canal ({details.dayName})</h4>
+                                                    <table className="w-full text-xs">
+                                                        <thead className="bg-gray-50 border-b">
+                                                            <tr>
+                                                                <th className="p-2 text-left font-bold text-gray-600">Canal</th>
+                                                                <th className="p-2 text-right font-bold text-gray-600">Actual</th>
+                                                                <th className="p-2 text-right font-bold text-gray-600">{compareLabel}</th>
+                                                                <th className="p-2 text-right font-bold text-gray-600">Dif</th>
+                                                                <th className="p-2 text-right font-bold text-gray-600">Var</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {details.canalesBreakdown.map(c => {
+                                                                const isPos = c.diff >= 0;
+                                                                const colorClass = isPos ? 'text-green-600' : 'text-red-600';
+                                                                return (
+                                                                    <tr key={c.canal} className="border-b hover:bg-gray-50">
+                                                                        <td className="p-2 font-semibold text-gray-700">{c.canal}</td>
+                                                                        <td className="p-2 text-right font-bold text-blue-600">
+                                                                            {isTxs ? c.currentVal.toFixed(0) : fmtNum(c.currentVal)}
+                                                                        </td>
+                                                                        <td className="p-2 text-right font-semibold text-gray-500">
+                                                                            {isTxs ? c.compareVal.toFixed(0) : fmtNum(c.compareVal)}
+                                                                        </td>
+                                                                        <td className={`p-2 text-right font-bold ${colorClass}`}>
+                                                                            {isTxs ? c.diff.toFixed(0) : fmtNum(c.diff)}
+                                                                        </td>
+                                                                        <td className={`p-2 text-right font-bold ${colorClass}`}>
+                                                                            {c.compareVal > 0 ? `${isPos ? '▲' : '▼'} ${Math.abs(c.pct).toFixed(1)}%` : '-'}
+                                                                        </td>
+                                                                    </tr>
+                                                                );
+                                                            })}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+
+                                            <div className="overflow-x-auto">
+                                                <h4 className="text-xs font-bold text-gray-700 uppercase mb-2">Detalle por fecha y canal ({details.dayName})</h4>
+                                                <table className="w-full text-xs">
+                                                    <thead className="bg-gray-50 border-b">
+                                                        <tr>
+                                                            <th className="p-2 text-left font-bold text-gray-600">Fecha</th>
+                                                            {allCanales.map(c => (
+                                                                <th key={c} className="p-2 text-right font-bold text-gray-600">{c}</th>
+                                                            ))}
+                                                            <th className="p-2 text-right font-bold text-gray-800 bg-gray-100">TOTAL</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {details.fechaCanalBreakdown.map(row => (
+                                                            <tr key={row.fecha} className="border-b hover:bg-gray-50">
+                                                                <td className="p-2 font-semibold text-gray-700">{row.fecha}</td>
+                                                                {allCanales.map(c => (
+                                                                    <td key={c} className="p-2 text-right font-semibold text-gray-700">
+                                                                        {isTxs ? (row.canales[c] || 0).toFixed(0) : fmtNum(row.canales[c] || 0)}
+                                                                    </td>
+                                                                ))}
+                                                                <td className="p-2 text-right font-bold text-blue-600 bg-blue-50">
+                                                                    {isTxs ? row.total.toFixed(0) : fmtNum(row.total)}
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                    <tfoot>
+                                                        <tr className="bg-blue-50 border-t-2 border-blue-200">
+                                                            <td className="p-2 font-black text-blue-800 uppercase">Total actual</td>
+                                                            {allCanales.map(c => (
+                                                                <td key={c} className="p-2 text-right font-black text-blue-700">
+                                                                    {isTxs ? (details.canalTotalsActual[c] || 0).toFixed(0) : fmtNum(details.canalTotalsActual[c] || 0)}
+                                                                </td>
+                                                            ))}
+                                                            <td className="p-2 text-right font-black text-blue-800 bg-blue-100">
+                                                                {isTxs ? Object.values(details.canalTotalsActual).reduce((a, b) => a + b, 0).toFixed(0) : fmtNum(Object.values(details.canalTotalsActual).reduce((a, b) => a + b, 0))}
+                                                            </td>
+                                                        </tr>
+                                                        <tr className="bg-gray-100">
+                                                            <td className="p-2 font-black text-gray-700 uppercase">Total {compareLabel.toLowerCase()}</td>
+                                                            {allCanales.map(c => (
+                                                                <td key={c} className="p-2 text-right font-black text-gray-600">
+                                                                    {isTxs ? (details.canalTotalsCompare[c] || 0).toFixed(0) : fmtNum(details.canalTotalsCompare[c] || 0)}
+                                                                </td>
+                                                            ))}
+                                                            <td className="p-2 text-right font-black text-gray-800 bg-gray-200">
+                                                                {isTxs ? Object.values(details.canalTotalsCompare).reduce((a, b) => a + b, 0).toFixed(0) : fmtNum(Object.values(details.canalTotalsCompare).reduce((a, b) => a + b, 0))}
+                                                            </td>
+                                                        </tr>
+                                                        <tr className="bg-white border-t">
+                                                            <td className="p-2 font-black text-gray-700 uppercase">Variación</td>
+                                                            {allCanales.map(c => {
+                                                                const act = details.canalTotalsActual[c] || 0;
+                                                                const ant = details.canalTotalsCompare[c] || 0;
+                                                                const v = calcVar(act, ant);
+                                                                return (
+                                                                    <td key={c} className={`p-2 text-right font-bold ${v.color}`}>
+                                                                        {v.icon} {fmtPct(v.pct)}
+                                                                    </td>
+                                                                );
+                                                            })}
+                                                            <td className="p-2 text-right font-bold bg-gray-50">
+                                                                {(() => {
+                                                                    const act = Object.values(details.canalTotalsActual).reduce((a, b) => a + b, 0);
+                                                                    const ant = Object.values(details.canalTotalsCompare).reduce((a, b) => a + b, 0);
+                                                                    const v = calcVar(act, ant);
+                                                                    return <span className={v.color}>{v.icon} {fmtPct(v.pct)}</span>;
+                                                                })()}
+                                                            </td>
+                                                        </tr>
+                                                    </tfoot>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
+                            </div>
+                        )}
                     </div>
+                    )}
                 </div>
             </div>
         );
@@ -1295,67 +2099,158 @@ export default function SalesAnalysis() {
             </div>
 
             <div className="max-w-7xl mx-auto px-4 sm:px-6 mt-6">
-                <div className="bg-white p-4 border border-gray-200 shadow-sm rounded flex flex-wrap items-end gap-6 mb-8">
-                    <div className="flex items-center gap-2 pr-6 border-r border-gray-200">
-                        <div className="flex flex-col">
-                            <label className="block text-[10px] font-black text-blue-500 uppercase mb-1">Análisis por Semana</label>
-                            <div className="flex gap-2">
-                                <select value={selectedYear} onChange={(e) => handleWeekChange(parseInt(e.target.value), selectedWeek)} className="bg-blue-50 border border-blue-200 rounded px-2 py-2 text-sm font-bold text-blue-800 outline-none">
-                                    {[2024, 2025, 2026].map(y => <option key={y} value={y}>{y}</option>)}
-                                </select>
-                                <select value={selectedWeek} onChange={(e) => handleWeekChange(selectedYear, parseInt(e.target.value))} className="bg-blue-50 border border-blue-200 rounded px-2 py-2 text-sm font-bold text-blue-800 outline-none">
-                                    {Array.from({ length: 53 }, (_, i) => i + 1).map(w => <option key={w} value={w}>Semana {w}</option>)}
-                                </select>
-                            </div>
-                        </div>
+                {(availableRange.min || lastUploadInfo) && (
+                    <div className="flex flex-wrap items-center gap-3 mb-3 text-[11px]">
+                        {availableRange.min && (
+                            <span className="inline-flex items-center gap-2 bg-gray-800 text-white px-3 py-1.5 rounded font-bold">
+                                <Database className="w-3.5 h-3.5" /> Histórico disponible: {availableRange.min} → {availableRange.max}
+                            </span>
+                        )}
+                        {lastUploadInfo && (
+                            <span className="inline-flex items-center gap-2 bg-green-100 text-green-800 border border-green-200 px-3 py-1.5 rounded font-bold">
+                                Último archivo: {lastUploadInfo.min} → {lastUploadInfo.max} · {lastUploadInfo.dias} días · {lastUploadInfo.txs} tx
+                            </span>
+                        )}
                     </div>
+                )}
+
+                <div className="bg-white p-4 border border-gray-200 shadow-sm rounded flex flex-wrap items-end gap-6 mb-4">
                     <div className="flex items-center gap-6">
                         <div>
                             <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Fecha Inicio</label>
-                            <input type="date" value={startDate} onChange={(e) => { setStartDate(e.target.value); setDateError(''); }} className="bg-gray-50 border border-gray-300 rounded px-3 py-2 text-sm font-bold text-gray-800 outline-none focus:border-orange-500" />
+                            <input type="date" value={startDate} min={availableRange.min || undefined} max={availableRange.max || undefined} onChange={(e) => { setStartDate(e.target.value); setDateError(''); setActiveQuickFilter(null); }} className="bg-gray-50 border border-gray-300 rounded px-3 py-2 text-sm font-bold text-gray-800 outline-none focus:border-orange-500" />
                         </div>
                         <div className="relative">
                             <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Fecha Fin</label>
-                            <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className={`bg-gray-50 border ${dateError ? 'border-red-500' : 'border-gray-300'} rounded px-3 py-2 text-sm font-bold text-gray-800 outline-none focus:border-orange-500`} />
+                            <input type="date" value={endDate} min={availableRange.min || undefined} max={availableRange.max || undefined} onChange={(e) => { setEndDate(e.target.value); setActiveQuickFilter(null); }} className={`bg-gray-50 border ${dateError ? 'border-red-500' : 'border-gray-300'} rounded px-3 py-2 text-sm font-bold text-gray-800 outline-none focus:border-orange-500`} />
                             {dateError && <p className="absolute top-full left-0 text-[10px] text-red-500 font-bold mt-1 whitespace-nowrap">{dateError}</p>}
                         </div>
                         <button onClick={loadAnalysisData} disabled={loading} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded text-sm font-bold shadow-md shadow-blue-100 transition-all flex items-center gap-2 disabled:bg-gray-400 disabled:shadow-none"><Search className="w-4 h-4" /> {loading ? 'Cargando...' : 'Consultar'}</button>
                     </div>
-                    <div className="ml-auto flex bg-gray-100 p-1 rounded-md">
-                        <button onClick={() => setViewMode('VTA')} className={`px-4 py-2 rounded text-sm font-bold transition-all ${viewMode === 'VTA' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Ventas (S/.)</button>
-                        <button onClick={() => setViewMode('TXS')} className={`px-4 py-2 rounded text-sm font-bold transition-all ${viewMode === 'TXS' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Transacciones</button>
+                    <div className="ml-auto flex flex-col gap-3 items-end">
+                        <div className="flex bg-gray-100 p-1 rounded-md">
+                            <button onClick={() => setViewMode('VTA')} className={`px-4 py-2 rounded text-sm font-bold transition-all ${viewMode === 'VTA' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Ventas (S/.)</button>
+                            <button onClick={() => setViewMode('TXS')} className={`px-4 py-2 rounded text-sm font-bold transition-all ${viewMode === 'TXS' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Transacciones</button>
+                        </div>
                     </div>
                 </div>
 
-                {dataCurrent && !loading && (
-                    <div className="bg-white p-6 border border-gray-200 shadow-sm rounded flex flex-col md:flex-row justify-between items-center gap-6 mb-8">
-                        <div className="flex flex-col">
-                            <span className="text-gray-500 text-xs font-bold uppercase tracking-wider mb-1">Meta Acumulada</span>
-                            <span className="text-2xl font-black text-gray-800">{fmtMoney(currentGoal)}</span>
-                        </div>
-                        <div className="flex flex-col">
-                            <span className="text-gray-500 text-xs font-bold uppercase tracking-wider mb-1">Venta Real Acumulada</span>
-                            <span className="text-2xl font-black text-orange-600">{fmtMoney(dataCurrent?.total || 0)}</span>
-                        </div>
-                        <div className="flex flex-col border-l border-gray-200 pl-6">
-                            <span className="text-gray-500 text-xs font-bold uppercase tracking-wider mb-1">Diferencia (Venta vs Meta)</span>
-                            <div className="flex items-center gap-3">
-                                {(() => {
-                                    const dif = (dataCurrent?.total || 0) - currentGoal;
-                                    const pct = currentGoal > 0 ? (dif / currentGoal) * 100 : 0;
-                                    const isPos = dif >= 0;
-                                    const colorClass = isPos ? 'text-green-600' : 'text-red-600';
-                                    return (
-                                        <>
-                                            <span className={`text-2xl font-black ${colorClass}`}>{isPos ? '+' : ''}{fmtMoney(dif)}</span>
-                                            <span className={`text-lg font-bold px-2 py-1 rounded bg-gray-50 ${colorClass}`}>{isPos ? '▲' : '▼'} {Math.abs(pct).toFixed(1)}%</span>
-                                        </>
-                                    );
-                                })()}
+                <div className="bg-white p-3 border border-gray-200 shadow-sm rounded mb-3 flex flex-wrap gap-2 items-center">
+                    <span className="text-[10px] font-black text-gray-500 uppercase mr-1">Filtros rápidos:</span>
+                    {[
+                        { k: 'today', label: 'Hoy' },
+                        { k: 'yesterday', label: 'Ayer' },
+                        { k: 'week', label: 'Esta semana' },
+                        { k: 'prevWeek', label: 'Semana pasada' },
+                        { k: 'month', label: 'Este mes' },
+                        { k: 'prevMonth', label: 'Mes pasado' },
+                        { k: 'year', label: 'Este año' },
+                        { k: 'all', label: 'Todo el histórico', disabled: !availableRange.min }
+                    ].map(btn => {
+                        const isActive = activeQuickFilter === btn.k;
+                        return (
+                            <button
+                                key={btn.k}
+                                disabled={btn.disabled}
+                                onClick={() => applyQuickFilter(btn.k)}
+                                className={`px-3 py-1.5 rounded text-xs font-bold transition-all ${
+                                    btn.disabled ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                    : isActive ? 'bg-orange-500 text-white shadow'
+                                    : 'bg-gray-100 text-gray-700 hover:bg-orange-100 hover:text-orange-700'
+                                }`}
+                            >
+                                {btn.label}
+                            </button>
+                        );
+                    })}
+                </div>
+
+                <div className="bg-white p-3 border border-gray-200 shadow-sm rounded mb-8 flex flex-wrap gap-2 items-center">
+                    <span className="text-[10px] font-black text-gray-500 uppercase mr-1">Filtro de comparación:</span>
+                    {[
+                        { k: 'week', label: 'Semana Anterior' },
+                        { k: 'month', label: 'Mes Anterior' },
+                        { k: 'year', label: 'Año Anterior' }
+                    ].map(opt => {
+                        const isActive = comparePeriod === opt.k;
+                        return (
+                            <button
+                                key={opt.k}
+                                onClick={() => setComparePeriod(opt.k)}
+                                className={`px-3 py-1.5 rounded text-xs font-bold transition-all ${
+                                    isActive ? 'bg-blue-600 text-white shadow'
+                                    : 'bg-gray-100 text-gray-700 hover:bg-blue-100 hover:text-blue-700'
+                                }`}
+                            >
+                                {opt.label}
+                            </button>
+                        );
+                    })}
+                </div>
+
+                {dataCurrent && !loading && (() => {
+                    const ventaReal = dataCurrent?.total || 0;
+                    const dif = ventaReal - currentGoal;
+                    const pctAvance = currentGoal > 0 ? (ventaReal / currentGoal) * 100 : 0;
+                    const pctDif = currentGoal > 0 ? (dif / currentGoal) * 100 : 0;
+                    const isPos = dif >= 0;
+                    const colorClass = isPos ? 'text-green-600' : 'text-red-600';
+                    const rangeDates = getDatesInRange(startDate, endDate);
+                    const diasRango = rangeDates.length;
+                    const hoyStr = todayStr();
+                    const diasCon = rangeDates.filter(d => (dataCurrent.ventasPorFecha?.[d] || 0) > 0 && d <= hoyStr).length;
+                    const promedioDia = diasCon > 0 ? ventaReal / diasCon : 0;
+                    const proyeccion = promedioDia * diasRango;
+                    const proyDif = proyeccion - currentGoal;
+                    const proyPct = currentGoal > 0 ? (proyDif / currentGoal) * 100 : 0;
+                    return (
+                        <div className="bg-white p-6 border border-gray-200 shadow-sm rounded mb-8">
+                            <div className="flex items-center justify-between mb-4">
+                                <div>
+                                    <h3 className="text-sm font-black text-gray-800 uppercase tracking-tight">Meta vs Venta — {startDate} → {endDate}</h3>
+                                    <p className="text-[11px] text-gray-500">{diasCon} de {diasRango} días con ventas registradas</p>
+                                </div>
+                                <div className="text-right">
+                                    <div className="text-[10px] font-bold text-gray-500 uppercase">Avance de Meta</div>
+                                    <div className={`text-2xl font-black ${pctAvance >= 100 ? 'text-green-600' : pctAvance >= 80 ? 'text-orange-500' : 'text-red-600'}`}>{pctAvance.toFixed(1)}%</div>
+                                </div>
+                            </div>
+
+                            <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden mb-6">
+                                <div
+                                    className={`h-full ${pctAvance >= 100 ? 'bg-green-500' : pctAvance >= 80 ? 'bg-orange-400' : 'bg-red-500'}`}
+                                    style={{ width: `${Math.min(100, pctAvance)}%` }}
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <div className="flex flex-col">
+                                    <span className="text-gray-500 text-[10px] font-bold uppercase tracking-wider mb-1">Meta Acumulada</span>
+                                    <span className="text-xl font-black text-gray-800">{fmtMoney(currentGoal)}</span>
+                                </div>
+                                <div className="flex flex-col">
+                                    <span className="text-gray-500 text-[10px] font-bold uppercase tracking-wider mb-1">Venta Real Acumulada</span>
+                                    <span className="text-xl font-black text-orange-600">{fmtMoney(ventaReal)}</span>
+                                </div>
+                                <div className="flex flex-col border-l border-gray-200 pl-4">
+                                    <span className="text-gray-500 text-[10px] font-bold uppercase tracking-wider mb-1">Diferencia vs Meta</span>
+                                    <div className="flex items-baseline gap-2 flex-wrap">
+                                        <span className={`text-xl font-black ${colorClass}`}>{isPos ? '+' : ''}{fmtMoney(dif)}</span>
+                                        <span className={`text-xs font-bold px-2 py-0.5 rounded bg-gray-50 ${colorClass}`}>{isPos ? '▲' : '▼'} {Math.abs(pctDif).toFixed(1)}%</span>
+                                    </div>
+                                </div>
+                                <div className="flex flex-col border-l border-gray-200 pl-4">
+                                    <span className="text-gray-500 text-[10px] font-bold uppercase tracking-wider mb-1">Proyección al cierre del rango</span>
+                                    <div className="flex items-baseline gap-2 flex-wrap">
+                                        <span className={`text-xl font-black ${proyDif >= 0 ? 'text-green-600' : 'text-red-600'}`}>{fmtMoney(proyeccion)}</span>
+                                        <span className={`text-xs font-bold px-2 py-0.5 rounded bg-gray-50 ${proyDif >= 0 ? 'text-green-600' : 'text-red-600'}`}>{proyDif >= 0 ? '▲' : '▼'} {Math.abs(proyPct).toFixed(1)}%</span>
+                                    </div>
+                                    <span className="text-[10px] text-gray-400 mt-1">Basada en S/ {fmtNum(promedioDia)} / día</span>
+                                </div>
                             </div>
                         </div>
-                    </div>
-                )}
+                    );
+                })()}
 
                 {loading ? (
                     <div className="flex justify-center p-20"><div className="animate-spin rounded-full h-10 w-10 border-4 border-orange-500 border-t-transparent"></div></div>
@@ -1367,8 +2262,15 @@ export default function SalesAnalysis() {
                     </div>
                 ) : (
                     <>
-                        <AnalysisSection title={previousPeriodMeta.title} compareData={dataPrevWeek} compareLabel={previousPeriodMeta.label} colorCompare="#fcd34d" colorCurrent="#f97316" viewMode={viewMode} showHourlyChart />
-                        <AnalysisSection title="Año Anterior" compareData={dataPrevYear} compareLabel="AÑO ANTERIOR" colorCompare="#d1d5db" colorCurrent="#f97316" viewMode={viewMode} />
+                        {comparePeriod === 'week' && dataPrevWeek && (
+                            <AnalysisSection title={previousPeriodMeta.title} compareData={dataPrevWeek} compareLabel={previousPeriodMeta.label} colorCompare="#fcd34d" colorCurrent="#f97316" viewMode={viewMode} showHourlyChart />
+                        )}
+                        {comparePeriod === 'month' && dataPrevMonth && (
+                            <AnalysisSection title="Mes Anterior" compareData={dataPrevMonth} compareLabel="MES ANTERIOR" colorCompare="#a78bfa" colorCurrent="#f97316" viewMode={viewMode} />
+                        )}
+                        {comparePeriod === 'year' && dataPrevYear && (
+                            <AnalysisSection title="Año Anterior" compareData={dataPrevYear} compareLabel="AÑO ANTERIOR" colorCompare="#d1d5db" colorCurrent="#f97316" viewMode={viewMode} />
+                        )}
                     </>
                 )}
             </div>
