@@ -11,7 +11,7 @@ import {
     getDoc,
     onSnapshot,
     doc
-} from 'firebase/firestore';
+} from '../lib/supabase/firestoreCompat';
 import { FaFilePdf, FaFileExcel, FaEye, FaTrash } from 'react-icons/fa';
 import { exportExtraHoursPDF } from '../services/exportExtraHoursPDF';
 import { exportExtraHoursExcelStyled } from '../services/exportExtraHoursExcelStyled';

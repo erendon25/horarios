@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, serverTimestamp } from '../lib/supabase/firestoreCompat';
 import { useAuth } from '../contexts/AuthContext';
 import { Clock, Calendar, MessageSquare, Send, X, AlertCircle } from 'lucide-react';
 

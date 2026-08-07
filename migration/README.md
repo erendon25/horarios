@@ -1,6 +1,6 @@
 # Migración Firebase → Supabase
 
-Firebase se usa únicamente como fuente de lectura. La aplicación seguirá escribiendo en Firebase hasta el corte final.
+La copia final ya fue conciliada y la aplicación Vite/React escribe exclusivamente en Supabase. Los scripts de este directorio se conservan solo como trazabilidad histórica de la importación.
 
 ## Archivos requeridos
 
@@ -79,3 +79,17 @@ La configuración Firebase `config/schedule_projection` es una plantilla por dí
 - Las funciones temporales `firebase-auth-import` y `firebase-data-import` se despliegan cerradas (`IMPORT_ENABLED = false`) y responden HTTP 410.
 - No se enviaron invitaciones, correos ni restablecimientos de contraseña durante la carga.
 - Antes del corte final se debe ejecutar una exportación incremental y repetir la conciliación.
+
+## Conciliación incremental del 5 de agosto de 2026
+
+- La fuente se volvió a exportar a las `2026-08-05T15:25:24.370Z`: 168 cuentas Firebase Auth y 4,421 documentos Firestore.
+- Once cuentas administrativas/de prueba sin perfil laboral fueron eliminadas de Firebase Auth, `users` de Firestore y Supabase, y quedaron excluidas de futuras transformaciones.
+- Tras excluir esas cuentas y consolidar dos UIDs con el mismo correo, Supabase quedó con 156 usuarios y 156 `user_profiles` enlazados.
+- Jorge Enrique Laos Pinto quedó como colaborador activo, con su cuenta, perfil laboral, tienda e historial operativo enlazados; su nombre visible también se normalizó en Supabase Auth.
+- Se importaron 274 colaboradores, 2,929 semanas, 15,833 turnos, 1,092 días de estudio, 316 feriados trabajados, 384 registros de horas extra, 78 solicitudes y la historia de ventas hasta el 4 de agosto de 2026.
+- Un cese regular duplicado se consolidó conservando la fila más reciente; el registro anterior completo permanece en `legacy_data.merged_regular_cessations`.
+- Los ceses históricos sin clasificación conservan el documento original en `legacy_data` y usan `SIN INFORMACIÓN HISTÓRICA` para cumplir las restricciones actuales.
+- Los registros que solo existían en Supabase se preservaron: 55 bloques de estudio y un cese adicional.
+- El estado anterior a esta carga está respaldado en el esquema privado `migration_backup_20260805`.
+- Las funciones `firebase-auth-import` y `firebase-data-import` volvieron a quedar cerradas y el token temporal fue eliminado.
+- Firebase usa hashes SCRYPT y las cuentas de Supabase usan bcrypt. Los usuarios que todavía no hayan definido una contraseña en Supabase deben utilizar el flujo de recuperación de contraseña implementado en la aplicación.

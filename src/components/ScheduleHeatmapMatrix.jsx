@@ -1,4 +1,4 @@
-// ScheduleHeatmapMatrix.jsx - VERSIÓN CORREGIDA (incluye el último bloque de 25:45)
+// ScheduleHeatmapMatrix.jsx - Matriz operativa de 07:00 a 25:00
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Maximize2, Minimize2 } from 'lucide-react';
 // === AGREGA ESTO ARRIBA DEL COMPONENTE (justo después de los imports) ===
@@ -12,17 +12,27 @@ const weekdayLabels = {
     sunday: 'Domingo'
 };
 
-export const HOURS = Array.from({ length: 77 }, (_, i) => {
-    const totalMinutes = 360 + i * 15; // 06:00 = 360 minutos
-    const totalHours = Math.floor(totalMinutes / 60);
-    const m = totalMinutes % 60;
+const HEATMAP_START_MINUTES = 7 * 60;
+const HEATMAP_END_MINUTES = 25 * 60;
+const HEATMAP_INTERVAL_MINUTES = 15;
+const PROJECTION_START_MINUTES = 8 * 60;
 
-    // Para horas >= 24, mostramos 24, 25, 26, etc.
-    if (totalHours >= 24) {
-        return `${String(totalHours).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+export const HOURS = Array.from(
+    { length: ((HEATMAP_END_MINUTES - HEATMAP_START_MINUTES) / HEATMAP_INTERVAL_MINUTES) + 1 },
+    (_, i) => {
+        const totalMinutes = HEATMAP_START_MINUTES + i * HEATMAP_INTERVAL_MINUTES;
+        const totalHours = Math.floor(totalMinutes / 60);
+        const m = totalMinutes % 60;
+
+        // Para horas >= 24, mostramos 24, 25, 26, etc.
+        if (totalHours >= 24) {
+            return `${String(totalHours).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+        }
+        return `${String(totalHours % 24).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
     }
-    return `${String(totalHours % 24).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-});
+);
+
+const HEATMAP_TABLE_MIN_WIDTH = 120 + HOURS.length * 24;
 
 export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {} }) {
     const [rows, setRows] = useState([]);
@@ -128,9 +138,12 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
         const positions = Array.isArray(requirements.positions) ? requirements.positions : [];
         const compressed = requirements.matrix || {};
         
-        // Cada llave en el compressed es un index (0... 20) basado en la proyeccion desde las 08:00.
-        // Pero el mapa de calor (HOURS) empieza a las 06:00. Hay 2 horas de diferencia (8 intervalos de 15 mins).
-        // Rellenamos con 8 ceros primero para alinear, y luego expandimos repitiendo el valor 4 veces.
+        // Cada llave en compressed es un índice (0...20) basado en la proyección desde las 08:00.
+        // El mapa empieza a las 07:00, por eso anteponemos cuatro intervalos de 15 minutos.
+        const projectionOffsetSlots = Math.max(
+            0,
+            (PROJECTION_START_MINUTES - HEATMAP_START_MINUTES) / HEATMAP_INTERVAL_MINUTES
+        );
         const expanded = Object.keys(compressed)
             .sort((a, b) => Number(a) - Number(b))
             .map(k => {
@@ -141,8 +154,8 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                         .map(col => compressed[k][col]);
                 const fullRow = [];
                 
-                // Alineación de 06:00 a 08:00
-                for(let i = 0; i < 8; i++) fullRow.push(0);
+                // Alineación de 07:00 a 08:00
+                for (let i = 0; i < projectionOffsetSlots; i++) fullRow.push(0);
 
                 for(let i=0; i<21; i++) {
                    const qty = sourceRow[i] || 0;
@@ -411,7 +424,7 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                 style={{ scrollBehavior: 'smooth' }}
             >
                 {/* Tabla compacta */}
-                <table className="table-fixed border-collapse bg-white shadow-inner" style={{ minWidth: '2592px' }}>
+                <table className="table-fixed border-collapse bg-white shadow-inner" style={{ minWidth: `${HEATMAP_TABLE_MIN_WIDTH}px` }}>
                     <colgroup>
                         <col style={{ width: '120px' }} />
                         {HOURS.map((_, i) => (
@@ -541,7 +554,7 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                         </div>
                         {/* Contenedor con scroll compacto */}
                         <div className="flex-1 overflow-auto p-2 bg-gray-50">
-                            <table className="table-fixed border-collapse bg-white shadow-inner rounded overflow-hidden" style={{ minWidth: '2592px' }}>
+                            <table className="table-fixed border-collapse bg-white shadow-inner rounded overflow-hidden" style={{ minWidth: `${HEATMAP_TABLE_MIN_WIDTH}px` }}>
                                 <colgroup>
                                     <col style={{ width: '120px' }} />
                                     {HOURS.map((_, i) => (

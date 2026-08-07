@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { getFirestore, collection, query, where, getDocs, doc, getDoc, updateDoc, onSnapshot } from "firebase/firestore";
+import { getFirestore, collection, query, where, getDocs, doc, getDoc, updateDoc, onSnapshot } from "../lib/supabase/firestoreCompat";
 import { useAuth } from "../contexts/AuthContext";
 // import ExtraHoursForm from "./ExtraHoursForm"; // ELIMINADO
 import HolidayForm from "./HolidayForm";
@@ -169,7 +169,7 @@ const CollaboratorDashboard = () => {
             pendingHolidays: []
           };
 
-          // Actualizar en Firebase
+          // Actualizar en Supabase.
           updateDoc(doc(db, "staff_profiles", perfilData.id), {
             modality: newModality,
             joinDate: changeDate,
@@ -234,7 +234,7 @@ const CollaboratorDashboard = () => {
     const db = getFirestore();
     try {
       // 1. Leer el perfil seleccionado para obtener el storeId
-      const { setDoc, getDoc: getDocument, updateDoc: updateDocument, serverTimestamp } = await import("firebase/firestore");
+      const { setDoc, getDoc: getDocument, updateDoc: updateDocument, serverTimestamp } = await import("../lib/supabase/firestoreCompat");
       const staffDocRef = doc(db, "staff_profiles", selectedStaffId);
       const staffSnap = await getDocument(staffDocRef);
       const staffData = staffSnap.exists() ? staffSnap.data() : {};

@@ -2,8 +2,8 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.110.2";
 
 const IMPORT_ENABLED = false;
-const TOKEN_SHA256 = "482f8e23fb4b378dc27930a59477c53698cd263d9d6a4c19725b7eb11420b33e";
-const EXPIRES_AT = Date.parse("2026-07-13T07:00:00.000Z");
+const TOKEN_SHA256 = "9f351903226b1d9da3f80fd62021b71663fb1d9fbccd460085738361ce4a92ea";
+const EXPIRES_AT = Date.parse("2026-08-05T17:30:00.000Z");
 const ALLOWED_ROLES = new Set(["superadmin", "admin", "trainer", "collaborator"]);
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), {

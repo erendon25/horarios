@@ -52,6 +52,19 @@ const legacy = (doc, extra = {}) => ({ firestore_path: doc.path, ...extra, ...do
 
 const warnings = [];
 const quarantined = [];
+const excludedAuthEmails = new Set([
+  'erendonmoyano@icloud.com',
+  'erendonmoyano@outlook.com',
+  'grendak72@gmail.com',
+  'misti@lc-peru.com',
+  'misti@lc.com',
+  'nat.tinajeros.2216@gmail.com',
+  'prueba@gmail.com',
+  'prueba@misti.com',
+  'prueba12@gmail.com',
+  'prueba20@misti.com',
+  'salinasnunezd@gmail.com',
+]);
 const tables = Object.fromEntries([
   'stores', 'auth_users', 'staff_profiles', 'user_profiles', 'staff_skills', 'store_positions',
   'store_positioning_requirements', 'schedule_weeks', 'schedule_shifts', 'study_schedule_days',
@@ -179,6 +192,10 @@ for (const doc of staffDocs) {
 const staffRowByAuthId = new Map(tables.staff_profiles.filter((row) => row.user_id).map((row) => [row.user_id, row]));
 for (const user of authExport.users) {
   const emailKey = user.email?.trim().toLowerCase() ?? `uid:${user.uid}`;
+  if (excludedAuthEmails.has(emailKey)) {
+    warnings.push({ code: 'AUTH_ACCOUNT_EXCLUDED', email: emailKey });
+    continue;
+  }
   const canonicalUser = canonicalAuthByEmail.get(emailKey);
   if (canonicalUser.uid !== user.uid) continue;
   const id = authUuidByUid.get(user.uid);
@@ -186,7 +203,9 @@ for (const user of authExport.users) {
   const staffDoc = staffByUid.get(user.uid) ?? staffByEmail.get(user.email?.trim().toLowerCase());
   const role = ['superadmin', 'admin', 'trainer', 'collaborator'].includes(firestoreUser?.data.role)
     ? firestoreUser.data.role : 'collaborator';
-  const sourceStoreId = role === 'superadmin' ? null : firestoreUser?.data.storeId ?? staffDoc?.data.storeId ?? null;
+  // Conserva también la tienda operativa del superadmin. La aplicación histórica
+  // usa ese vínculo para ventas, proyección, RRHH y horarios.
+  const sourceStoreId = firestoreUser?.data.storeId ?? staffDoc?.data.storeId ?? null;
   const displayParts = cleanString(user.displayName)?.split(/\s+/) ?? [];
   const staffId = staffDoc ? staffUuidById.get(staffDoc.id) : null;
   tables.auth_users.push({
@@ -200,7 +219,12 @@ for (const user of authExport.users) {
     created_at: user.metadata?.creationTime ?? null,
     last_sign_in_at: user.metadata?.lastSignInTime ?? null,
     app_metadata: { role, firebase_provider_data: user.providerData?.map((provider) => provider.providerId) ?? [] },
-    user_metadata: { display_name: user.displayName, phone_number: user.phoneNumber, photo_url: user.photoURL },
+    user_metadata: {
+      display_name: cleanString(user.displayName)
+        ?? ([cleanString(staffDoc?.data.name), cleanString(staffDoc?.data.lastName)].filter(Boolean).join(' ') || null),
+      phone_number: user.phoneNumber,
+      photo_url: user.photoURL,
+    },
   });
   tables.user_profiles.push({
     id,
@@ -260,6 +284,21 @@ for (const doc of rootDocs('feriados_trabajados')) addHistoricalEvidence(doc.dat
   uid: doc.data.uid,
   source: 'feriados_trabajados',
 });
+for (const doc of rootDocs('schedule_requests')) addHistoricalEvidence(doc.data.staffId, {
+  storeId: doc.data.storeId,
+  uid: doc.data.uid,
+  source: 'schedule_requests',
+});
+for (const doc of rootDocs('extra_hours')) addHistoricalEvidence(doc.data.staffId, {
+  storeId: doc.data.storeId,
+  uid: doc.data.uid,
+  name: doc.data.name,
+  lastName: doc.data.lastName,
+  dni: doc.data.dni,
+  modality: doc.data.modality,
+  position: doc.data.position ?? doc.data.cargo,
+  source: 'extra_hours',
+});
 
 if ([...historicalEvidence.values()].some((evidence) => !evidence.storeId)) {
   tables.stores.push({
@@ -277,8 +316,26 @@ if ([...historicalEvidence.values()].some((evidence) => !evidence.storeId)) {
 
 for (const [identifier, evidence] of [...historicalEvidence].sort(([a], [b]) => a.localeCompare(b))) {
   if (staffById.has(identifier) || staffByUid.has(identifier)) continue;
+  // Algunos horarios conservan el id de un perfil eliminado, mientras otros
+  // documentos todavía guardan su uid o DNI. Si existe un perfil vigente con
+  // esa identidad, reutilizamos su UUID y evitamos crear un colaborador histórico
+  // duplicado. El alias también permite enlazar schedule_weeks al perfil correcto.
+  const existingStaff = (evidence.uid && staffByUid.get(evidence.uid))
+    || (evidence.dni && staffByDni.get(String(evidence.dni).trim()));
+  if (existingStaff) {
+    staffById.set(identifier, existingStaff);
+    staffUuidById.set(identifier, staffUuidById.get(existingStaff.id));
+    warnings.push({
+      code: 'HISTORICAL_STAFF_RECONCILED',
+      source_id: identifier,
+      matched_staff_id: existingStaff.id,
+      match: evidence.uid && existingStaff.data.uid === evidence.uid ? 'uid' : 'dni',
+    });
+    continue;
+  }
   const firestoreUser = userDocByUid.get(identifier);
   const authUser = authByUid.get(identifier);
+  const linkedAuthUser = authUser ?? (evidence.uid ? authByUid.get(evidence.uid) : null);
   const sourceStoreId = evidence.storeId ?? firestoreUser?.data.storeId ?? historicalUnknownStoreSourceId;
   const syntheticDoc = { id: identifier, path: `migration/reconstructed_staff/${identifier}`, data: { uid: evidence.uid ?? (authUser ? identifier : null), ...evidence, storeId: sourceStoreId } };
   const staffId = uuid('staff', identifier);
@@ -294,12 +351,14 @@ for (const [identifier, evidence] of [...historicalEvidence].sort(([a], [b]) => 
     store_id: storeUuidByFirebaseId.get(sourceStoreId) ?? historicalUnknownStoreId,
     first_name: cleanString(evidence.name) ?? `Histórico ${identifier.slice(0, 6)}`,
     last_name: cleanString(evidence.lastName) ?? '',
-    email: authUser?.email ?? null,
+    email: linkedAuthUser?.email ?? null,
     dni: cleanString(evidence.dni),
     gender: null,
     birth_date: null,
     modality: ['Full-Time', 'Part-Time'].includes(evidence.modality) ? evidence.modality : null,
     position: cleanString(evidence.position) ?? 'COLABORADOR',
+    // Una cuenta Auth vigente no prueba que el colaborador siga en planilla.
+    // Todo perfil reconstruido exclusivamente desde historial permanece inactivo.
     status: 'inactive',
     join_date: cleanDate(evidence.joinDate),
     cessation_date: cleanDate(evidence.cessationDate),
@@ -309,7 +368,7 @@ for (const [identifier, evidence] of [...historicalEvidence].sort(([a], [b]) => 
     training_end_date: null,
     modality_change_date: null,
     next_modality: null,
-    needs_completion: true,
+    needs_completion: !(cleanString(evidence.name) && cleanString(evidence.lastName) && cleanString(evidence.dni)),
     holiday_balance: 0,
     last_evaluation_date: null,
     last_evaluation_score: null,
@@ -325,6 +384,8 @@ for (const [identifier, evidence] of [...historicalEvidence].sort(([a], [b]) => 
     if (profile && !profile.staff_profile_id) {
       profile.staff_profile_id = staffId;
       profile.store_id ??= storeUuidByFirebaseId.get(sourceStoreId) ?? historicalUnknownStoreId;
+      profile.first_name ??= cleanString(evidence.name);
+      profile.last_name ??= cleanString(evidence.lastName);
     }
   }
 }
@@ -415,11 +476,16 @@ for (const doc of docs.filter((item) => /^stores\/[^/]+\/config$/.test(item.coll
 // Work schedules. A source document expands to one week and up to seven shifts.
 const dayNames = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const seenScheduleWeeks = new Set();
-const scheduleScore = (doc) => (
-  (doc.data.weekKey ? 20 : 0)
-  + (doc.data.storeId ? 20 : 0)
-  + dayNames.filter((day) => doc.data[day] && typeof doc.data[day] === 'object').length
-);
+const scheduleScore = (doc) => {
+  const weekKey = cleanString(doc.data.weekKey) ?? doc.id.match(/(\d{4}-\d{2}-\d{2}_to_\d{4}-\d{2}-\d{2})$/)?.[1];
+  const canonicalWeeklyId = weekKey && doc.id.endsWith(`_${weekKey}`);
+  return (
+    (canonicalWeeklyId ? 100 : 0)
+    + (doc.data.weekKey ? 20 : 0)
+    + (doc.data.storeId ? 20 : 0)
+    + dayNames.filter((day) => doc.data[day] && typeof doc.data[day] === 'object').length
+  );
+};
 for (const doc of [...rootDocs('schedules')].sort((a, b) => scheduleScore(b) - scheduleScore(a) || a.path.localeCompare(b.path))) {
   const weekKey = cleanString(doc.data.weekKey) ?? doc.id.match(/(\d{4}-\d{2}-\d{2}_to_\d{4}-\d{2}-\d{2})$/)?.[1];
   const weekStart = cleanDate(weekKey);
@@ -549,8 +615,10 @@ for (const doc of rootDocs('ceses')) {
     next_modality: cleanString(doc.data.nextModality),
     is_modality_change: Boolean(doc.data.isModalityChange),
     performance: cleanString(doc.data.desempenio),
-    cessation_reason: cleanString(doc.data.motivoCese),
-    real_reason: cleanString(doc.data.motivoReal),
+    cessation_reason: cleanString(doc.data.motivoCese)
+      ?? (Boolean(doc.data.isModalityChange) ? null : 'SIN INFORMACIÓN HISTÓRICA'),
+    real_reason: cleanString(doc.data.motivoReal)
+      ?? (Boolean(doc.data.isModalityChange) ? null : 'SIN INFORMACIÓN HISTÓRICA'),
     store_comment: cleanString(doc.data.comentario),
     medical_leave_days: number(doc.data.diasDescansoMedico),
     absences: number(doc.data.inasistencias),
@@ -674,6 +742,40 @@ for (const doc of docs.filter((item) => /^stores\/[^/]+\/sales_history$/.test(it
 for (const doc of rootDocs('staff_schedules')) {
   quarantined.push({ collection: 'staff_schedules', path: doc.path, reason: 'obsolete_sample_collection', data: doc.data });
 }
+
+// PostgreSQL mantiene un único cese laboral regular por colaborador. Cuando
+// Firebase contiene duplicados históricos, se conserva como fila operativa el
+// registro más reciente y se anexan los anteriores completos en legacy_data.
+const regularCessationsByStaff = Map.groupBy(
+  tables.cessations.filter((row) => !row.is_modality_change),
+  (row) => row.staff_id,
+);
+const consolidatedRegularCessations = [];
+for (const [staffId, rows] of regularCessationsByStaff) {
+  const sorted = rows.toSorted((left, right) => {
+    const leftKey = `${left.cessation_date ?? ''}|${left.updated_at ?? ''}|${left.firestore_id}`;
+    const rightKey = `${right.cessation_date ?? ''}|${right.updated_at ?? ''}|${right.firestore_id}`;
+    return rightKey.localeCompare(leftKey);
+  });
+  const [current, ...historical] = sorted;
+  if (historical.length) {
+    current.legacy_data = {
+      ...current.legacy_data,
+      merged_regular_cessations: historical,
+    };
+    warnings.push({
+      code: 'DUPLICATE_REGULAR_CESSATIONS_MERGED',
+      staff_id: staffId,
+      kept_firestore_id: current.firestore_id,
+      merged: historical.length,
+    });
+  }
+  consolidatedRegularCessations.push(current);
+}
+tables.cessations = [
+  ...consolidatedRegularCessations,
+  ...tables.cessations.filter((row) => row.is_modality_change),
+];
 
 const counts = Object.fromEntries(Object.entries(tables).map(([table, rows]) => [table, rows.length]));
 const report = {

@@ -8,7 +8,7 @@ import {
   where,
   deleteDoc,
   doc,
-} from "firebase/firestore";
+} from "../lib/supabase/firestoreCompat";
 
 const ExtraHoursForm = ({ uid, onSuccess }) => {
   const [fecha, setFecha] = useState("");

@@ -1,6 +1,6 @@
 
 import React, { useEffect, useState } from 'react';
-import { getFirestore, collection, getDocs, query, where } from 'firebase/firestore';
+import { getFirestore, collection, getDocs, query, where } from '../lib/supabase/firestoreCompat';
 import { exportExtraHoursExcel } from '../services/exportExtraHoursExcel';
 import { exportExtraHoursPDF } from '../services/exportExtraHoursPDF';
 

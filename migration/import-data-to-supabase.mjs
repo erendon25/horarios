@@ -26,9 +26,19 @@ const order = [
   'sales_projection_templates',
 ];
 const batchSizes = { schedule_shifts: 100, sales_hourly_history: 100, study_schedule_blocks: 100 };
-const report = { started_at: new Date().toISOString(), tables: {}, processed: 0, errors: [] };
+const requestedStartTable = process.env.MIGRATION_START_TABLE;
+const startIndex = requestedStartTable ? order.indexOf(requestedStartTable) : 0;
+if (requestedStartTable && startIndex < 0) throw new Error(`Tabla de reanudación no válida: ${requestedStartTable}`);
+const importOrder = order.slice(startIndex);
+const report = {
+  started_at: new Date().toISOString(),
+  resumed_from: requestedStartTable ?? null,
+  tables: {},
+  processed: 0,
+  errors: [],
+};
 
-for (const table of order) {
+for (const table of importOrder) {
   const rows = JSON.parse(await readFile(resolve(`migration/transformed/${table}.json`), 'utf8'));
   const batchSize = batchSizes[table] ?? 150;
   report.tables[table] = { expected: rows.length, processed: 0, batches: 0 };

@@ -1,6 +1,6 @@
 // ModalSelectorDePosiciones.jsx
 import React, { useEffect, useState } from 'react';
-import { getFirestore, doc, getDoc, setDoc, collection, getDocs } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, setDoc, collection, getDocs } from '../lib/supabase/firestoreCompat';
 import { X, CheckCircle, Award, ShieldCheck, ShieldAlert } from 'lucide-react';
 
 export default function ModalSelectorDePosiciones({ docId, storeId, onClose }) {

@@ -11,10 +11,8 @@ import {
   getDocs,
   writeBatch,
   updateDoc as updateFirestoreDoc
-} from 'firebase/firestore';
-import { initializeApp } from 'firebase/app';
-import { getAuth as getAuthMain, createUserWithEmailAndPassword } from 'firebase/auth';
-import { firebaseConfig } from '../firebase';
+} from '../lib/supabase/firestoreCompat';
+import { supabase } from '../lib/supabase/client';
 import { toast } from 'react-toastify';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -130,17 +128,15 @@ function SuperAdminDashboard() {
         return;
       }
 
-      const tempApp = initializeApp(firebaseConfig, 'TempApp');
-      const tempAuth = getAuthMain(tempApp);
-      const userCredential = await createUserWithEmailAndPassword(tempAuth, adminEmail, adminPassword);
-      const uid = userCredential.user.uid;
-
-      await setDoc(doc(db, 'users', uid), {
-        email: adminEmail,
-        role: 'admin',
-        storeId: selectedStoreId,
-        createdAt: new Date().toISOString()
+      const { error } = await supabase.functions.invoke('staff-account-admin', {
+        body: {
+          operation: 'create_admin',
+          email: adminEmail,
+          password: adminPassword,
+          storeId: selectedStoreId,
+        },
       });
+      if (error) throw error;
 
       toast.success('Administrador creado exitosamente');
       setAdminEmail('');
@@ -157,8 +153,10 @@ function SuperAdminDashboard() {
     if (!confirm) return;
 
     try {
-      const ref = doc(db, 'staff_profiles', id);
-      await updateFirestoreDoc(ref, { email: '', uid: '' });
+      const { error } = await supabase.functions.invoke('staff-account-admin', {
+        body: { operation: 'unlink_staff', staffId: id },
+      });
+      if (error) throw error;
       toast.success('Correo y acceso desvinculados');
       setStaffProfiles(prev => prev.map(p => p.id === id ? { ...p, email: '', uid: '' } : p));
     } catch (error) {
@@ -183,64 +181,18 @@ function SuperAdminDashboard() {
   const handleDeleteStaffCompletely = async (profile) => {
     const fullName = `${profile.name || ''} ${profile.lastName || ''}`.trim() || 'este colaborador';
     const confirm = window.confirm(
-      `Eliminar definitivamente a ${fullName}?\n\nSe borraran sus registros de Firestore: perfil, usuario, correo vinculado, horarios, solicitudes, feriados, ceses, horas extra y evaluaciones relacionadas.`
+      `Eliminar definitivamente a ${fullName}?\n\nSe borrarán de Supabase su perfil, cuenta, horarios, solicitudes, feriados, ceses, horas extra y evaluaciones relacionadas.`
     );
     if (!confirm) return;
 
     try {
       const staffId = profile.id;
-      const uid = profile.uid || '';
-      const email = String(profile.email || '').trim().toLowerCase();
-      const refsToDelete = [doc(db, 'staff_profiles', staffId)];
-
-      if (uid) {
-        refsToDelete.push(doc(db, 'users', uid));
-        refsToDelete.push(doc(db, 'study_schedules', uid));
-      }
-
-      const relatedCollections = [
-        'users',
-        'schedules',
-        'feriados_trabajados',
-        'worked_holidays',
-        'extra_hours',
-        'nocturnidad',
-        'schedule_requests',
-        'training_evaluations',
-        'ceses',
-      ];
-
-      for (const collectionName of relatedCollections) {
-        const snap = await getDocs(collection(db, collectionName));
-        snap.forEach((docSnap) => {
-          const data = docSnap.data();
-          const docId = docSnap.id;
-          const docEmail = String(data.email || '').trim().toLowerCase();
-          const matchesStaff =
-            data.staffId === staffId ||
-            data.profileId === staffId ||
-            docId === staffId ||
-            docId.startsWith(`${staffId}_`);
-          const matchesUid =
-            !!uid && (
-              data.uid === uid ||
-              data.userId === uid ||
-              data.trainerId === uid ||
-              docId === uid ||
-              docId.startsWith(`${uid}_`)
-            );
-          const matchesEmail = !!email && docEmail === email;
-
-          if (matchesStaff || matchesUid || matchesEmail) {
-            refsToDelete.push(docSnap.ref);
-          }
-        });
-      }
-
-      const deletedCount = await deleteRefsInBatches(refsToDelete);
+      const { data, error } = await supabase.functions.invoke('staff-account-admin', {
+        body: { operation: 'delete_staff', staffId },
+      });
+      if (error) throw error;
       setStaffProfiles(prev => prev.filter(p => p.id !== staffId));
-      toast.success(`Usuario eliminado de Firestore (${deletedCount} registro(s)).`);
-      toast.info('Si existe una cuenta en Firebase Authentication, debe eliminarse con backend/Admin SDK.');
+      toast.success(`Colaborador y cuenta eliminados de Supabase (${data?.deletedRecords ?? 1} perfil).`);
     } catch (error) {
       console.error('Error eliminando usuario completamente:', error);
       toast.error('No se pudo eliminar el usuario por completo: ' + error.message);
@@ -574,7 +526,7 @@ function SuperAdminDashboard() {
                    <button
                      onClick={() => handleDeleteStaffCompletely(profile)}
                      className="flex items-center justify-center gap-1 w-full text-xs font-black text-white bg-red-600 hover:bg-red-700 border border-red-700 py-1.5 rounded transition-colors"
-                     title="Eliminar todos los registros Firestore vinculados a este colaborador"
+                     title="Eliminar todos los registros de Supabase vinculados a este colaborador"
                    >
                      <Trash2 className="w-3 h-3" />
                      Eliminar definitivo

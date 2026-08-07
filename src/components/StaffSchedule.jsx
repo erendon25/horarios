@@ -1,7 +1,7 @@
 // StaffSchedule.jsx
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getFirestore, doc, getDoc, setDoc, collection, getDocs } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, setDoc, collection, getDocs } from '../lib/supabase/firestoreCompat';
 import { useAuth } from '../contexts/AuthContext';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';

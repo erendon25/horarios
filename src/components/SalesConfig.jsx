@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { getFirestore, doc, getDoc, setDoc } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, setDoc } from '../lib/supabase/firestoreCompat';
 import { useAuth } from '../contexts/AuthContext';
 import { Save, Calendar, Clock, DollarSign, Activity, TrendingUp, ArrowLeft, Upload } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -61,9 +61,19 @@ export default function SalesConfig() {
     // Cargar tienda del usuario
     useEffect(() => {
         const fetchStore = async () => {
-            if (!currentUser) return;
-            const snap = await getDoc(doc(db, 'users', currentUser.uid));
-            if (snap.exists()) setStoreId(snap.data().storeId || '');
+            if (!currentUser) {
+                setLoading(false);
+                return;
+            }
+            try {
+                const snap = await getDoc(doc(db, 'users', currentUser.uid));
+                const nextStoreId = snap.exists() ? snap.data().storeId || '' : '';
+                setStoreId(nextStoreId);
+                if (!nextStoreId) setLoading(false);
+            } catch (error) {
+                console.error('Error al identificar la tienda:', error);
+                setLoading(false);
+            }
         };
         fetchStore();
     }, [currentUser, db]);
@@ -450,6 +460,10 @@ export default function SalesConfig() {
 
     if (loading) {
         return <div className="p-8 text-center text-gray-500">Cargando configuración de ventas...</div>;
+    }
+
+    if (!storeId) {
+        return <div className="p-8 text-center text-red-600">Tu cuenta no tiene una tienda asignada.</div>;
     }
 
     // Totales calculados en vivo para la cabecera

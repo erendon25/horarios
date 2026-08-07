@@ -1,6 +1,6 @@
 
 import React, { useEffect, useState } from 'react';
-import { getFirestore, doc, onSnapshot, query, collection, where } from 'firebase/firestore';
+import { getFirestore, doc, onSnapshot, query, collection, where } from '../lib/supabase/firestoreCompat';
 import { Calendar, Clock, MapPin, Coffee, AlertCircle, ChevronLeft, ChevronRight, ClipboardList, X, Download } from 'lucide-react';
 import { exportGroupedPositionsPDF } from './PDFExport';
 
@@ -13,6 +13,13 @@ const weekdayLabels = {
     friday: 'Viernes',
     saturday: 'Sábado',
     sunday: 'Domingo'
+};
+
+const timestampToMillis = (value) => {
+    if (!value) return 0;
+    if (typeof value.toMillis === 'function') return value.toMillis();
+    const parsed = new Date(value).getTime();
+    return Number.isFinite(parsed) ? parsed : 0;
 };
 
 const getWeekKey = (s) => {
@@ -108,7 +115,7 @@ export default function WeeklyView({ perfilId, storeId }) {
         );
         const unsubAll = onSnapshot(qAll, (snap) => {
             const reqs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            setAllRequests(reqs.sort((a, b) => b.createdAt?.toMillis() - a.createdAt?.toMillis()));
+            setAllRequests(reqs.sort((a, b) => timestampToMillis(b.createdAt) - timestampToMillis(a.createdAt)));
         });
 
         return () => {

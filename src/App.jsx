@@ -33,6 +33,8 @@ function AppRouter() {
             ? '/superadmin'
             : userRole === 'admin'
               ? '/admin'
+              : userRole === 'trainer'
+                ? '/entrenamiento'
               : '/staff'
         } />
       } />
@@ -124,7 +126,7 @@ function AppRouter() {
       />
 
       <Route path="/entrenamiento" element={
-        <PrivateRoute role="admin">
+        <PrivateRoute role="trainer">
           <TrainingApp />
         </PrivateRoute>
       } />

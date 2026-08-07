@@ -7,7 +7,7 @@ import {
   updateDoc,
   deleteDoc,
   setDoc
-} from "firebase/firestore";
+} from "../lib/supabase/firestoreCompat";
 
 const db = getFirestore();
 
