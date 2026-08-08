@@ -106,12 +106,16 @@ select 'auth_users_sin_password' as chequeo, count(*) as cantidad
 from auth.users
 where encrypted_password is null or encrypted_password = '';
 
--- 2e. Detalle: lista de personal activo que no puede entrar
+-- 2e. Detalle: lista de personal activo que no puede entrar (con tienda)
 select
+  s.name as tienda,
   sp.first_name, sp.last_name, sp.position, sp.modality,
   up.role, up.status,
-  (u.encrypted_password is null or u.encrypted_password = '') as sin_password
+  (sp.user_id is null) as sin_cuenta_vinculada,
+  (u.encrypted_password is null or u.encrypted_password = '') as sin_password,
+  sp.store_id
 from public.staff_profiles sp
+left join public.stores s on s.id = sp.store_id
 left join public.user_profiles up on up.id = sp.user_id
 left join auth.users u on u.id = sp.user_id
 where coalesce(sp.status, 'active') <> 'inactive'
@@ -124,4 +128,13 @@ where coalesce(sp.status, 'active') <> 'inactive'
     or u.encrypted_password is null
     or u.encrypted_password = ''
   )
+order by s.name nulls first, sp.last_name, sp.first_name;
+
+-- 2f. Personal activo SIN tienda asignada (candidatos a depurar del sistema)
+select
+  sp.first_name, sp.last_name, sp.position, sp.modality, sp.store_id,
+  sp.created_at
+from public.staff_profiles sp
+where sp.store_id is null
+  and coalesce(sp.status, 'active') <> 'inactive'
 order by sp.last_name, sp.first_name;

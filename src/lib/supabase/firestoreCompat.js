@@ -310,7 +310,13 @@ export async function getDoc(ref) {
     }
   }
   if (segments[0] === "study_schedules") {
-    const staff = await supabase.from("staff_profiles").select("id,user_id").or(`id.eq.${id},user_id.eq.${id}`).maybeSingle();
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    // Si el id es UUID puede ser el id del perfil o el user_id (auth).
+    // Si NO es UUID, es un id legacy de Firebase → resolver por firestore_id.
+    const staffQuery = isUuid
+      ? supabase.from("staff_profiles").select("id,user_id").or(`id.eq.${id},user_id.eq.${id}`)
+      : supabase.from("staff_profiles").select("id,user_id").eq("firestore_id", id);
+    const staff = await staffQuery.maybeSingle();
     throwIfError(staff.error);
     if (!staff.data) return new DocumentSnapshot(ref, id, undefined);
     const days = await supabase.from("study_schedule_days").select("*,study_schedule_blocks(*)").eq("staff_id", staff.data.id);
