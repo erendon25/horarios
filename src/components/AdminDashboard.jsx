@@ -648,9 +648,6 @@ function AdminDashboard() {
     };
 
 
-    const generateUid = () => {
-        return Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
-    };
     const handleUnlinkEmail = async (staffId) => {
         try {
             await updateDoc(doc(db, 'staff_profiles', staffId), {
@@ -1647,17 +1644,12 @@ function AdminDashboard() {
     };
 
     const openScheduleWindow = async (uid, docId) => {
-        let finalUid = uid;
-        if (!uid) {
-            finalUid = generateUid();
-            try {
-                await setDoc(doc(db, 'staff_profiles', docId), { uid: finalUid }, { merge: true });
-                await setDoc(doc(db, 'study_schedules', finalUid), {});
-            } catch (err) {
-                console.error("Error generando UID para colaborador:", err);
-                alert("No se pudo generar el UID para este colaborador.");
-                return;
-            }
+        // El horario de estudios se resuelve por id de staff_profiles o user_id,
+        // así que usamos el uid real si existe o el id del perfil como identificador.
+        const finalUid = uid || docId;
+        if (!finalUid) {
+            alert("No se pudo identificar al colaborador para abrir su horario.");
+            return;
         }
 
         const width = 600;
@@ -3341,19 +3333,7 @@ function AdminDashboard() {
                                                     
                                                     <div className="flex items-center justify-center gap-1">
                                                         <button
-                                                            onClick={async () => {
-                                                                if (!colab.uid) {
-                                                                    const generatedUid = generateUid();
-                                                                    try {
-                                                                        await setDoc(doc(db, 'staff_profiles', colab.id), { uid: generatedUid }, { merge: true });
-                                                                        await setDoc(doc(db, 'study_schedules', generatedUid), {});
-                                                                        colab.uid = generatedUid;
-                                                                    } catch (err) {
-                                                                        console.error("Error generando UID:", err);
-                                                                        alert("No se pudo generar el UID automáticamente para este colaborador.");
-                                                                        return;
-                                                                    }
-                                                                }
+                                                            onClick={() => {
                                                                 setSelectedStaff(colab);
                                                                 setShowScheduleEditor(true);
                                                             }}
@@ -3430,7 +3410,7 @@ function AdminDashboard() {
                             </div>
                             <div className="p-6">
                                 <StudyScheduleEditor
-                                    uid={selectedStaff.uid}
+                                    uid={selectedStaff.uid || selectedStaff.id}
                                     onClose={() => {
                                         setShowScheduleEditor(false);
                                         setSelectedStaff(null);

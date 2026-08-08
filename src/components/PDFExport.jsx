@@ -67,7 +67,12 @@ export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = f
         filteredStaff = filteredStaff.filter(p => !p.isTrainee);
     }
 
-    const ordered = filteredStaff.sort((a, b) => {
+    const MANAGERIAL_POSITIONS = ['ADMINISTRADOR', 'GERENTE', 'ASISTENTE', 'LIDER', 'ENTRENADOR'];
+    const normalizePos = (value) => String(value || '')
+        .normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toUpperCase();
+    const isManagerial = (person) => MANAGERIAL_POSITIONS.includes(normalizePos(person.position));
+
+    const sortByModality = (a, b) => {
         const modA = getEffectiveModality(a, dateStr);
         const modB = getEffectiveModality(b, dateStr);
         if (modA === 'Full-Time' && modB !== 'Full-Time') return -1;
@@ -75,9 +80,12 @@ export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = f
         if (modA === 'Part-Time' && modB !== 'Part-Time') return -1;
         if (modA !== 'Part-Time' && modB === 'Part-Time') return 1;
         return 0;
-    });
+    };
 
-    const body = ordered.map(p => {
+    const gerencial = filteredStaff.filter(isManagerial).sort(sortByModality);
+    const personal = filteredStaff.filter((p) => !isManagerial(p)).sort(sortByModality);
+
+    const buildRows = (list) => list.map(p => {
         let tot = 0;
         let daysWorkedFT = 0;
         const effModality = getEffectiveModality(p, dateStr);
@@ -145,6 +153,25 @@ export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = f
         row.push(tot.toFixed(2));
         return row;
     });
+
+    const gerencialBody = buildRows(gerencial);
+    const personalBody = buildRows(personal);
+    const colCount = head.length;
+    const sectionRow = (label) => [{
+        content: label,
+        colSpan: colCount,
+        styles: { fillColor: [230, 126, 34], textColor: 255, fontStyle: 'bold', halign: 'left', fontSize: 8 },
+    }];
+
+    const body = [];
+    if (gerencialBody.length > 0) {
+        body.push(sectionRow('EQUIPO GERENCIAL'));
+        body.push(...gerencialBody);
+    }
+    if (personalBody.length > 0) {
+        body.push(sectionRow('PERSONAL DE TIENDA'));
+        body.push(...personalBody);
+    }
 
     autoTable(pdf, {
         head: [head],
