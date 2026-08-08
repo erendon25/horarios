@@ -67,7 +67,7 @@ export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = f
         filteredStaff = filteredStaff.filter(p => !p.isTrainee);
     }
 
-    const MANAGERIAL_POSITIONS = ['GERENTE', 'ASISTENTE', 'ENTRENADOR', 'LIDER'];
+    const MANAGERIAL_POSITIONS = ['GERENTE', 'ASISTENTE', 'LIDER'];
     const normalizePos = (value) => String(value || '')
         .normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toUpperCase();
     const isManagerial = (person) => MANAGERIAL_POSITIONS.includes(normalizePos(person.position));
