@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { getFirestore, collection, query, where, getDocs, doc, getDoc, updateDoc, onSnapshot } from "../lib/supabase/firestoreCompat";
 import { useAuth } from "../contexts/AuthContext";
 // import ExtraHoursForm from "./ExtraHoursForm"; // ELIMINADO
@@ -32,7 +33,14 @@ import { MOTIVATIONAL_QUOTES } from "../constants/quotes";
 import ModalSelectorDePosiciones from "./ModalSelectorDePosiciones";
 
 const CollaboratorDashboard = () => {
-  const { currentUser, logout } = useAuth();
+  const { currentUser, logout, userRole, updatePassword } = useAuth();
+  const navigate = useNavigate();
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordSuccess, setPasswordSuccess] = useState(false);
   const [perfil, setPerfil] = useState(null);
   const [storeName, setStoreName] = useState("");
   const [loading, setLoading] = useState(true);
@@ -49,6 +57,33 @@ const CollaboratorDashboard = () => {
   const [storeStaff, setStoreStaff] = useState([]);
   const [selectedTrainerStaff, setSelectedTrainerStaff] = useState(null);
   const [storeRequirements, setStoreRequirements] = useState([]);
+
+  const handleChangePassword = async () => {
+    setPasswordError("");
+    if (newPassword.length < 6) {
+      setPasswordError("La contraseña debe tener al menos 6 caracteres.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordError("Las contraseñas no coinciden.");
+      return;
+    }
+    setPasswordSaving(true);
+    try {
+      await updatePassword(newPassword);
+      setPasswordSuccess(true);
+      setNewPassword("");
+      setConfirmPassword("");
+      setTimeout(() => {
+        setShowPasswordModal(false);
+        setPasswordSuccess(false);
+      }, 2000);
+    } catch (err) {
+      setPasswordError(err?.message || "No se pudo cambiar la contraseña.");
+    } finally {
+      setPasswordSaving(false);
+    }
+  };
 
   const isRestricted = () => {
     if (isHealthCardBlocked()) return true;
@@ -383,16 +418,90 @@ const CollaboratorDashboard = () => {
               </h1>
               <p className="text-gray-600 mt-1">Panel de colaborador</p>
             </div>
-            <button
-              onClick={logout}
-              className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-gray-600 to-gray-700 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
-            >
-              <LogOut className="w-4 h-4" />
-              Cerrar sesión
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {(userRole === 'trainer' || userRole === 'admin' || userRole === 'superadmin') && (
+                <button
+                  onClick={() => navigate('/entrenamiento')}
+                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                >
+                  <Award className="w-4 h-4" />
+                  Ir a Entrenamiento
+                </button>
+              )}
+              <button
+                onClick={() => { setShowPasswordModal(true); setPasswordError(""); setPasswordSuccess(false); setNewPassword(""); setConfirmPassword(""); }}
+                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+              >
+                <Lock className="w-4 h-4" />
+                Cambiar contraseña
+              </button>
+              <button
+                onClick={logout}
+                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-gray-600 to-gray-700 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+              >
+                <LogOut className="w-4 h-4" />
+                Cerrar sesión
+              </button>
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Modal Cambiar Contraseña */}
+      {showPasswordModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                <Lock className="w-5 h-5 text-blue-600" /> Cambiar contraseña
+              </h3>
+              <button onClick={() => setShowPasswordModal(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            {passwordSuccess ? (
+              <div className="flex flex-col items-center py-6 text-center">
+                <CheckCircle className="w-12 h-12 text-green-500 mb-2" />
+                <p className="font-semibold text-gray-700">¡Contraseña actualizada!</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-600 mb-1">Nueva contraseña</label>
+                  <input
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    minLength={6}
+                    className="w-full border border-gray-300 p-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400 text-sm"
+                    placeholder="Mínimo 6 caracteres"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-600 mb-1">Confirmar contraseña</label>
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    minLength={6}
+                    className="w-full border border-gray-300 p-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400 text-sm"
+                    placeholder="Repite la contraseña"
+                  />
+                </div>
+                {passwordError && <p className="text-red-500 text-sm">{passwordError}</p>}
+                <button
+                  onClick={handleChangePassword}
+                  disabled={passwordSaving}
+                  className="w-full bg-gradient-to-r from-blue-600 to-blue-700 text-white py-2.5 rounded-lg font-semibold shadow-md hover:shadow-lg disabled:opacity-60 flex items-center justify-center gap-2"
+                >
+                  <Save className="w-4 h-4" />
+                  {passwordSaving ? "Guardando..." : "Guardar contraseña"}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Información del perfil */}

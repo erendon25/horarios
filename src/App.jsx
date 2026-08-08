@@ -33,8 +33,6 @@ function AppRouter() {
             ? '/superadmin'
             : userRole === 'admin'
               ? '/admin'
-              : userRole === 'trainer'
-                ? '/entrenamiento'
               : '/staff'
         } />
       } />

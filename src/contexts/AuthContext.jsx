@@ -123,8 +123,13 @@ export function AuthProvider({ children }) {
     if (error) throw error;
   };
 
+  const updatePassword = async (newPassword) => {
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) throw error;
+  };
+
   return (
-    <AuthContext.Provider value={{ currentUser, userRole, userData, login, logout, register, resetPassword }}>
+    <AuthContext.Provider value={{ currentUser, userRole, userData, login, logout, register, resetPassword, updatePassword }}>
       {!loading && children}
     </AuthContext.Provider>
   );

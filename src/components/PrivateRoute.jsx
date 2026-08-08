@@ -8,13 +8,16 @@ function PrivateRoute({ children, role }) {
 
   const allowed = userRole === role
     || (role === "admin" && userRole === "superadmin")
-    || (role === "trainer" && ["admin", "superadmin"].includes(userRole));
+    || (role === "trainer" && ["admin", "superadmin"].includes(userRole))
+    // El dashboard de colaborador es el panel personal de cualquier miembro:
+    // entrenadores, admins y superadmins también pueden verlo.
+    || (role === "collaborator" && ["trainer", "admin", "superadmin"].includes(userRole));
   if (!role || allowed) return children;
 
   const destination = {
     superadmin: "/superadmin",
     admin: "/admin",
-    trainer: "/entrenamiento",
+    trainer: "/staff",
     collaborator: "/staff",
   }[userRole] ?? "/login";
   return <Navigate to={destination} />;

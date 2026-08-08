@@ -61,10 +61,8 @@ function Login() {
                     navigate('/admin');
                     break;
                 case 'collaborator':
-                    navigate('/staff');
-                    break;
                 case 'trainer':
-                    navigate('/entrenamiento');
+                    navigate('/staff');
                     break;
                 default:
                     setError(`Rol no reconocido: "${userRole ?? 'null'}". Contacta a un administrador para corregirlo en Supabase (user_profiles.role debe ser superadmin, admin, collaborator o trainer).`);
