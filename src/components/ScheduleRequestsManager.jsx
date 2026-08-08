@@ -16,7 +16,13 @@ const ScheduleRequestsManager = ({ storeId }) => {
     const [loading, setLoading] = useState(true);
     const [filterStatus, setFilterStatus] = useState('pending');
     const [staffMap, setStaffMap] = useState({});
+    const [staffMeta, setStaffMeta] = useState({});
     const [loadError, setLoadError] = useState('');
+    const [actionBusyId, setActionBusyId] = useState(null);
+    const todayIso = (() => {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    })();
 
     useEffect(() => {
         if (!storeId) {
@@ -52,11 +58,18 @@ const ScheduleRequestsManager = ({ storeId }) => {
         const fetchStaff = async () => {
             const staffSnap = await getDocs(query(collection(db, 'staff_profiles'), where('storeId', '==', storeId)));
             const sMap = {};
+            const meta = {};
             staffSnap.forEach(doc => {
                 const data = doc.data();
-                sMap[doc.id] = `${data.name} ${data.lastName}`;
+                sMap[doc.id] = `${data.name || ''} ${data.lastName || ''}`.trim() || data.email || doc.id;
+                meta[doc.id] = {
+                    status: data.status,
+                    cessationDate: data.cessationDate,
+                    reconstructed: data.reconstructed_from_history === true,
+                };
             });
             setStaffMap(sMap);
+            setStaffMeta(meta);
         };
         fetchStaff().catch((error) => {
             console.error('Error loading staff for schedule requests:', error);
@@ -67,19 +80,47 @@ const ScheduleRequestsManager = ({ storeId }) => {
 
     const handleAction = async (requestId, status) => {
         const db = getFirestore();
+        const reviewerId = currentUser?.id ?? currentUser?.uid ?? null;
+        setActionBusyId(requestId);
         try {
             await updateDoc(doc(db, 'schedule_requests', requestId), {
                 status,
-                reviewedBy: currentUser.uid,
+                reviewedBy: reviewerId,
                 reviewedAt: serverTimestamp()
             });
         } catch (error) {
             console.error(`Error updating request to ${status}:`, error);
-            alert('Error al actualizar la solicitud.');
+            alert(`Error al actualizar la solicitud: ${error?.message || error}`);
+        } finally {
+            setActionBusyId(null);
         }
     };
 
-    const filteredRequests = requests.filter(r => r.status === filterStatus);
+    const isStaffInactive = (staffId) => {
+        const meta = staffMeta[staffId];
+        if (!meta) return false;
+        if (meta.reconstructed) return true;
+        if (meta.status === 'inactive') return true;
+        if (meta.cessationDate) {
+            try {
+                const cess = new Date(meta.cessationDate + 'T00:00:00');
+                cess.setHours(0, 0, 0, 0);
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                if (cess < today) return true;
+            } catch {}
+        }
+        return false;
+    };
+
+    const filteredRequests = requests.filter(r => {
+        if (r.status !== filterStatus) return false;
+        if (filterStatus === 'pending') {
+            if (r.date && r.date < todayIso) return false;
+            if (isStaffInactive(r.staffId)) return false;
+        }
+        return true;
+    });
 
     const shiftLabels = {
         apertura: 'Apertura',
@@ -189,17 +230,19 @@ const ScheduleRequestsManager = ({ storeId }) => {
                                 <div className="flex gap-3">
                                     <button
                                         onClick={() => handleAction(req.id, 'rejected')}
-                                        className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-white border-2 border-red-100 text-red-600 rounded-xl text-sm font-bold hover:bg-red-50 transition-all"
+                                        disabled={actionBusyId === req.id}
+                                        className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-white border-2 border-red-100 text-red-600 rounded-xl text-sm font-bold hover:bg-red-50 disabled:opacity-60 disabled:cursor-not-allowed transition-all"
                                     >
                                         <X className="w-4 h-4" />
-                                        Rechazar
+                                        {actionBusyId === req.id ? 'Procesando...' : 'Rechazar'}
                                     </button>
                                     <button
                                         onClick={() => handleAction(req.id, 'approved')}
-                                        className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-green-600 text-white rounded-xl text-sm font-bold hover:bg-green-700 shadow-md transition-all transform hover:scale-[1.02]"
+                                        disabled={actionBusyId === req.id}
+                                        className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-green-600 text-white rounded-xl text-sm font-bold hover:bg-green-700 shadow-md disabled:opacity-60 disabled:cursor-not-allowed transition-all transform hover:scale-[1.02]"
                                     >
                                         <Check className="w-4 h-4" />
-                                        Aprobar
+                                        {actionBusyId === req.id ? 'Procesando...' : 'Aprobar'}
                                     </button>
                                 </div>
                             )}
