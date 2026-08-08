@@ -138,3 +138,36 @@ from public.staff_profiles sp
 where sp.store_id is null
   and coalesce(sp.status, 'active') <> 'inactive'
 order by sp.last_name, sp.first_name;
+
+-- ============================================================
+-- CHEQUEO 3: ¿Pueden auto-registrarse? (depende de tener email válido)
+-- El auto-enlace por correo solo funciona si staff_profiles.email es válido.
+-- ============================================================
+
+-- 3a. Resumen por tienda: cuántos activos tienen email válido vs sin email
+select
+  s.name as tienda,
+  count(*) as total_activos,
+  count(*) filter (
+    where sp.email is not null and sp.email ~* '^[^\s@]+@[^\s@]+\.[^\s@]+$'
+  ) as con_email_valido,
+  count(*) filter (
+    where sp.email is null or sp.email = '' or sp.email !~* '^[^\s@]+@[^\s@]+\.[^\s@]+$'
+  ) as sin_email
+from public.staff_profiles sp
+join public.stores s on s.id = sp.store_id
+where coalesce(sp.status,'active') <> 'inactive'
+  and (sp.cessation_date is null or sp.cessation_date >= current_date)
+group by s.name
+order by s.name;
+
+-- 3b. Lista nominal de activos SIN email válido (no podrán auto-registrarse
+--     hasta que se les cargue el correo).
+select
+  s.name as tienda, sp.first_name, sp.last_name, sp.position, sp.email
+from public.staff_profiles sp
+left join public.stores s on s.id = sp.store_id
+where coalesce(sp.status,'active') <> 'inactive'
+  and (sp.cessation_date is null or sp.cessation_date >= current_date)
+  and (sp.email is null or sp.email = '' or sp.email !~* '^[^\s@]+@[^\s@]+\.[^\s@]+$')
+order by s.name nulls first, sp.last_name, sp.first_name;
