@@ -1,6 +1,6 @@
 
 import React, { useEffect, useState } from 'react';
-import { getFirestore, doc, onSnapshot, query, collection, where } from '../lib/supabase/firestoreCompat';
+import { getFirestore, doc, getDoc, onSnapshot, query, collection, where, getDocs } from '../lib/supabase/firestoreCompat';
 import { Calendar, Clock, MapPin, Coffee, AlertCircle, ChevronLeft, ChevronRight, ClipboardList, X, Download } from 'lucide-react';
 import { exportGroupedPositionsPDF } from './PDFExport';
 

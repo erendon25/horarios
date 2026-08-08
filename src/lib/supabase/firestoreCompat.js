@@ -299,10 +299,19 @@ export async function getDoc(ref) {
   if (segments[0] === "schedules") {
     const match = id.match(/^(.*?)_(\d{4}-\d{2}-\d{2})_to_\d{4}-\d{2}-\d{2}$/);
     if (match) {
+      // Resolver ids legacy de Firebase (no-UUID) a su UUID real por firestore_id,
+      // para no romper el filtro sobre la columna uuid staff_id.
+      let staffId = match[1];
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(staffId)) {
+        const resolved = await supabase.from("staff_profiles").select("id").eq("firestore_id", staffId).maybeSingle();
+        throwIfError(resolved.error);
+        if (!resolved.data) return new DocumentSnapshot(ref, id, undefined);
+        staffId = resolved.data.id;
+      }
       const result = await supabase
         .from("schedule_weeks")
         .select("*,staff:staff_profiles(user_id),schedule_shifts(*)")
-        .eq("staff_id", match[1])
+        .eq("staff_id", staffId)
         .eq("week_start", match[2])
         .maybeSingle();
       throwIfError(result.error);
