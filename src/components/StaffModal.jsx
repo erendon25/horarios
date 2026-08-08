@@ -113,7 +113,7 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
             const currentRole = userSnap.data().role;
             if (currentRole !== 'superadmin') {
               let newRole = 'collaborator';
-              if (form.position === 'ADMINISTRADOR' || form.position === 'GERENTE') {
+              if (form.position === 'GERENTE') {
                 newRole = 'admin';
               } else if (form.position === 'ENTRENADOR') {
                 newRole = 'trainer';
@@ -232,9 +232,7 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
             <select name="position" value={form.position} onChange={handleChange} className={inputCls}>
               <option value="COLABORADOR">COLABORADOR</option>
               <option value="ENTRENADOR">ENTRENADOR / TRAINER</option>
-              <option value="LIDER">LIDER / ENCARGADO</option>
               <option value="ASISTENTE">ASISTENTE</option>
-              <option value="ADMINISTRADOR">ADMINISTRADOR</option>
               <option value="GERENTE">GERENTE</option>
             </select>
           </div>

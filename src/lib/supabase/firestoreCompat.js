@@ -472,20 +472,29 @@ async function persist(ref, data, merge) {
       prepared[field] = path;
     }
   }
+  const isUuid = (value) => typeof value === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
   const columns = columnsFor(root, prepared, legacy(previous));
-  if (["staff_profiles", "stores"].includes(root)) columns.id = id;
-  else if (root === "users") columns.id = id;
-  else if (!/^\d+$/.test(id)) columns.firestore_id = id;
   const entityWithUuid = ["staff_profiles", "stores", "users"].includes(root);
   let result;
   if (root === "users") {
     result = await supabase.from(table).update(columns).eq("id", id).select("id").single();
-  } else if (!entityWithUuid && /^\d+$/.test(id)) {
+  } else if (entityWithUuid) {
+    // id es uuid con default gen_random_uuid(). Si el id entrante es un uuid
+    // válido lo respetamos; si es un id legacy de Firebase lo tratamos como
+    // firestore_id para no violar el tipo uuid de la columna id.
+    if (isUuid(id)) {
+      columns.id = id;
+      result = await supabase.from(table).upsert(columns).select("id").single();
+    } else {
+      columns.firestore_id = id;
+      result = await supabase.from(table).upsert(columns, { onConflict: "firestore_id" }).select("id").single();
+    }
+  } else if (/^\d+$/.test(id)) {
     result = await supabase.from(table).update(columns).eq("id", Number(id)).select("id").single();
-  } else if (!entityWithUuid) {
-    result = await supabase.from(table).upsert(columns, { onConflict: "firestore_id" }).select("id").single();
   } else {
-    result = await supabase.from(table).upsert(columns).select("id").single();
+    columns.firestore_id = id;
+    result = await supabase.from(table).upsert(columns, { onConflict: "firestore_id" }).select("id").single();
   }
   throwIfError(result.error);
   return result.data?.id ?? id;
