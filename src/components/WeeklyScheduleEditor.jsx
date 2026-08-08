@@ -1161,6 +1161,18 @@ export default function WeeklyScheduleEditor() {
         return (effModality || '').toLowerCase() === 'full-time' ? 0 : 1;
     };
 
+    // Equipo gerencial arriba (igual que el PDF). Los entrenadores van con el personal.
+    const MANAGERIAL_POSITIONS = ['GERENTE', 'ASISTENTE', 'LIDER'];
+    const isManagerial = (person) => {
+        const pos = String(person?.position || '')
+            .normalize('NFD')
+            .replace(/[̀-ͯ]/g, '')
+            .trim()
+            .toUpperCase();
+        return MANAGERIAL_POSITIONS.includes(pos);
+    };
+    const managerialOrder = (person) => (isManagerial(person) ? 0 : 1);
+
     // 2. Filtrar activeStaff según inputs de la UI (Modalidad, Posición)
     // Usamos activeStaff como base para que los cesados no aparezcan en la tabla ni en los filtros
     const filteredStaff = activeStaff.filter(person => {
@@ -1199,7 +1211,10 @@ export default function WeeklyScheduleEditor() {
 
         return true;
     }).sort((a, b) => {
-        // Full Time primero, Part Time abajo (igual que el PDF de horario)
+        // Equipo gerencial (Gerente/Asistente/Líder) primero para diferenciarlo
+        const managerialDiff = managerialOrder(a) - managerialOrder(b);
+        if (managerialDiff !== 0) return managerialDiff;
+        // Luego Full Time primero, Part Time abajo (igual que el PDF de horario)
         const orderDiff = modalityOrder(a) - modalityOrder(b);
         if (orderDiff !== 0) return orderDiff;
         // Dentro del mismo grupo: orden alfabético por nombre
@@ -1762,13 +1777,14 @@ export default function WeeklyScheduleEditor() {
                                                 }
                                             }
 
+                                            const managerial = isManagerial(p);
                                             return (
                                                 <tr
                                                     key={p.id}
                                                     ref={el => staffRowRefs.current[p.id] = el}
-                                                    className={`hover:bg-blue-50 transition-colors duration-150 group ${isCeased ? 'bg-red-50' : ''} ${highlightedStaffId === p.id ? 'bg-amber-100 ring-2 ring-amber-400 ring-inset' : ''}`}
+                                                    className={`hover:bg-blue-50 transition-colors duration-150 group ${isCeased ? 'bg-red-50' : managerial ? 'bg-indigo-50/60' : ''} ${highlightedStaffId === p.id ? 'bg-amber-100 ring-2 ring-amber-400 ring-inset' : ''}`}
                                                 >
-                                                    <td className="px-4 py-4 relative md:sticky md:left-0 z-10 bg-white group-hover:bg-blue-50 min-w-[150px] max-w-[150px] md:min-w-[240px] md:max-w-[240px]">
+                                                    <td className={`px-4 py-4 relative md:sticky md:left-0 z-10 group-hover:bg-blue-50 min-w-[150px] max-w-[150px] md:min-w-[240px] md:max-w-[240px] ${managerial ? 'bg-indigo-50 border-l-4 border-indigo-400' : 'bg-white'}`}>
                                                         <div className="flex items-start gap-2">
                                                             <div className="flex-1 min-w-0 pr-2">
                                                                 <div
@@ -1793,6 +1809,11 @@ export default function WeeklyScheduleEditor() {
                                                                     {p.position === 'ENTRENADOR' && (
                                                                         <span title="Entrenador / Trainer" className="ml-1.5 px-1.5 py-0.5 bg-orange-100 text-orange-700 text-[10px] font-bold rounded border border-orange-200 inline-block align-middle" style={{ lineHeight: '1' }}>
                                                                             TRAINER
+                                                                        </span>
+                                                                    )}
+                                                                    {managerial && (
+                                                                        <span title="Equipo gerencial" className="ml-1.5 px-1.5 py-0.5 bg-indigo-100 text-indigo-700 text-[10px] font-bold rounded border border-indigo-200 inline-block align-middle" style={{ lineHeight: '1' }}>
+                                                                            {p.position}
                                                                         </span>
                                                                     )}
 
