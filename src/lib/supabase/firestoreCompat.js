@@ -354,6 +354,21 @@ function columnsFor(root, data, previous = {}) {
   return columns;
 }
 
+const SCHEDULE_NUMERIC_FIELDS = new Set(["extraHours", "extraHoursPre", "extraHoursPost", "extraMinutes", "extraMinutesPre", "extraMinutesPost"]);
+const sanitizeScheduleMetadata = (metadata) => {
+  const out = {};
+  for (const [key, value] of Object.entries(metadata ?? {})) {
+    if (SCHEDULE_NUMERIC_FIELDS.has(key)) {
+      if (value === "" || value === null || value === undefined) continue;
+      const num = Number(value);
+      out[key] = Number.isFinite(num) ? num : null;
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+};
+
 async function saveSchedule(ref, data) {
   const match = ref.path.split("/").at(-1).match(/^(.*?)_(\d{4}-\d{2}-\d{2})_to_\d{4}-\d{2}-\d{2}$/);
   const staffId = data.staffId ?? match?.[1];
@@ -362,7 +377,7 @@ async function saveSchedule(ref, data) {
   const days = WEEKDAYS.map((day, index) => {
     const shift = data[day] ?? {};
     const { start: shiftStart = "", end = "", position = "", off = false, feriado = false, holiday = false, notes = "", ...metadata } = shift;
-    return { date: addDays(start, index), start: shiftStart, end, position, off: Boolean(off), holiday: Boolean(feriado || holiday), notes, metadata };
+    return { date: addDays(start, index), start: shiftStart, end, position, off: Boolean(off), holiday: Boolean(feriado || holiday), notes, metadata: sanitizeScheduleMetadata(metadata) };
   });
   const result = await supabase.rpc("save_weekly_schedules", { p_week_start: start, p_changes: [{ staffId, days }] });
   throwIfError(result.error);
