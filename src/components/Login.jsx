@@ -4,6 +4,26 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import background from '../assets/background.png';
 
+// Traduce el error de Supabase a un mensaje claro para el colaborador.
+function loginErrorMessage(err) {
+    const code = err?.code ?? '';
+    const raw = (err?.message ?? '').toLowerCase();
+
+    // Cuenta creada pero sin confirmar el correo: no puede iniciar sesión todavía.
+    if (code === 'email_not_confirmed' || raw.includes('not confirmed')) {
+        return 'Tu cuenta aún no está confirmada, por eso no puedes entrar todavía. Pide a un administrador que la active.';
+    }
+    // Demasiados intentos seguidos.
+    if (err?.status === 429 || code === 'over_request_rate_limit' || raw.includes('rate limit')) {
+        return 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.';
+    }
+    // Correo o contraseña incorrectos.
+    if (code === 'invalid_credentials' || raw.includes('invalid login credentials')) {
+        return 'Correo o contraseña incorrectos.';
+    }
+    return 'No se pudo iniciar sesión. Verifica tus datos e inténtalo de nuevo.';
+}
+
 function Login() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
@@ -23,8 +43,9 @@ function Login() {
             setLoading(true);
             await login(email, password);
             setSubmitted(true);
-        } catch {
-            setError('Credenciales incorrectas.');
+        } catch (err) {
+            console.error(err);
+            setError(loginErrorMessage(err));
         } finally {
             setLoading(false);
         }
