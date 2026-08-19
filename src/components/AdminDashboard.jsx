@@ -1399,7 +1399,11 @@ function AdminDashboard() {
                 if (extraMinutesPost > 0) activityParts.push(`Salida: ${formatDurationMinutes(extraMinutesPost)}`);
 
                 const payload = {
-                    uid: person.uid || person.id,
+                    // user_id (extra_hours.user_id) referencia auth.users; el personal
+                    // emparejado por DNI puede no tener cuenta vinculada, en cuyo caso
+                    // person.uid es null. Nunca usar person.id (id de staff_profiles)
+                    // como fallback: violaria la FK extra_hours_user_id_fkey.
+                    uid: person.uid || null,
                     staffId: person.id,
                     dni: item.dni,
                     name: person.name || '',

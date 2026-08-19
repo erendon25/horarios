@@ -4,6 +4,7 @@ export const db = Object.freeze({ kind: "supabase-database" });
 export const getFirestore = () => db;
 
 const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ROOT_TABLE = {
   users: "user_profiles",
   staff_profiles: "staff_profiles",
@@ -458,9 +459,25 @@ async function persist(ref, data, merge) {
   }
   let prepared = merge ? { ...previous, ...data } : { ...data };
   if (["extra_hours", "feriados_trabajados", "schedule_requests"].includes(root) && prepared.uid && (!prepared.staffId || !prepared.storeId)) {
-    const owner = await supabase.from("staff_profiles").select("id,store_id").eq("user_id", prepared.uid).maybeSingle();
+    // El uid entrante puede ser un user_id de auth, el id del perfil de
+    // staff_profiles, o un id legacy de Firebase. Resolvemos el perfil por
+    // cualquiera de ellos para completar staff_id/store_id y, sobre todo,
+    // fijar user_id al auth.users real del colaborador (o null si no tiene
+    // cuenta). Nunca conservar el id de staff_profiles como user_id: violaria
+    // la FK *_user_id_fkey (user_id referencia auth.users).
+    const key = prepared.uid;
+    const conditions = UUID_RE.test(key) ? [`id.eq.${key}`, `user_id.eq.${key}`] : [`firestore_id.eq.${key}`];
+    const owner = await supabase.from("staff_profiles").select("id,store_id,user_id").or(conditions.join(",")).limit(1);
     throwIfError(owner.error);
-    if (owner.data) prepared = { ...prepared, staffId: prepared.staffId ?? owner.data.id, storeId: prepared.storeId ?? owner.data.store_id };
+    const profile = owner.data?.[0];
+    if (profile) {
+      prepared = {
+        ...prepared,
+        staffId: prepared.staffId ?? profile.id,
+        storeId: prepared.storeId ?? profile.store_id,
+        uid: profile.user_id ?? null,
+      };
+    }
   }
   if (root === "extra_hours") {
     const toMinutes = (start, end) => {
