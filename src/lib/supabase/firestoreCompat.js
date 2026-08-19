@@ -458,25 +458,30 @@ async function persist(ref, data, merge) {
     }
   }
   let prepared = merge ? { ...previous, ...data } : { ...data };
-  if (["extra_hours", "feriados_trabajados", "schedule_requests"].includes(root) && prepared.uid && (!prepared.staffId || !prepared.storeId)) {
-    // El uid entrante puede ser un user_id de auth, el id del perfil de
-    // staff_profiles, o un id legacy de Firebase. Resolvemos el perfil por
-    // cualquiera de ellos para completar staff_id/store_id y, sobre todo,
-    // fijar user_id al auth.users real del colaborador (o null si no tiene
-    // cuenta). Nunca conservar el id de staff_profiles como user_id: violaria
-    // la FK *_user_id_fkey (user_id referencia auth.users).
-    const key = prepared.uid;
-    const conditions = UUID_RE.test(key) ? [`id.eq.${key}`, `user_id.eq.${key}`] : [`firestore_id.eq.${key}`];
-    const owner = await supabase.from("staff_profiles").select("id,store_id,user_id").or(conditions.join(",")).limit(1);
-    throwIfError(owner.error);
-    const profile = owner.data?.[0];
-    if (profile) {
-      prepared = {
-        ...prepared,
-        staffId: prepared.staffId ?? profile.id,
-        storeId: prepared.storeId ?? profile.store_id,
-        uid: profile.user_id ?? null,
-      };
+  if (["extra_hours", "feriados_trabajados", "schedule_requests"].includes(root)) {
+    // staff_id y user_id son columnas uuid con FK. El identificador entrante
+    // (staffId o uid) puede ser: el uuid del perfil, un user_id de auth, o un
+    // id legacy de Firebase (no-uuid). Resolvemos el perfil real para:
+    //   - normalizar staff_id al uuid de staff_profiles (un id legacy como
+    //     staff_id rompe con "invalid input syntax for type uuid"),
+    //   - completar store_id,
+    //   - fijar user_id al auth.users real o null (un id de staff_profiles
+    //     como user_id viola la FK *_user_id_fkey).
+    const needsResolve = !prepared.staffId || !UUID_RE.test(prepared.staffId) || !prepared.storeId;
+    const key = prepared.staffId || prepared.uid;
+    if (needsResolve && key) {
+      const conditions = UUID_RE.test(key) ? [`id.eq.${key}`, `user_id.eq.${key}`] : [`firestore_id.eq.${key}`];
+      const owner = await supabase.from("staff_profiles").select("id,store_id,user_id").or(conditions.join(",")).limit(1);
+      throwIfError(owner.error);
+      const profile = owner.data?.[0];
+      if (profile) {
+        prepared = {
+          ...prepared,
+          staffId: profile.id,
+          storeId: prepared.storeId ?? profile.store_id,
+          uid: profile.user_id ?? null,
+        };
+      }
     }
   }
   if (root === "extra_hours") {
