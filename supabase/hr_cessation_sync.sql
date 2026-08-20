@@ -40,17 +40,38 @@ where c.staff_id = sp.id
 
 insert into public.cessations (
   staff_id, store_id, join_date, cessation_date, is_modality_change,
-  cessation_reason, real_reason
+  cessation_reason, real_reason, legacy_data
 )
 select
   sp.id, sp.store_id, sp.join_date, sp.cessation_date, false,
-  'RENUNCIA VOLUNTARIA', 'MEJORA ECONÓMICA'
+  'RENUNCIA VOLUNTARIA', 'MEJORA ECONÓMICA',
+  jsonb_strip_nulls(jsonb_build_object(
+    'name', sp.first_name,
+    'lastName', sp.last_name,
+    'dni', sp.dni,
+    'gender', sp.gender,
+    'position', sp.position
+  ))
 from public.staff_profiles sp
 where sp.cessation_date is not null
   and not exists (
     select 1 from public.cessations c
     where c.staff_id = sp.id and not c.is_modality_change
   );
+
+-- Reparar registros ya existentes que fueron creados por el trigger sin identidad visible.
+update public.cessations c
+set
+  legacy_data = coalesce(c.legacy_data, '{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object(
+    'name', sp.first_name,
+    'lastName', sp.last_name,
+    'dni', sp.dni,
+    'gender', sp.gender,
+    'position', sp.position
+  )),
+  updated_at = now()
+from public.staff_profiles sp
+where c.staff_id = sp.id;
 
 create unique index if not exists cessations_one_regular_per_staff_idx
   on public.cessations (staff_id)
@@ -69,23 +90,34 @@ language plpgsql
 security invoker
 set search_path = ''
 as $$
+declare
+  identity_data jsonb;
 begin
+  identity_data := jsonb_strip_nulls(jsonb_build_object(
+    'name', new.first_name,
+    'lastName', new.last_name,
+    'dni', new.dni,
+    'gender', new.gender,
+    'position', new.position
+  ));
+
   if new.cessation_date is null then
     delete from public.cessations
     where staff_id = new.id and not is_modality_change;
   else
     insert into public.cessations (
       staff_id, store_id, join_date, cessation_date, is_modality_change,
-      cessation_reason, real_reason
+      cessation_reason, real_reason, legacy_data
     ) values (
       new.id, new.store_id, new.join_date, new.cessation_date, false,
-      'RENUNCIA VOLUNTARIA', 'MEJORA ECONÓMICA'
+      'RENUNCIA VOLUNTARIA', 'MEJORA ECONÓMICA', identity_data
     )
     on conflict (staff_id) where not is_modality_change
     do update set
       store_id = excluded.store_id,
       join_date = excluded.join_date,
       cessation_date = excluded.cessation_date,
+      legacy_data = coalesce(cessations.legacy_data, '{}'::jsonb) || excluded.legacy_data,
       updated_at = now();
   end if;
 
@@ -97,7 +129,7 @@ revoke all on function public.sync_staff_cessation_record() from public, anon, a
 
 drop trigger if exists staff_profiles_sync_cessation on public.staff_profiles;
 create trigger staff_profiles_sync_cessation
-after insert or update of cessation_date, store_id, join_date
+after insert or update of cessation_date, store_id, join_date, first_name, last_name, dni, gender, position
 on public.staff_profiles
 for each row execute function public.sync_staff_cessation_record();
 
