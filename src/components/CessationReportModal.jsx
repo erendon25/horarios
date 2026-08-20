@@ -2,9 +2,9 @@ import React, { useMemo } from 'react';
 import { X, UserX, Calendar } from 'lucide-react';
 
 export default function CessationReportModal({ staff, onClose }) {
-    // Filter only staff with terminationDate
+    // Filter only staff with cessationDate
     const ceasedStaff = useMemo(() => {
-        return staff.filter(s => s.terminationDate).sort((a, b) => new Date(b.terminationDate) - new Date(a.terminationDate));
+        return staff.filter(s => s.cessationDate).sort((a, b) => new Date(b.cessationDate) - new Date(a.cessationDate));
     }, [staff]);
 
     const metrics = useMemo(() => {
@@ -16,7 +16,7 @@ export default function CessationReportModal({ staff, onClose }) {
 
         // Group by Month (YYYY-MM)
         const byMonth = ceasedStaff.reduce((acc, curr) => {
-            const date = new Date(curr.terminationDate);
+            const date = new Date(curr.cessationDate);
             const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
             acc[key] = (acc[key] || 0) + 1;
             return acc;
@@ -92,7 +92,7 @@ export default function CessationReportModal({ staff, onClose }) {
                             <tbody className="divide-y divide-gray-100">
                                 {ceasedStaff.length > 0 ? (
                                     ceasedStaff.map((person) => {
-                                        const [y, m, d] = person.terminationDate.split('-').map(Number);
+                                        const [y, m, d] = person.cessationDate.split('-').map(Number);
                                         const termDate = new Date(y, m - 1, d);
                                         const today = new Date();
                                         today.setHours(0, 0, 0, 0);
@@ -105,7 +105,7 @@ export default function CessationReportModal({ staff, onClose }) {
                                                 <td className="px-4 py-3 text-gray-600">{person.modality}</td>
                                                 <td className="px-4 py-3 text-gray-600 flex items-center gap-2">
                                                     <Calendar className="w-4 h-4 text-gray-400" />
-                                                    {person.terminationDate}
+                                                    {person.cessationDate}
                                                 </td>
                                                 <td className="px-4 py-3">
                                                     <span className={`px-2 py-1 rounded text-xs font-medium ${isPast ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
