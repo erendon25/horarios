@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getFirestore, doc, getDoc } from "firebase/firestore";
+import { getFirestore, doc, getDoc } from "../lib/supabase/firestoreCompat";
 import { useParams } from "react-router-dom";
 
 function StudyScheduleViewer() {

@@ -6,7 +6,7 @@ import {
   updateDoc,
   arrayUnion,
   collection
-} from "firebase/firestore";
+} from "../lib/supabase/firestoreCompat";
 import { useAuth } from "../contexts/AuthContext";
 
 function HolidayForm() {

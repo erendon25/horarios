@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Search, Calculator, DollarSign, ListOrdered, Users, Calendar, TrendingUp, TrendingDown, Target, Building2 } from 'lucide-react';
-import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { collection, query, where, getDocs, doc, getDoc } from '../lib/supabase/firestoreCompat';
+import { db } from '../supabase';
 
 const VHLConsultation = ({ storeId, onClose }) => {
     const [viewType, setViewType] = useState('day'); // 'day', 'week', 'month'

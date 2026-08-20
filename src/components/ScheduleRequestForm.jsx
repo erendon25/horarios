@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, serverTimestamp } from '../lib/supabase/firestoreCompat';
 import { useAuth } from '../contexts/AuthContext';
 import { Clock, Calendar, MessageSquare, Send, X, AlertCircle } from 'lucide-react';
 
@@ -36,8 +36,8 @@ const ScheduleRequestForm = ({ perfil, onSuccess }) => {
                 storeId: perfil.storeId,
                 date: formData.date,
                 shiftType: formData.shiftType,
-                startTime: formData.shiftType === 'rango' ? formData.startTime : '',
-                endTime: formData.shiftType === 'rango' ? formData.endTime : '',
+                startTime: formData.shiftType === 'rango' ? formData.startTime : null,
+                endTime: formData.shiftType === 'rango' ? formData.endTime : null,
                 reason: formData.reason,
                 status: 'pending',
                 createdAt: serverTimestamp()
@@ -47,7 +47,7 @@ const ScheduleRequestForm = ({ perfil, onSuccess }) => {
             if (onSuccess) onSuccess();
         } catch (error) {
             console.error('Error al enviar solicitud:', error);
-            alert('Error al enviar la solicitud. Inténtalo de nuevo.');
+            alert(`Error al enviar la solicitud: ${error?.message || 'Inténtalo de nuevo.'}`);
         } finally {
             setLoading(false);
         }

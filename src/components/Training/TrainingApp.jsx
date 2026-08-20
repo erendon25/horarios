@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
-import { collection, query, where, orderBy, limit, getDocs } from 'firebase/firestore';
+import { collection, query, where, orderBy, limit, getDocs } from '../../lib/supabase/firestoreCompat';
 import { Loader2 } from 'lucide-react';
-import { db } from '../../firebase';
+import { db } from '../../supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import TrainingDashboard from './TrainingDashboard';
 import EvaluationForm from './EvaluationForm';
 import EvaluationResult from './EvaluationResult';
 import TrainingStats from './TrainingStats';
+import { isStaffActive } from './staffStatus';
 
 const TrainingApp = () => {
     const { userData } = useAuth();
@@ -24,16 +25,27 @@ const TrainingApp = () => {
         if (!userData?.storeId) return;
         setLoadingDrafts(true);
         try {
-            const q = query(
+            const draftsQuery = query(
                 collection(db, 'training_evaluations'),
                 where('storeId', '==', userData.storeId),
                 where('status', '==', 'draft')
             );
-            const querySnapshot = await getDocs(q);
-            const draftsData = querySnapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data()
-            }));
+            const staffQuery = query(
+                collection(db, 'staff_profiles'),
+                where('storeId', '==', userData.storeId)
+            );
+            const [draftsSnapshot, staffSnapshot] = await Promise.all([
+                getDocs(draftsQuery),
+                getDocs(staffQuery)
+            ]);
+            const activeStaffIds = new Set(
+                staffSnapshot.docs
+                    .filter(snapshot => isStaffActive(snapshot.data()))
+                    .map(snapshot => snapshot.id)
+            );
+            const draftsData = draftsSnapshot.docs
+                .map(doc => ({ id: doc.id, ...doc.data() }))
+                .filter(draft => activeStaffIds.has(draft.collaboratorId));
             setDrafts(draftsData);
         } catch (error) {
             console.error("Error fetching drafts:", error);
@@ -123,7 +135,7 @@ const TrainingApp = () => {
     };
 
     return (
-        <div className="min-h-screen w-full lg:max-w-6xl md:max-w-4xl max-w-md mx-auto bg-white border-x border-gray-100 shadow-2xl relative overflow-hidden flex flex-col">
+        <div className="min-h-[100dvh] w-full max-w-none md:max-w-4xl lg:max-w-6xl mx-auto bg-white md:border-x border-gray-100 md:shadow-2xl relative overflow-x-hidden flex flex-col">
             {/* Loading Overlay */}
             {loadingHistory && (
                 <div className="absolute inset-0 z-50 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center">
@@ -134,21 +146,13 @@ const TrainingApp = () => {
 
             {/* Index Error Overlay */}
             {indexErrorUrl && (
-                <div className="absolute inset-0 z-[60] bg-white p-8 flex flex-col items-center justify-center text-center">
+                <div className="absolute inset-0 z-[60] bg-white p-4 sm:p-8 flex flex-col items-center justify-center text-center">
                     <div className="w-20 h-20 bg-orange-50 rounded-full flex items-center justify-center mb-6">
                         <Loader2 className="w-10 h-10 text-orange-500" />
                     </div>
                     <h2 className="text-2xl font-black text-slate-900 mb-4 tracking-tighter">Activación Requerida</h2>
-                    <p className="text-slate-500 mb-8 max-w-md">Para ver el historial, Firebase necesita activar un índice. Por favor haz clic en el botón de abajo y luego selecciona "Crear índice" en la página que se abrirá.</p>
+                    <p className="text-slate-500 mb-8 max-w-md">No se pudo cargar el historial de evaluaciones desde Supabase. Cierra este aviso e inténtalo nuevamente.</p>
                     <div className="flex flex-col gap-4 w-full max-w-xs">
-                        <a
-                            href={indexErrorUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="bg-slate-900 text-white py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-2xl transition-all hover:bg-black active:scale-95"
-                        >
-                            Ir a Firebase console
-                        </a>
                         <button
                             onClick={() => setIndexErrorUrl(null)}
                             className="text-slate-400 py-3 font-bold uppercase tracking-widest text-[10px]"
@@ -156,7 +160,6 @@ const TrainingApp = () => {
                             Cerrar
                         </button>
                     </div>
-                    <p className="mt-8 text-[9px] text-slate-300 uppercase font-black tracking-[0.2em]">El proceso puede tardar 2-3 minutos después de hacer clic</p>
                 </div>
             )}
 

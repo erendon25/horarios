@@ -1,6 +1,6 @@
 // ✅ scheduleService.js
-import { db } from "../firebase";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { db } from "../supabase";
+import { collection, getDocs, query, where } from "../lib/supabase/firestoreCompat";
 
 export async function getWorkedHolidaysByUid(uid) {
   const q = query(collection(db, "feriados_trabajados"), where("uid", "==", uid));

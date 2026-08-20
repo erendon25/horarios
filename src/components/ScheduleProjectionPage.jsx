@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, AlertCircle, RefreshCw } from "lucide-react";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { collection, getDocs, query, where } from "../lib/supabase/firestoreCompat";
 import { useAuth } from "../contexts/AuthContext";
-import { db } from "../firebase";
+import { db } from "../supabase";
 import ScheduleProjectionDashboard from "./ScheduleProjectionDashboard";
 
 export default function ScheduleProjectionPage() {
@@ -12,6 +12,7 @@ export default function ScheduleProjectionPage() {
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [refreshToken, setRefreshToken] = useState(0);
 
   const fetchStaff = async () => {
     if (!userData?.storeId) {
@@ -32,7 +33,7 @@ export default function ScheduleProjectionPage() {
       setStaff(snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() })));
     } catch (err) {
       console.error("Error al cargar colaboradores para proyeccion:", err);
-      setError("No se pudo cargar la plantilla de colaboradores.");
+      setError("No se pudo cargar la plantilla para calcular el VHL general.");
     } finally {
       setLoading(false);
     }
@@ -41,6 +42,11 @@ export default function ScheduleProjectionPage() {
   useEffect(() => {
     fetchStaff();
   }, [userData?.storeId]);
+
+  const refreshAllData = () => {
+    setRefreshToken((current) => current + 1);
+    fetchStaff();
+  };
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -57,12 +63,12 @@ export default function ScheduleProjectionPage() {
 
           <button
             type="button"
-            onClick={fetchStaff}
+            onClick={refreshAllData}
             disabled={loading}
             className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 disabled:opacity-60 transition-colors"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-            Actualizar plantilla
+            Actualizar datos
           </button>
         </div>
       </div>
@@ -78,10 +84,14 @@ export default function ScheduleProjectionPage() {
 
       {loading ? (
         <div className="min-h-[60vh] flex items-center justify-center text-slate-500 font-semibold">
-          Cargando proyeccion...
+          Cargando ventas, horarios y VHL general...
         </div>
       ) : (
-        <ScheduleProjectionDashboard staffList={staff} storeId={userData?.storeId} />
+        <ScheduleProjectionDashboard
+          staffList={staff}
+          storeId={userData?.storeId}
+          refreshToken={refreshToken}
+        />
       )}
     </div>
   );

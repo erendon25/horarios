@@ -25,8 +25,8 @@ import {
     doc,
     serverTimestamp,
     arrayUnion
-} from 'firebase/firestore';
-import { db } from '../../firebase';
+} from '../../lib/supabase/firestoreCompat';
+import { db } from '../../supabase';
 import {
     SERVICE_GENERAL_POINTS,
     SERVICE_STATIONS,
@@ -34,6 +34,7 @@ import {
     PRODUCTION_GENERAL_POINTS,
     PRODUCTION_STATIONS
 } from '../../constants/trainingPoints';
+import { isStaffActive } from './staffStatus';
 
 const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null }) => {
     const { userData, currentUser } = useAuth();
@@ -64,10 +65,9 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                     where('storeId', '==', userData.storeId)
                 );
                 const querySnapshot = await getDocs(q);
-                const staffData = querySnapshot.docs.map(doc => ({
-                    id: doc.id,
-                    ...doc.data()
-                }));
+                const staffData = querySnapshot.docs
+                    .map(doc => ({ id: doc.id, ...doc.data() }))
+                    .filter(staff => isStaffActive(staff));
                 // Sort by name
                 staffData.sort((a, b) => a.name.localeCompare(b.name));
                 setCollaborators(staffData);
@@ -227,13 +227,13 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
         const isNotCompliant = responses[uniqueId] === false;
 
         return (
-            <div key={point.id} className="bg-white p-6 rounded-[32px] border border-gray-100 shadow-xl shadow-gray-200/40 mb-6 transition-all hover:shadow-orange-500/10">
-                <p className="text-sm font-bold text-slate-800 mb-6 leading-relaxed uppercase tracking-tight">{point.text}</p>
+            <div key={point.id} className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-[32px] border border-gray-100 shadow-xl shadow-gray-200/40 mb-4 sm:mb-6 transition-all hover:shadow-orange-500/10">
+                <p className="text-sm font-bold text-slate-800 mb-4 sm:mb-6 leading-relaxed uppercase tracking-tight">{point.text}</p>
 
-                <div className="flex gap-4 mb-4">
+                <div className="flex gap-2 sm:gap-4 mb-4">
                     <button
                         onClick={() => handleToggle(uniqueId, true)}
-                        className={`flex-1 py-3.5 rounded-[20px] flex items-center justify-center gap-3 font-black text-[10px] uppercase tracking-widest transition-all border-2 ${isCompliant
+                        className={`flex-1 min-w-0 py-3.5 px-2 rounded-xl sm:rounded-[20px] flex items-center justify-center gap-2 sm:gap-3 font-black text-[9px] sm:text-[10px] uppercase tracking-wide sm:tracking-widest transition-all border-2 ${isCompliant
                             ? 'bg-green-500 border-green-500 text-white shadow-xl shadow-green-500/30 active:scale-95'
                             : 'bg-white border-gray-50 text-gray-400 hover:border-gray-200'
                             }`}
@@ -243,7 +243,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                     </button>
                     <button
                         onClick={() => handleToggle(uniqueId, false)}
-                        className={`flex-1 py-3.5 rounded-[20px] flex items-center justify-center gap-3 font-black text-[10px] uppercase tracking-widest transition-all border-2 ${isNotCompliant
+                        className={`flex-1 min-w-0 py-3.5 px-2 rounded-xl sm:rounded-[20px] flex items-center justify-center gap-2 sm:gap-3 font-black text-[9px] sm:text-[10px] uppercase tracking-wide sm:tracking-widest transition-all border-2 ${isNotCompliant
                             ? 'bg-rose-500 border-rose-500 text-white shadow-xl shadow-rose-500/30 active:scale-95'
                             : 'bg-white border-gray-50 text-gray-400 hover:border-gray-200'
                             }`}
@@ -269,15 +269,15 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
     };
 
     return (
-        <div className="flex flex-col h-screen bg-slate-50 relative overflow-hidden">
+        <div className="flex flex-col h-[100dvh] bg-slate-50 relative overflow-hidden">
             {/* Top Bar */}
-            <div className="bg-white px-6 py-6 flex items-center gap-6 shadow-sm z-10 border-b border-gray-100">
-                <button onClick={onCancel} className="p-3 text-gray-400 hover:bg-gray-50 rounded-2xl transition-all active:scale-95">
+            <div className="bg-white px-3 sm:px-6 py-4 sm:py-6 flex items-center gap-3 sm:gap-6 shadow-sm z-10 border-b border-gray-100">
+                <button onClick={onCancel} className="p-2 sm:p-3 shrink-0 text-gray-400 hover:bg-gray-50 rounded-xl sm:rounded-2xl transition-all active:scale-95">
                     <X size={24} />
                 </button>
                 <div className="flex-1">
-                    <h2 className="text-xl font-black text-slate-900 tracking-tight">Evaluación en progreso</h2>
-                    <div className="flex items-center gap-3 text-[10px] text-gray-400 font-black uppercase tracking-[0.2em]">
+                    <h2 className="text-base sm:text-xl font-black text-slate-900 tracking-tight leading-tight">Evaluación en progreso</h2>
+                    <div className="flex items-center gap-2 sm:gap-3 text-[9px] sm:text-[10px] text-gray-400 font-black uppercase tracking-[0.1em] sm:tracking-[0.2em]">
                         <span className="text-orange-500">Paso {step} de {steps.length}</span>
                         <span className="w-1 h-1 bg-gray-200 rounded-full"></span>
                         <span>{steps[step - 1].title}</span>
@@ -286,7 +286,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
             </div>
 
             {/* Progress Indicator */}
-            <div className="flex px-8 py-3 bg-white gap-2 shadow-sm relative z-0">
+            <div className="flex px-4 sm:px-8 py-3 bg-white gap-2 shadow-sm relative z-0">
                 {steps.map((s, i) => (
                     <div
                         key={i}
@@ -296,22 +296,22 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
             </div>
 
             {/* Form Content */}
-            <div className="flex-1 overflow-y-auto px-6 md:px-12 py-10 pb-40 max-w-5xl mx-auto w-full custom-scrollbar">
+            <div className="flex-1 overflow-y-auto px-4 sm:px-6 md:px-12 py-6 sm:py-10 pb-8 max-w-5xl mx-auto w-full custom-scrollbar">
                 {step === 1 && (
                     <div className="animate-in slide-in-from-right duration-500 max-w-2xl mx-auto">
-                        <div className="mb-10 text-center">
-                            <div className="w-20 h-20 bg-orange-500 rounded-[32px] flex items-center justify-center mx-auto mb-6 shadow-2xl shadow-orange-500/20 text-white">
+                        <div className="mb-7 sm:mb-10 text-center">
+                            <div className="w-16 h-16 sm:w-20 sm:h-20 bg-orange-500 rounded-2xl sm:rounded-[32px] flex items-center justify-center mx-auto mb-4 sm:mb-6 shadow-2xl shadow-orange-500/20 text-white">
                                 <User size={32} strokeWidth={3} />
                             </div>
-                            <h3 className="text-3xl font-black text-slate-900 tracking-tight">Identificación</h3>
+                            <h3 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">Identificación</h3>
                             <p className="text-gray-400 font-medium text-sm mt-2">Selecciona al colaborador y la estación a evaluar</p>
                         </div>
 
-                        <div className="space-y-10">
+                        <div className="space-y-7 sm:space-y-10">
                             <div>
                                 <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] mb-4">Colaborador</label>
                                 <select
-                                    className="w-full p-5 bg-white border border-gray-100 rounded-[28px] outline-none focus:ring-4 focus:ring-orange-500/10 focus:border-orange-500 transition-all font-bold text-slate-900 shadow-xl shadow-gray-200/40 appearance-none cursor-pointer"
+                                    className="w-full p-4 sm:p-5 bg-white border border-gray-100 rounded-2xl sm:rounded-[28px] outline-none focus:ring-4 focus:ring-orange-500/10 focus:border-orange-500 transition-all font-bold text-slate-900 shadow-xl shadow-gray-200/40 appearance-none cursor-pointer"
                                     value={selectedCollab || ''}
                                     onChange={(e) => setSelectedCollab(e.target.value)}
                                 >
@@ -324,7 +324,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
 
                             <div>
                                 <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] mb-4">Estación de {isService ? 'Servicio' : 'Producción'}</label>
-                                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                                <div className="grid grid-cols-1 min-[380px]:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
                                     {Object.keys(stations).map(key => {
                                         const collab = collaborators.find(c => c.id === selectedCollab);
                                         const isCertified = collab?.skills?.some(s => s.toUpperCase() === key.toUpperCase());
@@ -334,7 +334,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                                             <button
                                                 key={key}
                                                 onClick={() => setSelectedStation(key)}
-                                                className={`p-6 rounded-[32px] border-2 flex flex-col items-center gap-4 transition-all duration-500 relative overflow-hidden group ${isSelected
+                                                className={`p-4 sm:p-6 rounded-2xl sm:rounded-[32px] border-2 flex flex-col items-center gap-3 sm:gap-4 transition-all duration-500 relative overflow-hidden group ${isSelected
                                                     ? 'bg-orange-500 border-orange-500 text-white shadow-2xl shadow-orange-500/30 scale-105'
                                                     : isCertified
                                                         ? 'bg-emerald-50 border-emerald-200 text-emerald-700 shadow-lg shadow-emerald-500/10'
@@ -443,10 +443,10 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                         </div>
 
                         <div className="space-y-10">
-                            <div className="bg-white p-8 rounded-[40px] shadow-2xl shadow-gray-200/50 border border-gray-50 transition-all hover:shadow-orange-500/10">
+                            <div className="bg-white p-4 sm:p-8 rounded-2xl sm:rounded-[40px] shadow-2xl shadow-gray-200/50 border border-gray-50 transition-all hover:shadow-orange-500/10">
                                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-6 block">Hallazgos Generales</label>
                                 <textarea
-                                    className="w-full p-6 bg-slate-50 border border-transparent rounded-[24px] outline-none focus:bg-white focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 transition-all font-medium text-slate-800 shadow-inner min-h-[150px]"
+                                    className="w-full p-4 sm:p-6 bg-slate-50 border border-transparent rounded-2xl sm:rounded-[24px] outline-none focus:bg-white focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 transition-all font-medium text-slate-800 shadow-inner min-h-[150px]"
                                     placeholder="Describe las oportunidades detectadas y el compromiso del colaborador..."
                                     value={generalFindings}
                                     onChange={(e) => setGeneralFindings(e.target.value)}
@@ -456,7 +456,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                                 <div className="space-y-4">
                                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] ml-4">Firma Colaborador</label>
-                                    <div className="bg-white border-2 border-gray-50 rounded-[40px] overflow-hidden h-48 shadow-xl shadow-gray-200/50 relative">
+                                    <div className="bg-white border-2 border-gray-50 rounded-2xl sm:rounded-[40px] overflow-hidden h-44 sm:h-48 shadow-xl shadow-gray-200/50 relative">
                                         <SignatureCanvas
                                             ref={sigPadCollab}
                                             penColor="#0F172A"
@@ -468,7 +468,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
 
                                 <div className="space-y-4">
                                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] ml-4">Firma Entrenador</label>
-                                    <div className="bg-white border-2 border-gray-50 rounded-[40px] overflow-hidden h-48 shadow-xl shadow-gray-200/50 relative">
+                                    <div className="bg-white border-2 border-gray-50 rounded-2xl sm:rounded-[40px] overflow-hidden h-44 sm:h-48 shadow-xl shadow-gray-200/50 relative">
                                         <SignatureCanvas
                                             ref={sigPadTrainer}
                                             penColor="#0F172A"
@@ -498,11 +498,11 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
             )}
 
             {/* Sticky footer navigation */}
-            <div className="absolute bottom-0 left-0 right-0 p-8 bg-gradient-to-t from-slate-50 via-slate-50/90 to-transparent flex gap-4 pointer-events-none items-center justify-center">
-                <div className="max-w-4xl w-full flex gap-4 pointer-events-auto">
+            <div className="shrink-0 p-3 sm:p-6 bg-white/95 backdrop-blur-md border-t border-gray-100 flex items-center justify-center z-20">
+                <div className="max-w-4xl w-full grid grid-cols-2 sm:flex gap-2 sm:gap-4">
                     <button
                         onClick={() => step > 1 && setStep(step - 1)}
-                        className={`flex-1 py-5 px-8 rounded-[24px] font-black uppercase tracking-[0.2em] text-[10px] flex items-center justify-center gap-3 border-2 border-gray-100 bg-white text-gray-400 transition-all hover:bg-gray-50 shadow-xl shadow-gray-200/40 active:scale-95 ${step === 1 ? 'opacity-0 invisible pointer-events-none' : ''}`}
+                        className={`flex-1 py-3 sm:py-5 px-3 sm:px-8 rounded-xl sm:rounded-[24px] font-black uppercase tracking-[0.08em] sm:tracking-[0.2em] text-[9px] sm:text-[10px] items-center justify-center gap-2 sm:gap-3 border-2 border-gray-100 bg-white text-gray-400 transition-all hover:bg-gray-50 shadow-lg sm:shadow-xl shadow-gray-200/40 active:scale-95 ${step === 1 ? 'hidden' : 'flex'}`}
                     >
                         <ChevronLeft size={18} strokeWidth={3} />
                         Anterior
@@ -510,7 +510,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                     {step < 5 && (
                         <button
                             onClick={handleSaveDraft}
-                            className="flex-1 py-5 px-8 rounded-[24px] font-black uppercase tracking-[0.2em] text-[10px] flex items-center justify-center gap-3 border-2 border-orange-100 bg-orange-50 text-orange-600 transition-all hover:bg-orange-100 shadow-xl shadow-orange-500/10 active:scale-95"
+                            className="flex-1 py-3 sm:py-5 px-3 sm:px-8 rounded-xl sm:rounded-[24px] font-black uppercase tracking-[0.08em] sm:tracking-[0.2em] text-[9px] sm:text-[10px] flex items-center justify-center gap-2 sm:gap-3 border-2 border-orange-100 bg-orange-50 text-orange-600 transition-all hover:bg-orange-100 shadow-lg sm:shadow-xl shadow-orange-500/10 active:scale-95"
                         >
                             <Save size={18} strokeWidth={3} />
                             Guardar Borrador
@@ -522,7 +522,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                             else handleSubmit();
                         }}
                         disabled={step === 1 && (!selectedCollab || !selectedStation)}
-                        className="flex-[2] py-5 px-8 bg-slate-900 disabled:opacity-30 disabled:grayscale hover:bg-black text-white rounded-[24px] font-black uppercase tracking-[0.25em] text-[10px] flex items-center justify-center gap-4 transition-all shadow-2xl shadow-slate-900/40 active:scale-95 border-b-4 border-slate-700"
+                        className={`${step > 1 && step < 5 ? 'col-span-2' : 'col-span-1'} sm:flex-[2] py-3 sm:py-5 px-3 sm:px-8 bg-slate-900 disabled:opacity-30 disabled:grayscale hover:bg-black text-white rounded-xl sm:rounded-[24px] font-black uppercase tracking-[0.08em] sm:tracking-[0.2em] text-[9px] sm:text-[10px] flex items-center justify-center gap-2 sm:gap-4 transition-all shadow-xl sm:shadow-2xl shadow-slate-900/30 active:scale-95 border-b-4 border-slate-700`}
                     >
                         {step === 5 ? (
                             <>

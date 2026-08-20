@@ -1,6 +1,6 @@
 // WeeklyScheduleEditor.jsx – versión con detección de conflictos corregida
 import React, { useEffect, useState, useRef } from 'react';
-import { getFirestore, writeBatch, doc, getDoc, setDoc, collection, query, where, onSnapshot, getDocs } from 'firebase/firestore';
+import { getFirestore, writeBatch, doc, getDoc, setDoc, collection, query, where, onSnapshot, getDocs } from '../lib/supabase/firestoreCompat';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import ScheduleHeatmapMatrix from './ScheduleHeatmapMatrix';
@@ -83,6 +83,30 @@ const normalizePosition = (position) =>
         .replace(/#\d+$/g, '')
         .replace(/\s+/g, ' ')
         .toLowerCase();
+
+const isOperationallyActiveStaff = (person, referenceDate = new Date()) => {
+    if (!person || person.status === 'inactive') return false;
+
+    const normalizedName = `${person.name || ''} ${person.lastName || ''}`
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim()
+        .toLowerCase();
+
+    if (person.reconstructed_from_history === true || normalizedName.startsWith('historico ')) {
+        return false;
+    }
+
+    const cessationDate = person.cessationDate || person.terminationDate;
+    if (!cessationDate) return true;
+
+    const parsedCessation = new Date(`${cessationDate}T00:00:00`);
+    if (Number.isNaN(parsedCessation.getTime())) return true;
+
+    const cutoff = new Date(referenceDate);
+    cutoff.setHours(0, 0, 0, 0);
+    return parsedCessation >= cutoff;
+};
 
 export default function WeeklyScheduleEditor() {
     const [staff, setStaff] = useState([]);
@@ -349,65 +373,8 @@ export default function WeeklyScheduleEditor() {
                 });
             }
 
-            // 2. Procesar Feriados SOLO para filas modificadas
-            if (weekStartDate) {
-                const [y, m, d] = weekStartDate.split('-').map(Number);
-                const start = new Date(y, m - 1, d);
-
-                for (const staffId of dirtyArray) {
-                    const personSchedule = schedules[staffId];
-                    const person = staff.find(s => s.id === staffId);
-                    if (!personSchedule || !person) continue;
-
-                    weekdays.forEach((dayName, idx) => {
-                        const shift = personSchedule[dayName];
-                        const currentDay = new Date(start);
-                        currentDay.setDate(start.getDate() + idx);
-                        const dateStr = [
-                            currentDay.getFullYear(),
-                            String(currentDay.getMonth() + 1).padStart(2, '0'),
-                            String(currentDay.getDate()).padStart(2, '0')
-                        ].join('-');
-
-                        const holidayRef = doc(db, 'feriados_trabajados', `${staffId}_${dateStr}`);
-                        const calendarHoliday = HOLIDAYS_2026.find(h => h.date === dateStr);
-
-                        if (shift?.feriado) {
-                            if (!calendarHoliday) {
-                                batch.set(holidayRef, {
-                                    uid: person.uid || '',
-                                    staffId: staffId,
-                                    storeId: storeId,
-                                    date: dateStr,
-                                    name: 'Compensación de Feriado',
-                                    type: 'compensado',
-                                    createdAt: new Date().toISOString()
-                                });
-                            } else {
-                                batch.delete(holidayRef);
-                            }
-                        }
-                        else if (shift && !shift.off && shift.start && shift.end) {
-                            if (calendarHoliday) {
-                                batch.set(holidayRef, {
-                                    uid: person.uid || '',
-                                    staffId: staffId,
-                                    storeId: storeId,
-                                    date: dateStr,
-                                    name: calendarHoliday.name,
-                                    type: 'ganado',
-                                    createdAt: new Date().toISOString()
-                                });
-                            } else {
-                                batch.delete(holidayRef);
-                            }
-                        }
-                        else {
-                            batch.delete(holidayRef);
-                        }
-                    });
-                }
-            }
+            // Supabase sincroniza los feriados dentro de save_weekly_schedules,
+            // en la misma transacción que reemplaza los turnos de cada semana.
 
             await batch.commit();
 
@@ -998,7 +965,10 @@ export default function WeeklyScheduleEditor() {
                 const snap = await getDocs(q);
                 const staffList = await Promise.all(
                     snap.docs.map(async (docSnap) => {
-                        const staffData = { id: docSnap.id, ...docSnap.data() };
+                        // Supabase conserva el campo `id` antiguo dentro de legacy_data para
+                        // trazabilidad. Debe prevalecer el id canónico del documento (UUID),
+                        // porque schedule_weeks.staff_id está relacionado con ese UUID.
+                        const staffData = { ...docSnap.data(), id: docSnap.id };
 
                         // 🔥 Cargar study_schedule usando el UID del staff
                         try {
@@ -1077,7 +1047,7 @@ export default function WeeklyScheduleEditor() {
                     return cessation >= todayMidnight; // cese hoy o futuro → aún activo
                 });
 
-                setStaff(activeStaff);
+                setStaff(activeStaff.filter(person => isOperationallyActiveStaff(person)));
 
             } catch (err) {
             } finally {
@@ -1098,14 +1068,11 @@ export default function WeeklyScheduleEditor() {
 
             const merged = {};
 
-            let allStaffIds = [];
+            const allStaffIds = staff.map(person => person.id);
+            const activeStaffIds = new Set(allStaffIds);
 
             // --- Paso 1: Fetch por ID directo (funciona siempre, sin índice) ---
             try {
-                const allStaffSnap = await getDocs(
-                    query(collection(db, 'staff_profiles'), where('storeId', '==', storeId))
-                );
-                allStaffIds = allStaffSnap.docs.map(d => d.id);
                 console.log('[Horarios] Staff IDs en tienda:', allStaffIds.length);
                 await Promise.all(allStaffIds.map(async (sId) => {
                     const dSnap = await getDoc(doc(db, 'schedules', `${sId}_${wk}`));
@@ -1127,7 +1094,7 @@ export default function WeeklyScheduleEditor() {
                 console.log('[Horarios] Consulta optimizada:', snap.size, 'docs adicionales');
                 snap.docs.forEach(docSnap => {
                     const sId = docSnap.id.split('_')[0];
-                    if (!merged[sId]) merged[sId] = docSnap.data();
+                    if (activeStaffIds.has(sId) && !merged[sId]) merged[sId] = docSnap.data();
                 });
             } catch (err) {
                 console.warn('[Horarios] Consulta optimizada omitida (sin índice):', err.message);
@@ -1194,6 +1161,18 @@ export default function WeeklyScheduleEditor() {
         return (effModality || '').toLowerCase() === 'full-time' ? 0 : 1;
     };
 
+    // Equipo gerencial arriba (igual que el PDF). Los entrenadores van con el personal.
+    const MANAGERIAL_POSITIONS = ['GERENTE', 'ASISTENTE', 'LIDER'];
+    const isManagerial = (person) => {
+        const pos = String(person?.position || '')
+            .normalize('NFD')
+            .replace(/[̀-ͯ]/g, '')
+            .trim()
+            .toUpperCase();
+        return MANAGERIAL_POSITIONS.includes(pos);
+    };
+    const managerialOrder = (person) => (isManagerial(person) ? 0 : 1);
+
     // 2. Filtrar activeStaff según inputs de la UI (Modalidad, Posición)
     // Usamos activeStaff como base para que los cesados no aparezcan en la tabla ni en los filtros
     const filteredStaff = activeStaff.filter(person => {
@@ -1232,7 +1211,10 @@ export default function WeeklyScheduleEditor() {
 
         return true;
     }).sort((a, b) => {
-        // Full Time primero, Part Time abajo (igual que el PDF de horario)
+        // Equipo gerencial (Gerente/Asistente/Líder) primero para diferenciarlo
+        const managerialDiff = managerialOrder(a) - managerialOrder(b);
+        if (managerialDiff !== 0) return managerialDiff;
+        // Luego Full Time primero, Part Time abajo (igual que el PDF de horario)
         const orderDiff = modalityOrder(a) - modalityOrder(b);
         if (orderDiff !== 0) return orderDiff;
         // Dentro del mismo grupo: orden alfabético por nombre
@@ -1702,31 +1684,41 @@ export default function WeeklyScheduleEditor() {
                 </div>
 
                 <div className="flex flex-col lg:flex-row gap-6">
-                    <div className="w-full lg:w-2/3">
+                    <div className="w-full min-w-0 lg:w-3/5">
                         <div className="bg-white rounded-xl shadow-md">
                             <div className="overflow-x-auto">
                                 <table className="w-full text-sm">
                                     <thead className="bg-gradient-to-r from-gray-700 to-gray-800 text-white">
                                         <tr>
-                                            <th className="px-4 md:px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider md:sticky md:left-0 z-10 bg-gradient-to-r from-gray-700 to-gray-800 min-w-[150px] max-w-[150px] md:min-w-[280px] md:max-w-[280px]">Nombre</th>
-                                            <th className="px-4 md:px-6 py-4 text-center text-xs font-semibold uppercase tracking-wider md:sticky md:left-[280px] z-10 bg-gradient-to-r from-gray-700 to-gray-800 min-w-[100px] max-w-[100px] md:min-w-[140px] md:max-w-[140px]">Modalidad</th>
-                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Entrada</th>
-                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Salida</th>
-                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Partido</th>
-                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider" title="Horas Extras Antes">HE Ant</th>
-                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider" title="Horas Extras Después">HE Desp</th>
-                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Horas Día</th>
-                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Horas Semana</th>
+                                            <th className="px-4 py-4 text-left text-xs font-semibold uppercase tracking-wider md:sticky md:left-0 z-10 bg-gradient-to-r from-gray-700 to-gray-800 min-w-[150px] max-w-[150px] md:min-w-[240px] md:max-w-[240px]">Nombre</th>
+                                            <th className="px-2 py-4 text-center text-[10px] font-semibold uppercase tracking-normal md:sticky md:left-[240px] z-10 bg-gradient-to-r from-gray-700 to-gray-800 min-w-[82px] max-w-[82px] md:min-w-[92px] md:max-w-[92px]">Modalidad</th>
+                                            <th className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center text-xs font-semibold uppercase tracking-wider">Entrada</th>
+                                            <th className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center text-xs font-semibold uppercase tracking-wider">Salida</th>
+                                            <th className="w-[72px] min-w-[72px] max-w-[72px] px-2 py-4 text-center text-[11px] font-semibold uppercase tracking-normal">Partido</th>
+                                            <th className="w-[72px] min-w-[72px] max-w-[72px] px-1 py-4 text-center text-[11px] font-semibold uppercase tracking-normal" title="Horas Extras Antes">HE Ant</th>
+                                            <th className="w-[72px] min-w-[72px] max-w-[72px] px-1 py-4 text-center text-[11px] font-semibold uppercase tracking-normal" title="Horas Extras Después">HE Desp</th>
+                                            <th className="w-[72px] min-w-[72px] max-w-[72px] px-1 py-4 text-center text-[11px] font-semibold uppercase leading-tight tracking-normal">Horas<br />Día</th>
+                                            <th className="w-[100px] min-w-[100px] max-w-[100px] px-2 py-4 text-center text-[11px] font-semibold uppercase leading-tight tracking-normal">Horas<br />Semana</th>
                                             <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Posición</th>
-                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Pre-cierres</th>
-                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Cierres</th>
-                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">Libre</th>
-                                            <th className="px-4 py-4 text-center text-xs font-semibold uppercase tracking-wider">
+                                            <th
+                                                className="w-[50px] min-w-[50px] max-w-[50px] px-1 py-4 text-center text-[10px] font-semibold uppercase leading-tight tracking-normal"
+                                                title="Pre-cierres"
+                                            >
+                                                Pre
+                                            </th>
+                                            <th
+                                                className="w-[50px] min-w-[50px] max-w-[50px] px-1 py-4 text-center text-[10px] font-semibold uppercase leading-tight tracking-normal"
+                                                title="Cierres"
+                                            >
+                                                Cie.
+                                            </th>
+                                            <th className="w-[48px] min-w-[48px] max-w-[48px] px-1 py-4 text-center text-[10px] font-semibold uppercase tracking-normal">Libre</th>
+                                            <th className="w-[56px] min-w-[56px] max-w-[56px] px-1 py-4 text-center text-[10px] font-semibold uppercase tracking-normal">
                                                 Feriado
                                                 {(() => {
                                                     const dateStr = getSelectedDateStr();
                                                     const holiday = isHoliday(dateStr);
-                                                    return holiday ? <span className="block text-[10px] text-yellow-300 mt-1">({holiday.name})</span> : null;
+                                                    return holiday ? <span title={holiday.name} className="block truncate text-[9px] text-yellow-300 mt-1">●</span> : null;
                                                 })()}
                                             </th>
                                         </tr>
@@ -1785,13 +1777,14 @@ export default function WeeklyScheduleEditor() {
                                                 }
                                             }
 
+                                            const managerial = isManagerial(p);
                                             return (
                                                 <tr
                                                     key={p.id}
                                                     ref={el => staffRowRefs.current[p.id] = el}
-                                                    className={`hover:bg-blue-50 transition-colors duration-150 group ${isCeased ? 'bg-red-50' : ''} ${highlightedStaffId === p.id ? 'bg-amber-100 ring-2 ring-amber-400 ring-inset' : ''}`}
+                                                    className={`hover:bg-blue-50 transition-colors duration-150 group ${isCeased ? 'bg-red-50' : managerial ? 'bg-indigo-50/60' : ''} ${highlightedStaffId === p.id ? 'bg-amber-100 ring-2 ring-amber-400 ring-inset' : ''}`}
                                                 >
-                                                    <td className="px-4 md:px-6 py-4 relative md:sticky md:left-0 z-10 bg-white group-hover:bg-blue-50 min-w-[150px] max-w-[150px] md:min-w-[280px] md:max-w-[280px]">
+                                                    <td className={`px-4 py-4 relative md:sticky md:left-0 z-10 group-hover:bg-blue-50 min-w-[150px] max-w-[150px] md:min-w-[240px] md:max-w-[240px] ${managerial ? 'bg-indigo-50 border-l-4 border-indigo-400' : 'bg-white'}`}>
                                                         <div className="flex items-start gap-2">
                                                             <div className="flex-1 min-w-0 pr-2">
                                                                 <div
@@ -1816,6 +1809,11 @@ export default function WeeklyScheduleEditor() {
                                                                     {p.position === 'ENTRENADOR' && (
                                                                         <span title="Entrenador / Trainer" className="ml-1.5 px-1.5 py-0.5 bg-orange-100 text-orange-700 text-[10px] font-bold rounded border border-orange-200 inline-block align-middle" style={{ lineHeight: '1' }}>
                                                                             TRAINER
+                                                                        </span>
+                                                                    )}
+                                                                    {managerial && (
+                                                                        <span title="Equipo gerencial" className="ml-1.5 px-1.5 py-0.5 bg-indigo-100 text-indigo-700 text-[10px] font-bold rounded border border-indigo-200 inline-block align-middle" style={{ lineHeight: '1' }}>
+                                                                            {p.position}
                                                                         </span>
                                                                     )}
 
@@ -1991,14 +1989,14 @@ export default function WeeklyScheduleEditor() {
                                                             );
                                                         })()}
                                                     </td>
-                                                    <td className="px-4 md:px-6 py-4 text-center md:sticky md:left-[280px] z-10 bg-white group-hover:bg-blue-50 min-w-[100px] max-w-[100px] md:min-w-[140px] md:max-w-[140px]">
+                                                    <td className="px-1.5 py-4 text-center md:sticky md:left-[240px] z-10 bg-white group-hover:bg-blue-50 min-w-[82px] max-w-[82px] md:min-w-[92px] md:max-w-[92px]">
                                                         {(() => {
                                                             const dateStr = getSelectedDateStr();
                                                             const effModality = getEffectiveModality(p, dateStr);
                                                             const isChangeDay = p.modalityChangeDate === dateStr;
                                                             return (
                                                                 <div className="flex flex-col items-center">
-                                                                    <span className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap inline-block ${effModality === "Full-Time"
+                                                                    <span className={`px-2 py-1 rounded-full text-[10px] font-bold whitespace-nowrap inline-block ${effModality === "Full-Time"
                                                                         ? "bg-green-100 text-green-800 border border-green-200"
                                                                         : "bg-purple-100 text-purple-800 border border-purple-200"
                                                                         }`}>
@@ -2013,7 +2011,7 @@ export default function WeeklyScheduleEditor() {
                                                             );
                                                         })()}
                                                     </td>
-                                                    <td className="px-4 py-4 text-center">
+                                                    <td className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center">
                                                         {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
                                                             <div className="flex flex-col gap-1.5">
                                                                 <input
@@ -2040,7 +2038,7 @@ export default function WeeklyScheduleEditor() {
                                                             </div>
                                                         )}
                                                     </td>
-                                                    <td className="px-4 py-4 text-center">
+                                                    <td className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center">
                                                         {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
                                                             <div className="flex flex-col gap-1.5">
                                                                 <input
@@ -2067,7 +2065,7 @@ export default function WeeklyScheduleEditor() {
                                                             </div>
                                                         )}
                                                     </td>
-                                                    <td className="px-4 py-4 text-center">
+                                                    <td className="w-[72px] min-w-[72px] max-w-[72px] px-2 py-4 text-center">
                                                         {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
                                                             <input
                                                                 type="checkbox"
@@ -2079,7 +2077,7 @@ export default function WeeklyScheduleEditor() {
                                                             />
                                                         )}
                                                     </td>
-                                                    <td className="px-2 py-4 text-center">
+                                                    <td className="w-[72px] min-w-[72px] max-w-[72px] px-1 py-4 text-center">
                                                         {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
                                                             <input
                                                                 type="number"
@@ -2094,7 +2092,7 @@ export default function WeeklyScheduleEditor() {
                                                             />
                                                         )}
                                                     </td>
-                                                    <td className="px-2 py-4 text-center">
+                                                    <td className="w-[72px] min-w-[72px] max-w-[72px] px-1 py-4 text-center">
                                                         {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
                                                             <input
                                                                 type="number"
@@ -2109,10 +2107,10 @@ export default function WeeklyScheduleEditor() {
                                                             />
                                                         )}
                                                     </td>
-                                                    <td className="px-4 py-4 text-center font-medium text-gray-700 text-sm">
+                                                    <td className="w-[72px] min-w-[72px] max-w-[72px] px-1 py-4 text-center font-medium text-gray-700 text-sm">
                                                         {isCeased ? '--' : calculateDailyHours(d)}
                                                     </td>
-                                                    <td className={`px-4 py-4 text-center font-semibold text-sm ${!horasEnRango && !isCeased ? 'text-red-600' : 'text-green-700'
+                                                    <td className={`w-[100px] min-w-[100px] max-w-[100px] px-2 py-4 text-center font-semibold text-sm ${!horasEnRango && !isCeased ? 'text-red-600' : 'text-green-700'
                                                         }`}>
                                                         {isCeased ? '--' : (
                                                             <div className="flex items-center justify-center gap-1">
@@ -2138,13 +2136,13 @@ export default function WeeklyScheduleEditor() {
                                                             </select>
                                                         )}
                                                     </td>
-                                                    <td className="px-4 py-4 text-center font-bold text-orange-600 text-sm">
+                                                    <td className="w-[50px] min-w-[50px] max-w-[50px] px-1 py-4 text-center font-bold text-orange-600 text-xs">
                                                         {isCeased ? '--' : `${preCierres}/4`}
                                                     </td>
-                                                    <td className="px-4 py-4 text-center font-bold text-red-600 text-sm">
+                                                    <td className="w-[50px] min-w-[50px] max-w-[50px] px-1 py-4 text-center font-bold text-red-600 text-xs">
                                                         {isCeased ? '--' : `${cierres}/4`}
                                                     </td>
-                                                    <td className="px-4 py-4 text-center">
+                                                    <td className="w-[48px] min-w-[48px] max-w-[48px] px-1 py-4 text-center">
                                                         <input
                                                             type="checkbox"
                                                             checked={d.off || false}
@@ -2153,7 +2151,7 @@ export default function WeeklyScheduleEditor() {
                                                             className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                                                         />
                                                     </td>
-                                                    <td className="px-4 py-4 text-center">
+                                                    <td className="w-[56px] min-w-[56px] max-w-[56px] px-1 py-4 text-center">
                                                         <input
                                                             type="checkbox"
                                                             checked={d.feriado || false}
@@ -2172,7 +2170,7 @@ export default function WeeklyScheduleEditor() {
                     </div>
 
                     {/* Heatmap */}
-                    <div className="w-full lg:w-5/12">
+                    <div className="w-full min-w-0 lg:w-2/5">
                         <div className="bg-white rounded-xl shadow-md p-3 sticky top-24">
                             <div className="mb-3">
                                 <h3 className="text-base font-bold text-gray-800 flex items-center gap-2">

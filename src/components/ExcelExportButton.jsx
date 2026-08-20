@@ -1,6 +1,6 @@
 // ConsultaNocturnidad.jsx - Botón Excel Completo
 import React from 'react';
-import { getFirestore, doc, getDoc } from 'firebase/firestore';
+import { getFirestore, doc, getDoc } from '../lib/supabase/firestoreCompat';
 import { FaFileExcel } from 'react-icons/fa';
 import { exportExtraHoursExcelStyled } from '../services/exportExtraHoursExcelStyled';
 import { toast } from 'react-toastify';

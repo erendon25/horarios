@@ -9,11 +9,10 @@ import {
   deleteDoc,
   updateDoc,
   getDocs,
+  writeBatch,
   updateDoc as updateFirestoreDoc
-} from 'firebase/firestore';
-import { initializeApp } from 'firebase/app';
-import { getAuth as getAuthMain, createUserWithEmailAndPassword } from 'firebase/auth';
-import { firebaseConfig } from '../firebase';
+} from '../lib/supabase/firestoreCompat';
+import { supabase } from '../lib/supabase/client';
 import { toast } from 'react-toastify';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -129,17 +128,15 @@ function SuperAdminDashboard() {
         return;
       }
 
-      const tempApp = initializeApp(firebaseConfig, 'TempApp');
-      const tempAuth = getAuthMain(tempApp);
-      const userCredential = await createUserWithEmailAndPassword(tempAuth, adminEmail, adminPassword);
-      const uid = userCredential.user.uid;
-
-      await setDoc(doc(db, 'users', uid), {
-        email: adminEmail,
-        role: 'admin',
-        storeId: selectedStoreId,
-        createdAt: new Date().toISOString()
+      const { error } = await supabase.functions.invoke('staff-account-admin', {
+        body: {
+          operation: 'create_admin',
+          email: adminEmail,
+          password: adminPassword,
+          storeId: selectedStoreId,
+        },
       });
+      if (error) throw error;
 
       toast.success('Administrador creado exitosamente');
       setAdminEmail('');
@@ -156,12 +153,49 @@ function SuperAdminDashboard() {
     if (!confirm) return;
 
     try {
-      const ref = doc(db, 'staff_profiles', id);
-      await updateFirestoreDoc(ref, { email: '', uid: '' });
+      const { error } = await supabase.functions.invoke('staff-account-admin', {
+        body: { operation: 'unlink_staff', staffId: id },
+      });
+      if (error) throw error;
       toast.success('Correo y acceso desvinculados');
       setStaffProfiles(prev => prev.map(p => p.id === id ? { ...p, email: '', uid: '' } : p));
     } catch (error) {
       toast.error('No se pudo desvincular el correo');
+    }
+  };
+
+  const deleteRefsInBatches = async (refs) => {
+    const uniqueRefs = Array.from(
+      new Map(refs.filter(Boolean).map(ref => [ref.path, ref])).values()
+    );
+
+    for (let i = 0; i < uniqueRefs.length; i += 450) {
+      const batch = writeBatch(db);
+      uniqueRefs.slice(i, i + 450).forEach(ref => batch.delete(ref));
+      await batch.commit();
+    }
+
+    return uniqueRefs.length;
+  };
+
+  const handleDeleteStaffCompletely = async (profile) => {
+    const fullName = `${profile.name || ''} ${profile.lastName || ''}`.trim() || 'este colaborador';
+    const confirm = window.confirm(
+      `Eliminar definitivamente a ${fullName}?\n\nSe borrarán de Supabase su perfil, cuenta, horarios, solicitudes, feriados, ceses, horas extra y evaluaciones relacionadas.`
+    );
+    if (!confirm) return;
+
+    try {
+      const staffId = profile.id;
+      const { data, error } = await supabase.functions.invoke('staff-account-admin', {
+        body: { operation: 'delete_staff', staffId },
+      });
+      if (error) throw error;
+      setStaffProfiles(prev => prev.filter(p => p.id !== staffId));
+      toast.success(`Colaborador y cuenta eliminados de Supabase (${data?.deletedRecords ?? 1} perfil).`);
+    } catch (error) {
+      console.error('Error eliminando usuario completamente:', error);
+      toast.error('No se pudo eliminar el usuario por completo: ' + error.message);
     }
   };
 
@@ -479,8 +513,8 @@ function SuperAdminDashboard() {
                    </p>
                  </div>
 
-                 {profile.email && (
-                   <div className="mt-4 pt-3 border-t border-gray-100">
+                 <div className="mt-4 pt-3 border-t border-gray-100 space-y-2">
+                   {profile.email && (
                      <button 
                        onClick={() => handleUnlinkEmail(profile.id)} 
                        className="flex items-center justify-center gap-1 w-full text-xs font-bold text-red-600 hover:text-white border border-red-200 hover:bg-red-500 py-1.5 rounded transition-colors"
@@ -488,8 +522,16 @@ function SuperAdminDashboard() {
                        <Link2Off className="w-3 h-3" />
                        Desvincular Correo
                      </button>
-                   </div>
-                 )}
+                   )}
+                   <button
+                     onClick={() => handleDeleteStaffCompletely(profile)}
+                     className="flex items-center justify-center gap-1 w-full text-xs font-black text-white bg-red-600 hover:bg-red-700 border border-red-700 py-1.5 rounded transition-colors"
+                     title="Eliminar todos los registros de Supabase vinculados a este colaborador"
+                   >
+                     <Trash2 className="w-3 h-3" />
+                     Eliminar definitivo
+                   </button>
+                 </div>
                </div>
              ))}
              

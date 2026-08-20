@@ -1,7 +1,7 @@
 // ScheduleManagement.jsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getFirestore, collection, getDocs } from 'firebase/firestore';
+import { getFirestore, collection, getDocs } from '../lib/supabase/firestoreCompat';
 import { useAuth } from '../contexts/AuthContext';
 
 const ScheduleManagement = () => {

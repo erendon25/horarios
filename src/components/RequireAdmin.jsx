@@ -8,8 +8,7 @@ export default function RequireAdmin({ children }) {
     return <Navigate to="/login" />;
   }
 
-  // Permite el acceso si es admin, superadmin o si es el usuario especificado
-  if (userRole !== "admin" && userRole !== "superadmin" && currentUser.email !== "erickrendon18@gmail.com") {
+  if (userRole !== "admin" && userRole !== "superadmin") {
     return <Navigate to="/unauthorized" />;
   }
 

@@ -2,8 +2,8 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
-import { db } from "../firebase";
-import { collection, getDocs, doc, addDoc, updateDoc, deleteDoc } from "firebase/firestore";
+import { db } from "../supabase";
+import { collection, getDocs, doc, addDoc, updateDoc, deleteDoc } from "../lib/supabase/firestoreCompat";
 import StaffModal from "./StaffModal";
 
 const StaffManagement = () => {

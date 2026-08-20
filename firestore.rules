@@ -118,7 +118,7 @@ service cloud.firestore {
     match /ceses/{docId} {
       allow read: if isSuperAdmin() || (isAdmin() && resource.data.storeId == getUserStoreId());
       allow create, update: if isSuperAdmin() || (isAdmin() && request.resource.data.storeId == getUserStoreId());
-      allow delete: if isSuperAdmin();
+      allow delete: if isSuperAdmin() || (isAdmin() && resource.data.storeId == getUserStoreId());
     }
 
     // ========================

@@ -46,14 +46,15 @@ import {
     getDoc,
     setDoc,
     onSnapshot
-} from "firebase/firestore";
-import { db } from "../firebase";
+} from "../lib/supabase/firestoreCompat";
+import { db } from "../supabase";
 import StudyScheduleEditor from './StudyScheduleEditor';
 import ModalSelectorDePosiciones from './ModalSelectorDePosiciones';
 import StaffModal from './StaffModal';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import VHLConsultation from './VHLConsultation';
 import ScheduleRequestsManager from './ScheduleRequestsManager';
+import { isStaffActive } from './Training/staffStatus';
 import { exportExtraHoursPDF, exportExtraHoursGroupedPDF } from "../services/exportExtraHoursPDF";
 import GeoVictoriaUpload from './GeoVictoriaUpload';
 
@@ -395,12 +396,14 @@ function AdminDashboard() {
     const geoVictoriaInputRef = useRef(null);
     const hrAnalysisInputRef = useRef(null);
     const geoVictoriaExtraInputRef = useRef(null);
+    const geoVictoriaLateInputRef = useRef(null);
     const [geoVictoriaImporting, setGeoVictoriaImporting] = useState(false);
     const [geoVictoriaImportResult, setGeoVictoriaImportResult] = useState(null);
     const [hrAnalysisLoading, setHrAnalysisLoading] = useState(false);
     const [hrAnalysisError, setHrAnalysisError] = useState('');
     const [hrTimeAnalysis, setHrTimeAnalysis] = useState(null);
     const [geoVictoriaExtraImporting, setGeoVictoriaExtraImporting] = useState(false);
+    const [geoVictoriaLateImporting, setGeoVictoriaLateImporting] = useState(false);
     const [geoVictoriaExtraImportResult, setGeoVictoriaExtraImportResult] = useState(null);
     const [geoVictoriaExtraRecords, setGeoVictoriaExtraRecords] = useState([]);
     const [geoVictoriaExtraLoading, setGeoVictoriaExtraLoading] = useState(false);
@@ -413,15 +416,7 @@ function AdminDashboard() {
 
     const skillStats = useMemo(() => {
         const stats = {};
-        const activeStaff = staff.filter(s => {
-            if (s.cessationDate) {
-                const today = new Date();
-                today.setHours(0, 0, 0, 0);
-                const cessation = new Date(s.cessationDate + "T00:00:00");
-                return cessation >= today;
-            }
-            return true;
-        });
+        const activeStaff = staff.filter(person => isStaffActive(person));
 
         const totalActive = activeStaff.length || 1;
 
@@ -592,16 +587,7 @@ function AdminDashboard() {
     };
 
     const isActiveInSystem = (person) => {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const endDateStr = person.isTrainee
-            ? person.trainingEndDate
-            : (person.cessationDate || person.terminationDate);
-
-        if (!endDateStr) return true;
-
-        const endDate = new Date(`${endDateStr}T00:00:00`);
-        return !isNaN(endDate.getTime()) && endDate >= today;
+        return isStaffActive(person);
     };
 
     const openPositionModal = (colab) => {
@@ -662,9 +648,6 @@ function AdminDashboard() {
     };
 
 
-    const generateUid = () => {
-        return Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
-    };
     const handleUnlinkEmail = async (staffId) => {
         try {
             await updateDoc(doc(db, 'staff_profiles', staffId), {
@@ -750,7 +733,7 @@ function AdminDashboard() {
             const uids = profiles.map(p => p.uid).filter(uid => !!uid);
 
             if (uids.length > 0) {
-                // Dividir en grupos de 10 para la cláusula 'in' de Firestore
+                // Dividir en grupos de 10 para mantener consultas pequeñas.
                 for (let i = 0; i < uids.length; i += 10) {
                     const chunk = uids.slice(i, i + 10);
                     const q = query(collection(db, 'study_schedules'), where('__name__', 'in', chunk));
@@ -791,7 +774,7 @@ function AdminDashboard() {
                     currentProfile.feriados = 0;
                     currentProfile.pendingHolidays = [];
 
-                    // Programar actualización en Firebase
+                    // Programar actualización en Supabase.
                     updatesExec.push(updateDoc(doc(db, 'staff_profiles', profile.id), {
                         modality: newModality,
                         joinDate: changeDate,
@@ -818,23 +801,8 @@ function AdminDashboard() {
 
             // Un colaborador se considera activo si NO tiene fecha de cese,
             // o si su fecha de cese es HOY o en el futuro (se resta a partir del día siguiente).
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-
-            const isActive = (u) => {
-                if (u.isTrainee) {
-                    // Trainee: usar trainingEndDate como su fecha de "cese"
-                    if (!u.trainingEndDate) return true;
-                    const endDate = new Date(u.trainingEndDate + 'T00:00:00');
-                    return endDate >= today;
-                }
-                if (!u.cessationDate) return true;
-                const cessation = new Date(u.cessationDate + "T00:00:00");
-                return cessation >= today;
-            };
-
-            const activePlantilla = enriched.filter(u => !u.isTrainee && isActive(u));
-            const activeTrainees = enriched.filter(u => u.isTrainee && isActive(u));
+            const activePlantilla = enriched.filter(u => !u.isTrainee && isStaffActive(u));
+            const activeTrainees = enriched.filter(u => u.isTrainee && isStaffActive(u));
 
             setFullTimeCount(activePlantilla.filter(u => u.modality === "Full-Time").length);
             setPartTimeCount(activePlantilla.filter(u => u.modality === "Part-Time").length);
@@ -1002,12 +970,7 @@ function AdminDashboard() {
     };
 
     const isStaffActiveForHr = (person) => {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const endDateStr = person.isTrainee ? person.trainingEndDate : (person.cessationDate || person.terminationDate);
-        if (!endDateStr) return true;
-        const endDate = new Date(`${endDateStr}T00:00:00`);
-        return endDate >= today;
+        return isStaffActive(person);
     };
 
     const getGeoVictoriaExtraPeriodLabel = (record) => {
@@ -1102,8 +1065,8 @@ function AdminDashboard() {
                     modality,
                     day: detail.day || getGeoVictoriaDayLabel(detail.fecha),
                     shift: getShiftWithGeoVictoriaExtras(detail),
-                    extraHours: Math.round(((Number(detail.totalExtraMinutes) || 0) / 60) * 100) / 100,
-                    weekKey: getClosedWeekKey(detail.fecha || record.fecha),
+                    extraMinutes: Number(detail.totalExtraMinutes) || 0,
+                    weekKey: periodLabel,
                     sortKey: `${detail.fecha || record.fecha || ''}_${baseName}`,
                 }));
         }).sort((a, b) => a.sortKey.localeCompare(b.sortKey));
@@ -1117,6 +1080,69 @@ function AdminDashboard() {
             weekKey: periodLabel,
             fileName: `Reporte_Extras_${periodLabel}_GeoVictoria_${datePart}.pdf`,
         });
+    };
+
+    const handleGeoVictoriaLateUpload = async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        setGeoVictoriaLateImporting(true);
+        try {
+            const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+            const rows = readGeoVictoriaRows(workbook);
+            const reportRows = rows.filter((row) => {
+                const justifiedBy = String(getRowValue(row, ['Justificado por']) || '').trim();
+                return !justifiedBy;
+            }).map((row) => {
+                const dni = normalizeDni(getRowValue(row, ['DNI', 'Identificador']));
+                const profile = staff.find((person) => normalizeDni(person.dni) === dni) || {};
+                const rawDate = getRowValue(row, ['Fecha']);
+                const parsedDate = parseActivationDate(rawDate);
+                const date = parsedDate ? formatDateInput(parsedDate) : parseGeoVictoriaDate(rawDate);
+                const scheduledStart = parseGeoVictoriaTimeValue(getRowValue(row, ['Hora Inicio Turno']));
+                const arrival = parseGeoVictoriaTimeValue(getRowValue(row, ['Hora Llegada']));
+                const lateMinutes = parseGeoVictoriaDurationMinutes(getRowValue(row, ['Minutos de Atraso']));
+
+                return {
+                    name: `${getRowValue(row, ['Nombre'])} ${getRowValue(row, ['Apellidos'])}`.trim(),
+                    modality: profile.modality || (String(getRowValue(row, ['Grupo Usuario', 'Grupo marcacion'])).toUpperCase().includes('ENTRENADOR') ? 'Full-Time' : 'Part-Time'),
+                    day: getGeoVictoriaDayLabel(date),
+                    shift: `${scheduledStart || '--'} - ${arrival || '--'}`,
+                    extraMinutes: lateMinutes,
+                    sortKey: `${date}_${getRowValue(row, ['Apellidos'])}_${getRowValue(row, ['Nombre'])}`,
+                    date,
+                };
+            }).filter((row) => row.name && row.date && row.extraMinutes > 0);
+
+            if (reportRows.length === 0) {
+                alert('El archivo no contiene minutos de atraso válidos.');
+                return;
+            }
+
+            reportRows.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+            const dates = reportRows.map((row) => row.date).sort();
+            const periodLabel = `${dates[0]}_to_${dates[dates.length - 1]}`;
+            reportRows.forEach((row) => { row.weekKey = periodLabel; });
+            const datePart = new Date().toLocaleDateString('es-PE').replace(/\//g, '.');
+
+            await exportExtraHoursGroupedPDF(reportRows, {
+                weekKey: periodLabel,
+                fileName: `Reporte_Tardanzas_${periodLabel}_GeoVictoria_${datePart}.pdf`,
+                reportTitle: 'REPORTE DE TARDANZAS',
+                periodCaption: 'Periodo',
+                shiftHeader: 'Turno - Llegada',
+                durationHeader: 'Ingreso tarde',
+                collaboratorTotalHeader: 'Sumatoria tardanzas',
+                generalTotalLabel: 'TOTAL GENERAL TARDANZAS',
+                summaryOnly: true,
+            });
+        } catch (err) {
+            console.error('Error importando tardanzas GeoVictoria:', err);
+            alert(`No se pudo procesar el reporte de tardanzas: ${err.message}`);
+        } finally {
+            setGeoVictoriaLateImporting(false);
+            event.target.value = '';
+        }
     };
 
     const loadGeoVictoriaExtraHours = async () => {
@@ -1373,7 +1399,11 @@ function AdminDashboard() {
                 if (extraMinutesPost > 0) activityParts.push(`Salida: ${formatDurationMinutes(extraMinutesPost)}`);
 
                 const payload = {
-                    uid: person.uid || person.id,
+                    // user_id (extra_hours.user_id) referencia auth.users; el personal
+                    // emparejado por DNI puede no tener cuenta vinculada, en cuyo caso
+                    // person.uid es null. Nunca usar person.id (id de staff_profiles)
+                    // como fallback: violaria la FK extra_hours_user_id_fkey.
+                    uid: person.uid || null,
                     staffId: person.id,
                     dni: item.dni,
                     name: person.name || '',
@@ -1618,17 +1648,12 @@ function AdminDashboard() {
     };
 
     const openScheduleWindow = async (uid, docId) => {
-        let finalUid = uid;
-        if (!uid) {
-            finalUid = generateUid();
-            try {
-                await setDoc(doc(db, 'staff_profiles', docId), { uid: finalUid }, { merge: true });
-                await setDoc(doc(db, 'study_schedules', finalUid), {});
-            } catch (err) {
-                console.error("Error generando UID para colaborador:", err);
-                alert("No se pudo generar el UID para este colaborador.");
-                return;
-            }
+        // El horario de estudios se resuelve por id de staff_profiles o user_id,
+        // así que usamos el uid real si existe o el id del perfil como identificador.
+        const finalUid = uid || docId;
+        if (!finalUid) {
+            alert("No se pudo identificar al colaborador para abrir su horario.");
+            return;
         }
 
         const width = 600;
@@ -1770,20 +1795,64 @@ function AdminDashboard() {
             // 1. Leer solo los ceses de ESTA tienda
             const qCeses = query(collection(db, 'ceses'), where('storeId', '==', userData.storeId));
             const snap = await getDocs(qCeses);
-            const existingIds = new Set(snap.docs.map(d => d.id));
-            const lista = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            const cessationKey = (record) => [
+                record.staffId || '',
+                record.cessationDate || '',
+                record.isModalityChange ? `modality:${record.nextModality || ''}` : 'cessation'
+            ].join('|');
+            const existingIds = new Set(
+                snap.docs.filter(snapshot => !snapshot.data().isCancelled).map(snapshot => snapshot.id)
+            );
+            const existingKeys = new Set(
+                snap.docs
+                    .map(snapshot => snapshot.data())
+                    .filter(record => !record.isCancelled)
+                    .map(cessationKey)
+            );
+            let lista = snap.docs
+                .map(d => ({ id: d.id, ...d.data() }))
+                .filter(registro => !registro.isCancelled);
 
             // 2. Migrar solo colaboradores de ESTA tienda
             const staffQuery = query(collection(db, 'staff_profiles'), where('storeId', '==', userData.storeId));
             const staffSnap = await getDocs(staffQuery);
             const migraciones = [];
+            const staffActual = new Map(staffSnap.docs.map(snapshot => [snapshot.id, snapshot.data()]));
+            const cesesObsoletos = snap.docs.filter(snapshot => {
+                const registro = snapshot.data();
+                if (registro.isCancelled) return true;
+                if (registro.isModalityChange) return false;
+
+                const perfil = staffActual.get(registro.staffId);
+                if (!perfil) return false; // Mantener el historial de perfiles ya eliminados.
+
+                return !perfil.cessationDate || perfil.cessationDate !== registro.cessationDate;
+            });
+
+            if (cesesObsoletos.length > 0) {
+                const idsObsoletos = new Set(cesesObsoletos.map(snapshot => snapshot.id));
+                lista = lista.filter(registro => !idsObsoletos.has(registro.id));
+                cesesObsoletos.forEach(snapshot => {
+                    existingIds.delete(snapshot.id);
+                    existingKeys.delete(cessationKey(snapshot.data()));
+                });
+
+                // Corregir la vista aunque una política antigua impida limpiar el registro.
+                await Promise.allSettled(cesesObsoletos.map(snapshot =>
+                    deleteDoc(snapshot.ref).catch(error => {
+                        console.warn(`No se pudo depurar el cese obsoleto ${snapshot.id}:`, error);
+                    })
+                ));
+            }
+
             staffSnap.docs.forEach(d => {
                 const s = d.data();
 
                 // --- CASO 1: CESE NORMAL ---
                 if (s.cessationDate) {
                     const docId = `${d.id}_${s.cessationDate}`;
-                    if (!existingIds.has(docId)) {
+                    const key = cessationKey({ staffId: d.id, cessationDate: s.cessationDate });
+                    if (!existingIds.has(docId) && !existingKeys.has(key)) {
                         const registro = {
                             staffId: d.id,
                             name: s.name || '',
@@ -1795,12 +1864,18 @@ function AdminDashboard() {
                             joinDate: s.joinDate || s.createdAt?.split?.('T')?.[0] || '',
                             cessationDate: s.cessationDate,
                             storeId: userData.storeId,
+                            motivoCese: 'RENUNCIA VOLUNTARIA',
+                            motivoReal: 'MEJORA ECONÓMICA',
                             registeredAt: new Date().toISOString(),
                             migratedFromProfile: true
                         };
                         migraciones.push(
                             setDoc(doc(db, 'ceses', docId), registro)
-                                .then(() => lista.push({ id: docId, ...registro }))
+                                .then(() => {
+                                    existingIds.add(docId);
+                                    existingKeys.add(key);
+                                    lista.push({ id: docId, ...registro });
+                                })
                         );
                     }
                 }
@@ -1808,7 +1883,21 @@ function AdminDashboard() {
                 // --- CASO 2: CAMBIO DE MODALIDAD ---
                 if (s.modalityChangeDate && s.nextModality) {
                     const docId = `${d.id}_mod_${s.modalityChangeDate}`;
-                    if (!existingIds.has(docId)) {
+                    const modalityEndDate = (() => {
+                        const date = new Date(s.modalityChangeDate + 'T00:00:00');
+                        date.setDate(date.getDate() - 1);
+                        const y = date.getFullYear();
+                        const m = String(date.getMonth() + 1).padStart(2, '0');
+                        const day = String(date.getDate()).padStart(2, '0');
+                        return `${y}-${m}-${day}`;
+                    })();
+                    const key = cessationKey({
+                        staffId: d.id,
+                        cessationDate: modalityEndDate,
+                        isModalityChange: true,
+                        nextModality: s.nextModality
+                    });
+                    if (!existingIds.has(docId) && !existingKeys.has(key)) {
                         const registro = {
                             staffId: d.id,
                             name: s.name || '',
@@ -1818,14 +1907,7 @@ function AdminDashboard() {
                             gender: s.gender || s.sexo || '',
                             position: s.position || 'TEAM MEMBER',
                             joinDate: s.joinDate || s.createdAt?.split?.('T')?.[0] || '',
-                            cessationDate: (() => {
-                                const d = new Date(s.modalityChangeDate + 'T00:00:00');
-                                d.setDate(d.getDate() - 1);
-                                const y = d.getFullYear();
-                                const m = String(d.getMonth() + 1).padStart(2, '0');
-                                const day = String(d.getDate()).padStart(2, '0');
-                                return `${y}-${m}-${day}`;
-                            })(), // Un día antes del cambio
+                            cessationDate: modalityEndDate, // Un día antes del cambio
                             storeId: userData.storeId,
                             registeredAt: new Date().toISOString(),
                             isModalityChange: true,
@@ -1836,14 +1918,23 @@ function AdminDashboard() {
                         };
                         migraciones.push(
                             setDoc(doc(db, 'ceses', docId), registro)
-                                .then(() => lista.push({ id: docId, ...registro }))
+                                .then(() => {
+                                    existingIds.add(docId);
+                                    existingKeys.add(key);
+                                    lista.push({ id: docId, ...registro });
+                                })
                         );
                     }
                 }
             });
 
             if (migraciones.length > 0) {
-                await Promise.all(migraciones);
+                const results = await Promise.allSettled(migraciones);
+                results.forEach(result => {
+                    if (result.status === 'rejected') {
+                        console.warn('No se pudo sincronizar un registro de cese:', result.reason);
+                    }
+                });
             }
 
             lista.sort((a, b) => new Date(b.cessationDate) - new Date(a.cessationDate));
@@ -2044,8 +2135,8 @@ function AdminDashboard() {
                 s.feriados || '0',
                 s.descuentos || '0',
                 s.desempenio || '',
-                s.motivoCese || '',
-                s.motivoReal || '',
+                s.motivoCese || 'RENUNCIA VOLUNTARIA',
+                s.motivoReal || 'MEJORA ECONÓMICA',
                 s.comentario || ''
             ]);
         });
@@ -2160,7 +2251,7 @@ function AdminDashboard() {
             // Eliminar el perfil de staff (siempre permitido para admins)
             await deleteDoc(doc(db, "staff_profiles", id));
 
-            // Intentar eliminar el documento de users (puede fallar por reglas de Firestore;
+            // Intentar eliminar el perfil de acceso (puede fallar por permisos;
             // si falla, el perfil ya fue eliminado y el documento huérfano es inofensivo)
             if (uid) {
                 try {
@@ -2178,6 +2269,8 @@ function AdminDashboard() {
     };
 
     const filteredStaff = staff.filter(s => {
+        if (!isStaffActive(s)) return false;
+
         const today = new Date(); today.setHours(0, 0, 0, 0);
         // Ocultar personal (trainees o regulares) cuyo plazo ha terminado
         const endDateStr = s.isTrainee ? s.trainingEndDate : (s.cessationDate || s.terminationDate);
@@ -2284,6 +2377,13 @@ function AdminDashboard() {
                                     accept=".xlsx,.xls"
                                     className="hidden"
                                     onChange={handleGeoVictoriaExtraHoursUpload}
+                                />
+                                <input
+                                    ref={geoVictoriaLateInputRef}
+                                    type="file"
+                                    accept=".xlsx,.xls"
+                                    className="hidden"
+                                    onChange={handleGeoVictoriaLateUpload}
                                 />
                                 <button
                                     onClick={() => setShowRequestsModal(true)}
@@ -2520,6 +2620,14 @@ function AdminDashboard() {
                                             >
                                                 <Upload className="w-4 h-4" />
                                                 {geoVictoriaExtraImporting ? 'Importando...' : 'Subir Tiempo Extra'}
+                                            </button>
+                                            <button
+                                                onClick={() => geoVictoriaLateInputRef.current?.click()}
+                                                disabled={geoVictoriaLateImporting}
+                                                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 text-white text-sm font-bold hover:bg-amber-600 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                                            >
+                                                <Clock className="w-4 h-4" />
+                                                {geoVictoriaLateImporting ? 'Procesando tardanzas...' : 'Tardanzas'}
                                             </button>
                                             <button
                                                 onClick={loadGeoVictoriaExtraHours}
@@ -3229,19 +3337,7 @@ function AdminDashboard() {
                                                     
                                                     <div className="flex items-center justify-center gap-1">
                                                         <button
-                                                            onClick={async () => {
-                                                                if (!colab.uid) {
-                                                                    const generatedUid = generateUid();
-                                                                    try {
-                                                                        await setDoc(doc(db, 'staff_profiles', colab.id), { uid: generatedUid }, { merge: true });
-                                                                        await setDoc(doc(db, 'study_schedules', generatedUid), {});
-                                                                        colab.uid = generatedUid;
-                                                                    } catch (err) {
-                                                                        console.error("Error generando UID:", err);
-                                                                        alert("No se pudo generar el UID automáticamente para este colaborador.");
-                                                                        return;
-                                                                    }
-                                                                }
+                                                            onClick={() => {
                                                                 setSelectedStaff(colab);
                                                                 setShowScheduleEditor(true);
                                                             }}
@@ -3318,7 +3414,7 @@ function AdminDashboard() {
                             </div>
                             <div className="p-6">
                                 <StudyScheduleEditor
-                                    uid={selectedStaff.uid}
+                                    uid={selectedStaff.uid || selectedStaff.id}
                                     onClose={() => {
                                         setShowScheduleEditor(false);
                                         setSelectedStaff(null);
@@ -4051,7 +4147,7 @@ function AdminDashboard() {
                                 </div>
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                    {staff.filter(s => !s.cessationDate).map(s => {
+                                    {staff.filter(s => isStaffActive(s)).map(s => {
                                         // Filtramos para contar solo las habilidades que existen en los requerimientos actuales de la tienda
                                         const mastered = s.skills?.filter(skill => storeRequirements.includes(skill)).length || 0;
                                         const total = storeRequirements.length || 1;

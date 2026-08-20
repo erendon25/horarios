@@ -68,9 +68,9 @@ const EvaluationResult = ({ data, onBackToDashboard, onEdit, canEdit }) => {
         });
 
     return (
-        <div className="flex flex-col min-h-screen bg-slate-50 overflow-y-auto">
+        <div className="flex flex-col min-h-[100dvh] bg-slate-50 overflow-y-auto">
             {/* Result Header */}
-            <div className={`p-12 pt-20 rounded-b-[60px] text-center shadow-2xl relative overflow-hidden ${isCertified ? 'bg-emerald-500' : 'bg-orange-500'}`}>
+            <div className={`px-4 sm:px-12 py-12 sm:pt-20 rounded-b-3xl sm:rounded-b-[60px] text-center shadow-2xl relative overflow-hidden ${isCertified ? 'bg-emerald-500' : 'bg-orange-500'}`}>
                 {/* Visual decoration */}
                 <div className="absolute top-0 left-0 w-full h-full opacity-10 pointer-events-none select-none overflow-hidden">
                     <div className="absolute -top-10 -left-10 w-64 h-64 bg-white rounded-full blur-3xl"></div>
@@ -80,25 +80,25 @@ const EvaluationResult = ({ data, onBackToDashboard, onEdit, canEdit }) => {
                 <div className="relative z-10 animate-in zoom-in duration-1000">
                     <div className="mb-6">
                         <p className="text-[10px] font-black uppercase tracking-[0.4em] text-white/60 mb-2">Evaluación de Estación</p>
-                        <h2 className="text-2xl font-black text-white uppercase tracking-tight">{data.collaboratorName}</h2>
+                        <h2 className="text-xl sm:text-2xl font-black text-white uppercase tracking-tight break-words">{data.collaboratorName}</h2>
                         <p className="text-xs font-bold text-white/80 mt-1">{data.stationName}</p>
                     </div>
-                    <div className="w-24 h-24 bg-white rounded-[32px] flex items-center justify-center mx-auto mb-8 shadow-2xl text-slate-900 border-4 border-white/20">
+                    <div className="w-20 h-20 sm:w-24 sm:h-24 bg-white rounded-2xl sm:rounded-[32px] flex items-center justify-center mx-auto mb-6 sm:mb-8 shadow-2xl text-slate-900 border-4 border-white/20">
                         {isCertified ? <Trophy size={48} className="text-emerald-500" strokeWidth={2.5} /> : <AlertTriangle className="text-orange-500" size={48} strokeWidth={2.5} />}
                     </div>
-                    <h1 className="text-7xl font-black text-white mb-4 tracking-tighter leading-none">{score}%</h1>
-                    <div className="inline-flex items-center gap-3 px-8 py-3 bg-white/10 backdrop-blur-xl rounded-full border border-white/20 text-white">
+                    <h1 className="text-5xl sm:text-7xl font-black text-white mb-4 tracking-tighter leading-none">{score}%</h1>
+                    <div className="inline-flex items-center gap-2 sm:gap-3 px-4 sm:px-8 py-3 bg-white/10 backdrop-blur-xl rounded-full border border-white/20 text-white">
                         <div className="w-2 h-2 bg-white rounded-full animate-pulse shadow-[0_0_8px_white]"></div>
-                        <span className="text-[10px] font-black uppercase tracking-[0.3em]">
+                            <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.12em] sm:tracking-[0.3em]">
                             {isCertified ? 'Miembro Certificado' : 'Entrenamiento Pendiente'}
                         </span>
                     </div>
                 </div>
             </div>
 
-            <div className="px-6 -mt-12 space-y-8 pb-32 max-w-4xl mx-auto w-full relative z-20">
+            <div className="px-4 sm:px-6 -mt-6 sm:-mt-12 space-y-5 sm:space-y-8 pb-16 sm:pb-32 max-w-4xl mx-auto w-full relative z-20">
                 {/* Detailed Stats */}
-                <div className="bg-white p-10 rounded-[48px] shadow-2xl shadow-gray-200/50 flex flex-col md:flex-row items-center gap-10 border border-white transition-transform hover:scale-[1.01] duration-500">
+                <div className="bg-white p-5 sm:p-10 rounded-2xl sm:rounded-[48px] shadow-2xl shadow-gray-200/50 flex flex-col md:flex-row items-center gap-6 sm:gap-10 border border-white transition-transform hover:scale-[1.01] duration-500">
                     <div className="w-40 h-40 shrink-0 relative">
                         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                             <span className="text-2xl font-black text-slate-800 leading-none">{passedPoints}</span>
@@ -154,15 +154,15 @@ const EvaluationResult = ({ data, onBackToDashboard, onEdit, canEdit }) => {
                     </div>
                     <div className="grid gap-6">
                         {gaps.length > 0 ? gaps.map((gap, i) => (
-                            <div key={i} className="bg-white p-6 rounded-[32px] border-l-[12px] border-rose-500 shadow-xl shadow-gray-200/40 flex gap-6 transition-all hover:translate-x-2 group">
-                                <div className="w-14 h-14 bg-rose-50 rounded-2xl flex items-center justify-center shrink-0 text-rose-500 group-hover:scale-110 transition-all">
+                            <div key={i} className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-[32px] border-l-8 sm:border-l-[12px] border-rose-500 shadow-xl shadow-gray-200/40 flex gap-3 sm:gap-6 transition-all group">
+                                <div className="w-11 h-11 sm:w-14 sm:h-14 bg-rose-50 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 text-rose-500 group-hover:scale-110 transition-all">
                                     <AlertTriangle size={28} strokeWidth={2.5} />
                                 </div>
                                 <div className="flex-1">
                                     <p className="text-sm text-slate-800 font-bold leading-tight mb-2 uppercase tracking-tight">
                                         Punto #{gap.id}
                                     </p>
-                                    <p className="text-base text-slate-900 font-black leading-snug mb-3">
+                                    <p className="text-sm sm:text-base text-slate-900 font-black leading-snug mb-3 break-words">
                                         {gap.text}
                                     </p>
                                     {data.feedback && data.feedback[gap.id] && (
@@ -176,7 +176,7 @@ const EvaluationResult = ({ data, onBackToDashboard, onEdit, canEdit }) => {
                                 </div>
                             </div>
                         )) : (
-                            <div className="bg-emerald-50 p-12 rounded-[60px] border border-emerald-100 text-center shadow-inner">
+                            <div className="bg-emerald-50 p-6 sm:p-12 rounded-3xl sm:rounded-[60px] border border-emerald-100 text-center shadow-inner">
                                 <div className="w-20 h-20 bg-emerald-500 rounded-[32px] flex items-center justify-center mx-auto mb-6 text-white shadow-2xl shadow-emerald-500/30">
                                     <CheckCircle2 size={40} strokeWidth={3} />
                                 </div>
@@ -189,7 +189,7 @@ const EvaluationResult = ({ data, onBackToDashboard, onEdit, canEdit }) => {
 
                 {/* General Observation */}
                 {data.generalFindings && (
-                    <div className="bg-white p-10 rounded-[48px] border border-gray-50 shadow-2xl shadow-gray-100/50 relative overflow-hidden group">
+                    <div className="bg-white p-5 sm:p-10 rounded-2xl sm:rounded-[48px] border border-gray-50 shadow-2xl shadow-gray-100/50 relative overflow-hidden group">
                         <div className="absolute top-0 right-0 p-8 opacity-[0.03] group-hover:scale-110 transition-transform">
                             <MessageSquare size={120} />
                         </div>
@@ -207,10 +207,10 @@ const EvaluationResult = ({ data, onBackToDashboard, onEdit, canEdit }) => {
             </div>
 
             {/* Footer Actions */}
-            <div className="mt-auto px-8 py-10 bg-white border-t border-gray-100 flex flex-col md:flex-row gap-4 max-w-4xl mx-auto w-full items-center justify-center">
+            <div className="mt-auto px-4 sm:px-8 py-6 sm:py-10 bg-white border-t border-gray-100 flex flex-col md:flex-row gap-3 sm:gap-4 max-w-4xl mx-auto w-full items-center justify-center">
                 <button
                     onClick={onBackToDashboard}
-                    className="w-full md:w-auto px-10 py-5 bg-white border-2 border-slate-100 text-slate-400 rounded-[28px] font-black uppercase tracking-[0.2em] text-[10px] flex items-center justify-center gap-3 transition-all hover:bg-slate-50 hover:border-slate-200 active:scale-95"
+                    className="w-full md:w-auto px-5 sm:px-10 py-4 sm:py-5 bg-white border-2 border-slate-100 text-slate-400 rounded-2xl sm:rounded-[28px] font-black uppercase tracking-[0.1em] sm:tracking-[0.2em] text-[9px] sm:text-[10px] flex items-center justify-center gap-3 transition-all hover:bg-slate-50 hover:border-slate-200 active:scale-95"
                 >
                     <Home size={20} strokeWidth={2.5} />
                     Finalizar Sesión
@@ -218,13 +218,13 @@ const EvaluationResult = ({ data, onBackToDashboard, onEdit, canEdit }) => {
                 {canEdit && (
                     <button
                         onClick={onEdit}
-                        className="w-full md:w-auto px-10 py-5 bg-emerald-50 text-emerald-600 border-2 border-emerald-100 rounded-[28px] font-black uppercase tracking-[0.2em] text-[10px] flex items-center justify-center gap-3 transition-all hover:bg-emerald-100 active:scale-95"
+                        className="w-full md:w-auto px-5 sm:px-10 py-4 sm:py-5 bg-emerald-50 text-emerald-600 border-2 border-emerald-100 rounded-2xl sm:rounded-[28px] font-black uppercase tracking-[0.1em] sm:tracking-[0.2em] text-[9px] sm:text-[10px] flex items-center justify-center gap-3 transition-all hover:bg-emerald-100 active:scale-95"
                     >
                         <ClipboardCheck size={20} strokeWidth={2.5} />
                         Revisar o Editar
                     </button>
                 )}
-                <button className="w-full md:w-auto px-12 py-5 bg-slate-900 text-white rounded-[28px] font-black uppercase tracking-[0.2em] text-[10px] flex items-center justify-center gap-4 transition-all hover:bg-black shadow-2xl shadow-slate-900/40 active:scale-95 border-b-4 border-slate-700">
+                <button className="w-full md:w-auto px-5 sm:px-12 py-4 sm:py-5 bg-slate-900 text-white rounded-2xl sm:rounded-[28px] font-black uppercase tracking-[0.1em] sm:tracking-[0.2em] text-[9px] sm:text-[10px] flex items-center justify-center gap-3 sm:gap-4 transition-all hover:bg-black shadow-2xl shadow-slate-900/40 active:scale-95 border-b-4 border-slate-700">
                     <Share2 size={20} strokeWidth={2.5} />
                     Reporte Regional PDF
                 </button>

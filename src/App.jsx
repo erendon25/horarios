@@ -7,9 +7,7 @@ import Login from './components/Login';
 import AdminDashboard from './components/AdminDashboard';
 import CollaboratorDashboard from './components/CollaboratorDashboard';
 import WeeklyScheduleEditor from './components/WeeklyScheduleEditor';
-import PositioningConfig from './components/PositioningConfig';
 import StudyScheduleViewer from './components/StudyScheduleViewer';
-import PositionRequirementsWrapper from './components/PositionRequirementsWrapper';
 import SalesConfig from './components/SalesConfig';
 import SalesAnalysis from './components/SalesAnalysis';
 import ScheduleProjectionPage from './components/ScheduleProjectionPage';
@@ -74,17 +72,9 @@ function AppRouter() {
         </PrivateRoute>
       } />
 
-      <Route path="/posiciones" element={
-        <PrivateRoute role="admin">
-          <PositioningConfig />
-        </PrivateRoute>
-      } />
+      <Route path="/posiciones" element={<Navigate to="/admin/proyeccion" replace />} />
 
-      <Route path="/admin/requirements/:day" element={
-        <PrivateRoute role="admin">
-          <PositionRequirementsWrapper />
-        </PrivateRoute>
-      } />
+      <Route path="/admin/requirements/:day" element={<Navigate to="/admin/proyeccion" replace />} />
 
       <Route path="/admin/ventas" element={
         <PrivateRoute role="admin">
@@ -134,7 +124,7 @@ function AppRouter() {
       />
 
       <Route path="/entrenamiento" element={
-        <PrivateRoute role="admin">
+        <PrivateRoute role="trainer">
           <TrainingApp />
         </PrivateRoute>
       } />

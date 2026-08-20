@@ -2,9 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import background from '../assets/background.png';
-import { getFirestore, collection, query, where, getDocs } from 'firebase/firestore';
 
 function Login() {
     const [email, setEmail] = useState('');
@@ -63,10 +61,11 @@ function Login() {
                     navigate('/admin');
                     break;
                 case 'collaborator':
+                case 'trainer':
                     navigate('/staff');
                     break;
                 default:
-                    setError('Rol no reconocido');
+                    setError(`Rol no reconocido: "${userRole ?? 'null'}". Contacta a un administrador para corregirlo en Supabase (user_profiles.role debe ser superadmin, admin, collaborator o trainer).`);
                     break;
             }
         }

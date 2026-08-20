@@ -1,6 +1,6 @@
 // StudyScheduleEditor.jsx – FIXED: load study schedule directly by uid
 import { useState, useEffect } from 'react';
-import { getFirestore, doc, getDoc, setDoc } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, setDoc } from '../lib/supabase/firestoreCompat';
 import { useParams } from 'react-router-dom';
 
 export default function StudyScheduleEditor({ uid: propUid, onClose }) {

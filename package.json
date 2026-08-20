@@ -11,12 +11,12 @@
   "dependencies": {
     "@heroicons/react": "^2.2.0",
     "@mui/icons-material": "^7.0.2",
+    "@supabase/supabase-js": "2.110.2",
     "classnames": "^2.5.1",
     "date-fns": "^4.1.0",
     "esbuild": "^0.25.3",
     "exceljs": "^4.4.0",
     "file-saver": "^2.0.5",
-    "firebase": "^11.6.1",
     "html2canvas": "^1.4.1",
     "jspdf": "^3.0.1",
     "jspdf-autotable": "^5.0.2",

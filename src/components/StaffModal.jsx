@@ -1,6 +1,9 @@
 // ✅ StaffModal.jsx
 import { useState } from 'react';
-import { getFirestore, doc, setDoc, addDoc, collection, getDoc, updateDoc } from 'firebase/firestore';
+import {
+  getFirestore, doc, collection, getDoc, updateDoc,
+  getDocs, query, where, writeBatch
+} from '../lib/supabase/firestoreCompat';
 
 function StaffModal({ staff = null, userData, onClose, onSaved }) {
   const [form, setForm] = useState({
@@ -33,23 +36,71 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
     setLoading(true);
 
     try {
-      if (staff) {
-        const needsCompletion = staff.needsCompletion
-          ? !(form.modality && form.sanitaryCardDate)
-          : (staff.needsCompletion || false);
-        await setDoc(doc(db, 'staff_profiles', staff.id), {
+      const profileRef = staff
+        ? doc(db, 'staff_profiles', staff.id)
+        : doc(collection(db, 'staff_profiles'));
+      const profileId = profileRef.id;
+      const profilePayload = staff
+        ? {
           ...staff,
           ...form,
-          needsCompletion,
-        });
-      } else {
-        await addDoc(collection(db, 'staff_profiles'), {
+          needsCompletion: staff.needsCompletion
+            ? !(form.modality && form.sanitaryCardDate)
+            : (staff.needsCompletion || false),
+        }
+        : {
           ...form,
           storeId: userData?.storeId,
           status: 'pending',
           createdAt: new Date().toISOString(),
+        };
+
+      // Mantener RR. HH. sincronizado con la fecha de cese del perfil.
+      // Perfil y cese se escriben juntos para evitar estados inconsistentes.
+      const cesesSnap = await getDocs(query(
+        collection(db, 'ceses'),
+        where('staffId', '==', profileId)
+      ));
+      const cesesNormales = cesesSnap.docs.filter(snapshot => !snapshot.data().isModalityChange);
+      const registroAnterior = cesesNormales.find(snapshot => snapshot.id === `${profileId}_${staff?.cessationDate}`)
+        || cesesNormales[0];
+      const datosAnteriores = registroAnterior?.data() || {};
+      const batch = writeBatch(db);
+      const nuevoCeseId = form.cessationDate ? `${profileId}_${form.cessationDate}` : null;
+
+      batch.set(profileRef, profilePayload);
+      cesesNormales
+        .filter(snapshot => snapshot.id !== nuevoCeseId)
+        .forEach(snapshot => batch.update(snapshot.ref, {
+          isCancelled: true,
+          cancelledAt: new Date().toISOString(),
+          lastUpdated: new Date().toISOString(),
+        }));
+
+      if (form.cessationDate) {
+        batch.set(doc(db, 'ceses', nuevoCeseId), {
+          ...datosAnteriores,
+          staffId: profileId,
+          name: form.name || '',
+          lastName: form.lastName || '',
+          modality: form.modality || '',
+          dni: form.dni || '',
+          gender: form.gender || '',
+          position: form.position || 'TEAM MEMBER',
+          joinDate: form.joinDate || '',
+          cessationDate: form.cessationDate,
+          storeId: userData?.storeId || staff?.storeId || '',
+          motivoCese: datosAnteriores.motivoCese || 'RENUNCIA VOLUNTARIA',
+          motivoReal: datosAnteriores.motivoReal || 'MEJORA ECONÓMICA',
+          registeredAt: datosAnteriores.registeredAt || new Date().toISOString(),
+          migratedFromProfile: true,
+          isCancelled: false,
+          cancelledAt: '',
+          lastUpdated: new Date().toISOString(),
         });
       }
+
+      await batch.commit();
 
       // Sync role as a secondary operation
       try {
@@ -60,8 +111,13 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
 
           if (userSnap.exists()) {
             const currentRole = userSnap.data().role;
-            if (currentRole !== 'admin' && currentRole !== 'superadmin') {
-              const newRole = form.position === 'ENTRENADOR' ? 'trainer' : 'collaborator';
+            if (currentRole !== 'superadmin') {
+              let newRole = 'collaborator';
+              if (form.position === 'GERENTE') {
+                newRole = 'admin';
+              } else if (form.position === 'ENTRENADOR') {
+                newRole = 'trainer';
+              }
               if (currentRole !== newRole) {
                 await updateDoc(userDocRef, { role: newRole });
               }
@@ -176,7 +232,6 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
             <select name="position" value={form.position} onChange={handleChange} className={inputCls}>
               <option value="COLABORADOR">COLABORADOR</option>
               <option value="ENTRENADOR">ENTRENADOR / TRAINER</option>
-              <option value="LIDER">LIDER / ENCARGADO</option>
               <option value="ASISTENTE">ASISTENTE</option>
               <option value="GERENTE">GERENTE</option>
             </select>
