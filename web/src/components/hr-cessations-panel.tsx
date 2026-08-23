@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, Pencil, Search, UserRoundCheck, UserRoundX, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -66,6 +66,32 @@ export function HrCessationsPanel({ storeId }: { storeId: string }) {
   const [cessationMonth, setCessationMonth] = useState("all");
   const [selected, setSelected] = useState<HrRow | null>(null);
   const [form, setForm] = useState(emptyForm);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!selected) return;
+    const scrollY = window.scrollY;
+    const previous = {
+      overflow: document.body.style.overflow,
+      position: document.body.style.position,
+      top: document.body.style.top,
+      width: document.body.style.width,
+      rootOverflow: document.documentElement.style.overflow,
+    };
+    document.body.style.overflow = "hidden";
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${scrollY}px`;
+    document.body.style.width = "100%";
+    document.documentElement.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous.overflow;
+      document.body.style.position = previous.position;
+      document.body.style.top = previous.top;
+      document.body.style.width = previous.width;
+      document.documentElement.style.overflow = previous.rootOverflow;
+      window.scrollTo(0, scrollY);
+    };
+  }, [selected]);
 
   const availableMonths = useMemo(() => [...new Set(data.flatMap((row) => row.cessation_date ? [row.cessation_date.slice(0, 7)] : []))].sort().reverse(), [data]);
   const rows = useMemo(() => data.filter((row) => {
@@ -78,7 +104,8 @@ export function HrCessationsPanel({ storeId }: { storeId: string }) {
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (!selected) return;
-      const { error: saveError } = await createClient().rpc("save_staff_cessation", {
+      const supabase = createClient();
+      const { error: saveError } = await supabase.rpc("save_staff_cessation", {
         p_staff_id: selected.id,
         p_cessation_date: form.cessationDate || null,
         p_performance: form.performance,
@@ -94,14 +121,26 @@ export function HrCessationsPanel({ storeId }: { storeId: string }) {
         p_discounts: asNumber(form.discounts),
       });
       if (saveError) throw saveError;
+
+      const verification = await supabase.from("cessations")
+        .select("staff_id,cessation_date")
+        .eq("staff_id", selected.id)
+        .eq("is_modality_change", false)
+        .maybeSingle();
+      if (verification.error) throw verification.error;
+      if (form.cessationDate && verification.data?.cessation_date !== form.cessationDate) throw new Error("cessation_not_synced");
+      if (!form.cessationDate && verification.data) throw new Error("cessation_not_removed");
+      return { name: `${selected.first_name} ${selected.last_name}`.trim(), removed: !form.cessationDate };
     },
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ["hr", "cessations"] });
       setSelected(null);
+      setNotice(result?.removed ? `Se quitó el cese de ${result.name}.` : `Cese de ${result?.name} guardado y verificado.`);
     },
   });
 
   function openEditor(row: HrRow) {
+    setNotice(null);
     const c = row.cessation;
     setForm({
       cessationDate: row.cessation_date ?? "",
@@ -150,6 +189,7 @@ export function HrCessationsPanel({ storeId }: { storeId: string }) {
       <button className="secondary-button" onClick={downloadCompleteReport} disabled={!rows.some((row) => row.cessation)}><Download size={17}/> Descargar reporte filtrado</button>
     </section>
 
+    {notice && <p className="form-alert success">{notice}</p>}
     {error && <p className="form-alert error">No se pudo cargar la información de RR. HH.</p>}
     <section className="data-card">
       <div className="data-card-heading"><div><strong>{isPending ? "Cargando…" : `${rows.length} colaboradores`}</strong><span>{data.filter((row) => row.cessation_date).length} con cese registrado</span></div>{dataUpdatedAt > 0 && <small>Actualizado {new Date(dataUpdatedAt).toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit" })}</small>}</div>
@@ -170,7 +210,7 @@ export function HrCessationsPanel({ storeId }: { storeId: string }) {
         <label className="span-2">Tardanzas (minutos u horas)<input value={form.tardiness} onChange={(e) => setForm({ ...form, tardiness: e.target.value })}/></label>
         <label className="span-2">Comentario de tienda<textarea rows={3} value={form.storeComment} onChange={(e) => setForm({ ...form, storeComment: e.target.value })} placeholder="Describe con mayor detalle el motivo del retiro"/></label>
       </div>
-      {saveMutation.error && <p className="form-alert error">No se pudo guardar el cese. Verifica tus permisos y vuelve a intentar.</p>}
+      {saveMutation.error && <p className="form-alert error">{saveMutation.error.message === "cessation_not_synced" ? "La fecha no quedó sincronizada con el registro de cese." : saveMutation.error.message === "cessation_not_removed" ? "El registro de cese no pudo retirarse." : `No se pudo guardar el cese: ${saveMutation.error.message}`}</p>}
       <footer><button className="plain-button" onClick={() => setSelected(null)}>Cancelar</button><button className="primary-button" disabled={saveMutation.isPending} onClick={() => saveMutation.mutate()}>{saveMutation.isPending ? "Guardando…" : form.cessationDate ? "Guardar cese" : "Quitar cese"}</button></footer>
     </section></div>}
   </>;

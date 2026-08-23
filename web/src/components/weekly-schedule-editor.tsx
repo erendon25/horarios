@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarDays, Check, CircleHelp, Copy, Save, Sparkles, Trash2, Undo2 } from "lucide-react";
+import { AlertTriangle, BellRing, CalendarDays, Check, CircleHelp, Copy, Save, Sparkles, Trash2, Undo2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import type { Json } from "@/types/database";
 import { ScheduleCoverageMatrix } from "@/components/schedule-coverage-matrix";
@@ -42,6 +42,23 @@ function studyLabel(study: StudyDay | undefined) {
   const blocks = study.blocks.map((block) => `${block.start}–${block.end}`).join(" · ");
   if (study.free) return blocks ? `Solicita día libre · ${blocks}` : "Solicita día libre por estudios";
   return blocks || "Sin clases registradas";
+}
+
+function studyScheduleFromRows(rows: Array<Record<string, unknown>>) {
+  const schedule: Partial<Record<Weekday, StudyDay>> = {};
+  for (const day of rows) {
+    const key = WEEKDAYS[Number(day.weekday)];
+    if (!key) continue;
+    const blocks = Array.isArray(day.study_schedule_blocks) ? day.study_schedule_blocks : [];
+    schedule[key] = {
+      free: day.requests_day_off === true,
+      blocks: blocks.filter(isObject).map((block) => ({
+        start: clock(typeof block.start_time === "string" ? block.start_time : null),
+        end: clock(typeof block.end_time === "string" ? block.end_time : null),
+      })),
+    };
+  }
+  return schedule;
 }
 
 function limaToday() {
@@ -200,12 +217,67 @@ function LoadedWeeklySchedule({ weekStart, onWeekChange, data }: { weekStart: st
   const [schedule, setSchedule] = useState<Record<string, StaffWeek>>(data.current);
   const [message, setMessage] = useState("");
   const [history, setHistory] = useState<Array<{ schedule: Record<string, StaffWeek>; dirty: Set<string>; selectedDay: Weekday }>>([]);
+  const [studyOverrides, setStudyOverrides] = useState<Record<string, Partial<Record<Weekday, StudyDay>>>>({});
+  const [studyNotification, setStudyNotification] = useState<{ staffName: string; changedAt: string } | null>(null);
+  const [realtimeError, setRealtimeError] = useState(false);
+  const realtimeTimers = useRef(new Map<string, number>());
 
   useEffect(() => {
     if (!dirty.size) return;
     const timeout = window.setTimeout(() => window.localStorage.setItem(draftKey, JSON.stringify(schedule)), 700);
     return () => window.clearTimeout(timeout);
   }, [draftKey, dirty.size, schedule]);
+
+  useEffect(() => {
+    const supabase = createClient();
+    const staffById = new Map(data.staff.map((person) => [person.id, person]));
+    const timers = realtimeTimers.current;
+
+    async function refreshStudySchedule(staffId: string) {
+      const person = staffById.get(staffId);
+      if (!person) return;
+      const result = await supabase.from("study_schedule_days")
+        .select("id,weekday,requests_day_off,study_schedule_blocks(start_time,end_time)")
+        .eq("staff_id", staffId)
+        .order("weekday");
+      if (result.error) {
+        setRealtimeError(true);
+        return;
+      }
+      setStudyOverrides((current) => ({
+        ...current,
+        [staffId]: studyScheduleFromRows((result.data ?? []) as unknown as Array<Record<string, unknown>>),
+      }));
+      setRealtimeError(false);
+      setStudyNotification({
+        staffName: `${person.first_name} ${person.last_name}`.trim(),
+        changedAt: new Date().toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit" }),
+      });
+    }
+
+    const channel = supabase.channel(`weekly-study-alerts:${data.storeId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "study_schedule_days" }, (payload) => {
+        const next = isObject(payload.new) ? payload.new : {};
+        const previous = isObject(payload.old) ? payload.old : {};
+        const staffId = typeof next.staff_id === "string" ? next.staff_id : typeof previous.staff_id === "string" ? previous.staff_id : "";
+        if (!staffId || !staffById.has(staffId)) return;
+        const pending = timers.get(staffId);
+        if (pending) window.clearTimeout(pending);
+        timers.set(staffId, window.setTimeout(() => {
+          timers.delete(staffId);
+          void refreshStudySchedule(staffId);
+        }, 300));
+      })
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") setRealtimeError(true);
+      });
+
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+      timers.clear();
+      void supabase.removeChannel(channel);
+    };
+  }, [data.staff, data.storeId]);
 
   const selectedDate = addIsoDays(weekStart, WEEKDAYS.indexOf(selectedDay));
   const projection = projectionForDay(data.projection, selectedDay);
@@ -328,10 +400,11 @@ function LoadedWeeklySchedule({ weekStart, onWeekChange, data }: { weekStart: st
     const changed = new Set(dirty);
     const candidates = data.staff.filter((person) => !(person.is_trainee ? person.training_end_date : person.cessation_date) || (person.is_trainee ? person.training_end_date! : person.cessation_date!) >= selectedDate);
     for (const person of candidates) {
-      const study = person.study[selectedDay];
+      const studySchedule = studyOverrides[person.id] ?? person.study;
+      const study = studySchedule[selectedDay];
       if (study?.free) { next[person.id] = { ...next[person.id], [selectedDay]: { ...next[person.id][selectedDay], off: true, start: "", end: "", position: "", holiday: false } }; changed.add(person.id); continue; }
       const full = effectiveModality(person, selectedDate) === "Full-Time";
-      const freeStudyDays = Object.values(person.study).filter((day) => day?.free).length;
+      const freeStudyDays = Object.values(studySchedule).filter((day) => day?.free).length;
       const blockOptions = full ? [35] : freeStudyDays > 1 ? [24, 16] : [16];
       const currentMinutes = WEEKDAYS.reduce((total, day) => total + shiftMinutes(next[person.id][day], effectiveModality(person, next[person.id][day].date) === "Full-Time"), 0);
       let assigned: Shift | null = null;
@@ -408,6 +481,8 @@ function LoadedWeeklySchedule({ weekStart, onWeekChange, data }: { weekStart: st
     <div className="weekly-actions"><button className="plain-button" disabled={!history.length || save.isPending} onClick={undoLastChange}><Undo2 size={16}/> Deshacer</button><button className="danger-button" disabled={save.isPending} onClick={deleteSelectedDaySchedule}><Trash2 size={16}/> Eliminar día seleccionado</button><button className="plain-button" onClick={replicatePrevious}><Copy size={16}/> Replicar semana anterior</button><button className="secondary-button" onClick={generateIdeal}><Sparkles size={16}/> Generar día desde proyección</button><button className="primary-button" disabled={save.isPending || !dirty.size} onClick={() => save.mutate()}><Save size={16}/> {save.isPending ? "Guardando…" : `Guardar ${dirty.size || ""}`}</button></div>
     <div className="export-toolbar"><label><input type="checkbox" checked={excludeTrainees} onChange={(event) => setExcludeTrainees(event.target.checked)}/> Excluir personal en entrenamiento</label><label><input type="checkbox" checked={showPositions} onChange={(event) => setShowPositions(event.target.checked)}/> Mostrar posiciones en PDF</label><label>Turno<select value={positionTurn} onChange={(event) => setPositionTurn(event.target.value as typeof positionTurn)}><option value="mañana">Mañana</option><option value="tarde">Tarde</option><option value="ambos">Día completo</option></select></label><button className="plain-button" onClick={() => exportWeeklySchedulePdf(activeWeekStaff, schedule, weekStart, { excludeTrainees, showPositions })}>PDF semanal</button><button className="plain-button" onClick={() => exportPositioningPdf(activeWeekStaff, schedule, selectedDay, selectedDate, positionTurn, positions)}>PDF posiciones</button><button className="plain-button" onClick={() => exportExtraHoursPdf(activeWeekStaff, schedule, weekStart)}>PDF horas extra</button><button className="plain-button" disabled={exportingExcel || !Object.keys(data.shiftMap).length} onClick={async () => { setExportingExcel(true); try { await exportGeoVictoriaExcel(activeWeekStaff, schedule, weekStart, data.shiftMap); } finally { setExportingExcel(false); } }}>{exportingExcel ? "Generando…" : "Excel GeoVictoria"}</button></div>
     {savedDraft && <div className="restriction-banner draft-banner"><AlertTriangle size={17}/><span>Hay un borrador local anterior. Se está mostrando el horario vigente guardado.</span><button className="plain-button" onClick={restoreSavedDraft}>Recuperar borrador</button><button className="plain-button" onClick={discardSavedDraft}>Descartar</button></div>}
+    {studyNotification && <div className="restriction-banner study-realtime-banner"><BellRing size={17}/><span><strong>{studyNotification.staffName}</strong> modificó su horario de estudios a las {studyNotification.changedAt}. Sus estudios y conflictos ya se actualizaron sin alterar tu borrador.</span><button className="plain-button" onClick={() => setStudyNotification(null)}>Entendido</button></div>}
+    {realtimeError && <p className="restriction-banner warning"><AlertTriangle size={17}/>Las alertas en tiempo real están reconectando. El horario que estás editando permanece guardado localmente.</p>}
     {message && <p className="restriction-banner success"><Check size={17}/>{message}</p>}
     {save.error && <p className="form-alert error">{save.error.message === "no_changes" ? "No hay cambios pendientes." : save.error.message === "invalid_shift" ? "Hay turnos incompletos o con horas iguales." : save.error.message === "invalid_split" ? "Completa correctamente ambos bloques del turno partido." : "El servidor rechazó el guardado por validación o permisos."}</p>}
     <div className="table-scroll"><table className="weekly-table"><thead><tr><th>Colaborador</th><th>Modalidad</th><th>Entrada</th><th>Salida</th><th>Posición</th><th>Extra antes</th><th>Extra después</th><th>Partido</th><th>Libre</th><th>Feriado</th><th>Horas semana</th></tr></thead><tbody>
@@ -415,7 +490,8 @@ function LoadedWeeklySchedule({ weekStart, onWeekChange, data }: { weekStart: st
         const day = schedule[person.id][selectedDay];
         const endDate = person.is_trainee ? person.training_end_date : person.cessation_date;
         const ceased = Boolean(endDate && selectedDate > endDate);
-        const conflicts = shiftConflicts(day, person.study[selectedDay], person.skills);
+        const currentStudy = studyOverrides[person.id] ?? person.study;
+        const conflicts = shiftConflicts(day, currentStudy[selectedDay], person.skills);
         const selectedDayIndex = WEEKDAYS.indexOf(selectedDay);
         const previousDay = selectedDayIndex === 0 ? data.previous[person.id]?.sunday : schedule[person.id][WEEKDAYS[selectedDayIndex - 1]];
         const previousDate = addIsoDays(selectedDate, -1);
@@ -425,7 +501,7 @@ function LoadedWeeklySchedule({ weekStart, onWeekChange, data }: { weekStart: st
           date: addIsoDays(weekStart, index),
           dateLabel: shortDate(addIsoDays(weekStart, index)),
           work: shiftLabel(schedule[person.id][weekday]),
-          study: studyLabel(person.study[weekday]),
+          study: studyLabel(currentStudy[weekday]),
         }));
         const tooltipId = `schedule-detail-${person.id}`;
         const requests = data.requests.filter((request) => request.staff_id === person.id && request.requested_date === selectedDate);

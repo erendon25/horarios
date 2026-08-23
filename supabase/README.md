@@ -9,6 +9,7 @@ El proyecto activo de Supabase ya fue creado y el esquema, la importación y el 
 - `schema.sql`: tablas, índices y políticas iniciales.
 - `security_hardening.sql`: vinculaciones de identidad y tienda reforzadas.
 - `hr_cessation_sync.sql`: reconciliación y sincronización transaccional entre `staff_profiles` y `cessations`.
+- `study_schedule_realtime.sql`: publicación Realtime de cambios de horarios de estudio, protegida por RLS.
 - `staff_management.sql`: alta y edición transaccional de colaboradores y vínculo interno con Auth.
 - `study_schedule_management.sql`: reemplazo atómico de disponibilidad con bloqueos de carnet y tienda.
 - `migrations/*_training_signatures_storage.sql`: bucket privado y políticas RLS para firmas de evaluaciones.

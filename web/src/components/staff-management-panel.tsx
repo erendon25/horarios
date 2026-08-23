@@ -64,7 +64,7 @@ export function StaffManagementPanel({ storeId }: { storeId: string }) {
   const [editing, setEditing] = useState<StaffRow | "new" | null>(null);
   const [scheduleTarget, setScheduleTarget] = useState<StaffRow | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ kind: "success" | "warning"; text: string } | null>(null);
   const [today] = useState(limaToday);
 
   const summary = useMemo(() => summarizeCurrentStaff(staff, today), [staff, today]);
@@ -82,7 +82,9 @@ export function StaffManagementPanel({ storeId }: { storeId: string }) {
       if (!editing) return;
       if (!form.firstName.trim() || !form.lastName.trim() || !form.storeId) throw new Error("required_fields");
       if (Boolean(form.modalityChangeDate) !== Boolean(form.nextModality)) throw new Error("modality_pair");
-      const { error: saveError } = await createClient().rpc("save_staff_profile", {
+      const isNew = editing === "new";
+      const supabase = createClient();
+      const { data: staffId, error: saveError } = await supabase.rpc("save_staff_profile", {
         p_staff_id: editing === "new" ? null : editing.id,
         p_store_id: form.storeId,
         p_first_name: form.firstName,
@@ -103,14 +105,35 @@ export function StaffManagementPanel({ storeId }: { storeId: string }) {
         p_next_modality: nullable(form.nextModality),
       });
       if (saveError) throw saveError;
+      if (!staffId) throw new Error("missing_staff_id");
+
+      if (isNew && form.email.trim()) {
+        const { data: invitation, error: invitationError } = await supabase.functions.invoke("staff-account-admin", {
+          body: { operation: "invite_staff", staffId },
+        });
+        if (invitationError || !invitation?.invited) {
+          const context = (invitationError as { context?: Response } | null)?.context;
+          const payload = context ? await context.json().catch(() => null) as { error?: string } | null : null;
+          return { invited: false, invitationError: payload?.error ?? invitation?.error ?? "invite_failed", email: form.email.trim() };
+        }
+        return { invited: true, invitationError: null, email: form.email.trim() };
+      }
+
+      return { invited: false, invitationError: null, email: "" };
     },
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["staff-management"] }),
         queryClient.invalidateQueries({ queryKey: ["hr", "cessations"] }),
       ]);
       setEditing(null);
-      setNotice("Colaborador guardado correctamente.");
+      if (result?.invited) {
+        setNotice({ kind: "success", text: `Colaborador guardado e invitación enviada a ${result.email}.` });
+      } else if (result?.invitationError) {
+        setNotice({ kind: "warning", text: `El colaborador quedó guardado, pero no se pudo enviar la invitación a ${result.email}. Usa el botón de correo para reintentarlo.` });
+      } else {
+        setNotice({ kind: "success", text: "Colaborador guardado correctamente." });
+      }
     },
   });
 
@@ -129,7 +152,7 @@ export function StaffManagementPanel({ storeId }: { storeId: string }) {
     },
     onSuccess: async (email) => {
       await queryClient.invalidateQueries({ queryKey: ["staff-management"] });
-      setNotice(`Invitación enviada a ${email}.`);
+      setNotice({ kind: "success", text: `Invitación enviada a ${email}.` });
     },
   });
 
@@ -153,7 +176,7 @@ export function StaffManagementPanel({ storeId }: { storeId: string }) {
         queryClient.invalidateQueries({ queryKey: ["hr", "cessations"] }),
         queryClient.invalidateQueries({ queryKey: ["weekly-schedule"] }),
       ]);
-      setNotice(`${deletedName} fue eliminado definitivamente.`);
+      setNotice({ kind: "success", text: `${deletedName} fue eliminado definitivamente.` });
     },
   });
 
@@ -190,7 +213,7 @@ export function StaffManagementPanel({ storeId }: { storeId: string }) {
       <label className="compact-filter">Modalidad<select value={modalityFilter} onChange={(event) => setModalityFilter(event.target.value as typeof modalityFilter)}><option value="all">Todas</option><option value="Full-Time">Full-Time</option><option value="Part-Time">Part-Time</option></select></label>
       <button className="secondary-button" onClick={openNew}><Plus size={17}/> Nuevo colaborador</button>
     </section>
-    {notice && <p className="form-alert success">{notice}</p>}
+    {notice && <p className={`form-alert ${notice.kind}`}>{notice.text}</p>}
     {(error || inviteMutation.error || deleteMutation.error) && <p className="form-alert error">{deleteMutation.error ? "No se pudo eliminar. Solo se pueden borrar definitivamente colaboradores inactivos de tu tienda." : inviteMutation.error ? (inviteMutation.error.message === "app_url_not_configured" ? "Las invitaciones se habilitarán al publicar Next.js y configurar su URL pública." : "No se pudo enviar la invitación. Verifica que el correo no esté registrado y que tengas permisos sobre la tienda.") : "No se pudo cargar la lista de colaboradores."}</p>}
     <section className="data-card">
       <div className="data-card-heading"><div><strong>{isPending ? "Cargando…" : `${rows.length} colaboradores ${statusFilter === "active" ? "activos" : statusFilter === "inactive" ? "inactivos" : "en total"}`}</strong><span>{rows.filter((row) => row.user_id).length} cuentas vinculadas · {rows.filter((row) => !row.user_id).length} sin cuenta</span></div></div>
@@ -213,7 +236,7 @@ export function StaffManagementPanel({ storeId }: { storeId: string }) {
         <label>Apellidos *<input value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })}/></label>
         <label>Tienda *<select value={form.storeId} onChange={(e) => setForm({ ...form, storeId: e.target.value })}><option value="">Seleccionar tienda</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>
         <label>Estado<select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as FormState["status"] })}><option value="active">Activo</option><option value="inactive">Inactivo</option></select></label>
-        <label>Correo<input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="nombre@empresa.com"/></label>
+        <label>Correo<input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="nombre@empresa.com"/><small>{editing === "new" ? "Si registras un correo, se enviará automáticamente la invitación de acceso." : "La cuenta vinculada conservará este correo."}</small></label>
         <label>DNI<input value={form.dni} onChange={(e) => setForm({ ...form, dni: e.target.value })} maxLength={15}/></label>
         <label>Sexo<select value={form.gender} onChange={(e) => setForm({ ...form, gender: e.target.value })}><option value="">Sin especificar</option><option value="MASCULINO">MASCULINO</option><option value="FEMENINO">FEMENINO</option></select></label>
         <label>Fecha de nacimiento<input type="date" value={form.birthDate} onChange={(e) => setForm({ ...form, birthDate: e.target.value })}/></label>

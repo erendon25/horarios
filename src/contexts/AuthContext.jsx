@@ -14,44 +14,68 @@ export function AuthProvider({ children }) {
   const [userRole, setUserRole] = useState(null);
   const [loading, setLoading] = useState(true);
   const [userData, setUserData] = useState(null);
+  const [accessError, setAccessError] = useState(null);
 
   useEffect(() => {
     let active = true;
+    let accessRequest = 0;
 
     const loadAccess = async (user) => {
+      const requestId = ++accessRequest;
       if (!active) return;
       if (!user) {
         setCurrentUser(null);
         setUserRole(null);
         setUserData(null);
+        setAccessError(null);
         setLoading(false);
         return;
       }
 
+      setLoading(true);
+      setAccessError(null);
       setCurrentUser(compatibleUser(user));
-      let { data: profile, error } = await supabase
-        .from("user_profiles")
-        .select("id,email,first_name,last_name,role,status,store_id,staff_profile_id,registration_pending,staff_profiles(cessation_date)")
-        .eq("id", user.id)
-        .maybeSingle();
+      const readProfile = () => supabase
+          .from("user_profiles")
+          .select("id,email,first_name,last_name,role,status,store_id,staff_profile_id,registration_pending")
+          .eq("id", user.id)
+          .maybeSingle();
+
+      let { data: profile, error } = await readProfile();
 
       if (!profile && user.email) {
         const link = await supabase.functions.invoke("staff-account-admin", {
           body: { operation: "register_staff_by_email" },
         });
         if (!link.error) {
-          const retry = await supabase
-            .from("user_profiles")
-            .select("id,email,first_name,last_name,role,status,store_id,staff_profile_id,registration_pending,staff_profiles(cessation_date)")
-            .eq("id", user.id)
-            .maybeSingle();
+          const retry = await readProfile();
           profile = retry.data;
           error = retry.error;
         }
       }
 
-      if (!active) return;
-      const cessationDate = profile?.staff_profiles?.cessation_date;
+      // La restauración de sesión y SIGNED_IN pueden coincidir. Reintenta una
+      // lectura transitoria, pero nunca cierres una sesión válida por ese error.
+      if (error) {
+        await new Promise((resolve) => window.setTimeout(resolve, 180));
+        const retry = await readProfile();
+        profile = retry.data;
+        error = retry.error;
+      }
+
+      if (!active || requestId !== accessRequest) return;
+      let cessationDate = null;
+      if (!error && profile?.staff_profile_id) {
+        const staff = await supabase
+          .from("staff_profiles")
+          .select("cessation_date")
+          .eq("id", profile.staff_profile_id)
+          .maybeSingle();
+        if (staff.error) error = staff.error;
+        cessationDate = staff.data?.cessation_date ?? null;
+      }
+
+      if (!active || requestId !== accessRequest) return;
       const today = new Intl.DateTimeFormat("en-CA", {
         timeZone: "America/Lima",
         year: "numeric",
@@ -59,7 +83,14 @@ export function AuthProvider({ children }) {
         day: "2-digit",
       }).format(new Date());
 
-      if (error || !profile || profile.status !== "active" || (cessationDate && today > cessationDate)) {
+      if (error) {
+        console.error("No se pudo validar el perfil de acceso:", error);
+        setAccessError("No se pudo validar tu acceso en Supabase. Reintenta sin volver a iniciar sesión.");
+        setLoading(false);
+        return;
+      }
+
+      if (!profile || profile.status !== "active" || (cessationDate && today > cessationDate)) {
         await supabase.auth.signOut();
         setCurrentUser(null);
         setUserRole(null);
@@ -85,12 +116,14 @@ export function AuthProvider({ children }) {
       };
       setUserRole(profile.role);
       setUserData(legacyShape);
+      setAccessError(null);
       setLoading(false);
     };
 
     supabase.auth.getSession().then(({ data }) => loadAccess(data.session?.user ?? null));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      void loadAccess(session?.user ?? null);
+      // Supabase recomienda diferir operaciones asíncronas iniciadas desde este callback.
+      window.setTimeout(() => void loadAccess(session?.user ?? null), 0);
     });
 
     return () => {
@@ -130,7 +163,16 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider value={{ currentUser, userRole, userData, login, logout, register, resetPassword, updatePassword }}>
-      {!loading && children}
+      {!loading && accessError && (
+        <main style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: "1.5rem", background: "#f8fafc" }}>
+          <section style={{ maxWidth: 460, padding: "1.5rem", borderRadius: 16, background: "white", boxShadow: "0 12px 40px #1018281f", textAlign: "center" }}>
+            <h2 style={{ marginBottom: ".6rem" }}>No pudimos cargar tu acceso</h2>
+            <p style={{ color: "#475467" }}>{accessError}</p>
+            <button type="button" onClick={() => window.location.reload()} style={{ marginTop: "1rem", padding: ".75rem 1rem", border: 0, borderRadius: 10, color: "white", background: "#2563eb", fontWeight: 700, cursor: "pointer" }}>Reintentar</button>
+          </section>
+        </main>
+      )}
+      {!loading && !accessError && children}
     </AuthContext.Provider>
   );
 }
