@@ -66,6 +66,7 @@ node_modules/
 # dotenv environment variables file
 .env
 .env*.local
+supabase/.temp/
 
 # dataconnect generated files
 .dataconnect

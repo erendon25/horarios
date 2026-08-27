@@ -13,6 +13,8 @@ const edgeError = async (error, data) => {
 
 const errorMessage = (code) => ({
   identity_mismatch: "El DNI no coincide con la ficha seleccionada.",
+  invalid_dni: "Ingresa un DNI válido.",
+  email_not_confirmed: "Primero confirma tu correo y vuelve a iniciar sesión.",
   staff_not_available: "La ficha ya no está disponible para vinculación.",
   account_already_linked: "Esta cuenta ya está vinculada. Recarga la página.",
   rate_limited: "Se alcanzó el límite de intentos. Espera unos minutos.",
@@ -94,7 +96,7 @@ export default function AccountLinking() {
       <h1 className="text-2xl font-bold text-gray-900">Enlaza tu ficha de colaborador</h1>
       <p className="mt-2 text-sm text-gray-600">Selecciona la tienda y tu ficha, luego confirma tu DNI. No se enlazará ninguna cuenta solo por coincidencia de nombre.</p>
       {error && <p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-      {!loading && stores.length === 0 && <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">No hay fichas disponibles para este correo. Pide al administrador que registre tu ficha e invitación.</p>}
+      {!loading && stores.length === 0 && <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">No hay fichas disponibles. Pide al administrador que cree tu ficha con la tienda y el DNI correctos.</p>}
       <form className="mt-5 space-y-4" onSubmit={claim}>
         <label className="block text-sm font-semibold text-gray-700">Tienda
           <select className="mt-1 w-full rounded-lg border p-2" value={storeId} onChange={(event) => setStoreId(event.target.value)} disabled={loading || !stores.length}>

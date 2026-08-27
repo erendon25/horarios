@@ -35,8 +35,12 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
     e.preventDefault();
     if (!form.name || !form.lastName) return alert('Nombre y apellido son obligatorios');
     const normalizedEmail = form.email.trim().toLowerCase();
-    if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
-      return alert('Registra un correo válido. Debe ser el mismo que usará el colaborador en su cuenta.');
+    if (normalizedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return alert('El correo ingresado no es válido. También puedes dejarlo vacío para que el colaborador lo vincule al registrarse.');
+    }
+    const normalizedDni = form.dni.replace(/\D/g, '');
+    if (!staff?.uid && !staff?.userId && (normalizedDni.length < 6 || normalizedDni.length > 15)) {
+      return alert('Registra un DNI válido de 6 a 15 dígitos. El colaborador lo necesitará para vincular su cuenta.');
     }
     if (staff?.cessationDate && !form.cessationDate) {
       return alert('Un cese existente no se puede borrar. Para un reingreso, crea una nueva ficha laboral.');
@@ -48,6 +52,7 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
         ...staff,
         ...form,
         email: normalizedEmail,
+        dni: normalizedDni || null,
         storeId: userData?.storeId || staff?.storeId,
         status: staff?.status || 'pending',
       });
@@ -91,7 +96,7 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
           </div>
 
           <div>
-            <label className={labelCls}>Correo de la cuenta *</label>
+            <label className={labelCls}>Correo de la cuenta (opcional)</label>
             <input
               type="email"
               name="email"
@@ -99,17 +104,16 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
               onChange={handleChange}
               className={inputCls}
               placeholder="nombre@empresa.com"
-              required
               disabled={Boolean(staff?.uid || staff?.userId)}
             />
-            <p className="mt-1 text-[11px] text-gray-500">{staff?.uid || staff?.userId ? 'Cuenta vinculada: cambia el correo mediante un flujo coordinado con Auth.' : 'Debe coincidir exactamente con el correo confirmado en Supabase Auth.'}</p>
+            <p className="mt-1 text-[11px] text-gray-500">{staff?.uid || staff?.userId ? 'Cuenta vinculada: cambia el correo mediante un flujo coordinado con Auth.' : 'Puedes dejarlo vacío. Al registrarse, el colaborador elegirá su tienda y ficha; el sistema guardará su correo confirmado.'}</p>
           </div>
 
           {/* DNI + Sexo */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={labelCls}>DNI</label>
-              <input type="text" name="dni" value={form.dni} onChange={handleChange} className={inputCls} placeholder="Ej: 73221235" maxLength={15} />
+              <label className={labelCls}>DNI {!staff?.uid && !staff?.userId ? '*' : ''}</label>
+              <input type="text" name="dni" value={form.dni} onChange={handleChange} className={inputCls} placeholder="Ej: 73221235" maxLength={15} inputMode="numeric" required={!staff?.uid && !staff?.userId} />
             </div>
             <div>
               <label className={labelCls}>Sexo</label>

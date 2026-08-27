@@ -112,14 +112,13 @@ const eligibleStaffQuery = (service: ServiceClient) => service
   .select("id,store_id,email,first_name,last_name,position,status,cessation_date,is_trainee,training_end_date")
   .eq("status", "pending")
   .is("user_id", null)
-  .not("email", "is", null)
   .or(`cessation_date.is.null,cessation_date.gte.${limaToday()}`);
 
-async function listRegistrationStores(service: ServiceClient, email: string) {
+async function listRegistrationStores(service: ServiceClient) {
   const { data: staff, error } = await eligibleStaffQuery(service);
   if (error) return { error: "staff_lookup_failed" as const, stores: [] };
   const storeIds = [...new Set((staff ?? [])
-    .filter((row) => normalizeEmail(row.email) === email && !staffEpisodeEnded(row))
+    .filter((row) => !staffEpisodeEnded(row))
     .map((row) => row.store_id))];
   if (storeIds.length === 0) return { error: null, stores: [] };
 
@@ -133,7 +132,16 @@ async function listRegistrationStores(service: ServiceClient, email: string) {
   return { error: null, stores: stores ?? [] };
 }
 
-async function listRegistrationStaff(service: ServiceClient, email: string, storeId: string) {
+async function listRegistrationStaff(service: ServiceClient, storeId: string) {
+  const { data: store, error: storeError } = await service
+    .from("stores")
+    .select("id")
+    .eq("id", storeId)
+    .eq("is_active", true)
+    .maybeSingle();
+  if (storeError) return { error: "store_lookup_failed" as const, staff: [] };
+  if (!store) return { error: null, staff: [] };
+
   const { data, error } = await eligibleStaffQuery(service)
     .eq("store_id", storeId)
     .order("first_name")
@@ -142,7 +150,7 @@ async function listRegistrationStaff(service: ServiceClient, email: string, stor
   return {
     error: null,
     staff: (data ?? [])
-      .filter((row) => normalizeEmail(row.email) === email && !staffEpisodeEnded(row))
+      .filter((row) => !staffEpisodeEnded(row))
       .map(({ id, first_name, last_name, position }) => ({ id, first_name, last_name, position })),
   };
 }
@@ -218,6 +226,7 @@ Deno.serve(async (request) => {
   if (["list_registration_stores", "list_registration_staff", "claim_staff_account"].includes(body.operation)) {
     const email = normalizeEmail(authData.user.email);
     if (!email) return json(400, { error: "account_email_required" });
+    if (!authData.user.email_confirmed_at) return json(403, { error: "email_not_confirmed" });
 
     const access = await registrationAccess(service, authData.user.id);
     if (!access.allowed) {
@@ -229,13 +238,13 @@ Deno.serve(async (request) => {
     if (limit.error) return limit.error;
 
     if (body.operation === "list_registration_stores") {
-      const result = await listRegistrationStores(service, email);
+      const result = await listRegistrationStores(service);
       return result.error ? json(500, { error: result.error }) : json(200, { stores: result.stores });
     }
 
     if (body.operation === "list_registration_staff") {
       if (typeof body.storeId !== "string") return json(400, { error: "store_required" });
-      const result = await listRegistrationStaff(service, email, body.storeId);
+      const result = await listRegistrationStaff(service, body.storeId);
       return result.error ? json(500, { error: result.error }) : json(200, { staff: result.staff });
     }
 
@@ -250,7 +259,7 @@ Deno.serve(async (request) => {
     const { data: staff, error: staffError } = await eligibleStaffQuery(service)
       .eq("id", body.staffId)
       .maybeSingle();
-    if (staffError || !staff || normalizeEmail(staff.email) !== email) {
+    if (staffError || !staff || staffEpisodeEnded(staff)) {
       return json(409, { error: "staff_not_available" });
     }
 

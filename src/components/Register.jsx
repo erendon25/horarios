@@ -31,7 +31,7 @@ function Register() {
       const text = String(err.message ?? "").toLowerCase();
       if (text.includes("already") || text.includes("registered")) setError("Este correo ya está registrado. Intenta iniciar sesión.");
       else if (text.includes("password")) setError("La contraseña debe tener al menos 6 caracteres.");
-      else setError("No se pudo crear la cuenta. Verifica que el administrador haya registrado ese correo en tu perfil.");
+      else setError("No se pudo crear la cuenta. Verifica el correo, inténtalo nuevamente o contacta al administrador.");
     } finally {
       setLoading(false);
     }
