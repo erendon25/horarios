@@ -22,6 +22,7 @@ import { collection, query, where, getDocs } from '../../lib/supabase/firestoreC
 import { db } from '../../supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { SERVICE_STATIONS, PRODUCTION_STATIONS } from '../../constants/trainingPoints';
+import { isVerifiedTrainingCompletion, verifiedTrainingSkills } from '../../lib/supabase/trainingEvidenceCompat';
 import { isStaffActive } from './staffStatus';
 
 const TrainingStats = ({ onBack, activeArea }) => {
@@ -29,19 +30,30 @@ const TrainingStats = ({ onBack, activeArea }) => {
     const [stats, setStats] = useState([]);
     const [loading, setLoading] = useState(true);
     const [topCollabs, setTopCollabs] = useState([]);
+    const [historicalCount, setHistoricalCount] = useState(0);
 
     useEffect(() => {
         const fetchStats = async () => {
             if (!userData?.storeId) return;
             setLoading(true);
             try {
-                const q = query(
+                const staffQuery = query(
                     collection(db, 'staff_profiles'),
                     where('storeId', '==', userData.storeId)
                 );
-                const querySnapshot = await getDocs(q);
+                const evaluationsQuery = query(
+                    collection(db, 'training_evaluations'),
+                    where('storeId', '==', userData.storeId),
+                    where('status', '==', 'completed')
+                );
+                const [querySnapshot, evaluationsSnapshot] = await Promise.all([
+                    getDocs(staffQuery),
+                    getDocs(evaluationsQuery)
+                ]);
+                const evaluations = evaluationsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                setHistoricalCount(evaluations.filter(evaluation => evaluation.area === activeArea && !isVerifiedTrainingCompletion(evaluation)).length);
                 const staff = querySnapshot.docs
-                    .map(doc => doc.data())
+                    .map(doc => ({ id: doc.id, ...doc.data() }))
                     .filter(member => isStaffActive(member));
 
                 const areaStations = activeArea === 'service' ? SERVICE_STATIONS : PRODUCTION_STATIONS;
@@ -56,11 +68,8 @@ const TrainingStats = ({ onBack, activeArea }) => {
                     };
                 });
 
-                // Count skills
                 staff.forEach(member => {
-                    const memberSkills = member.skills || [];
-                    // Ensure unique uppercase skills for counting
-                    const normalized = [...new Set(memberSkills.map(s => s.toUpperCase()))];
+                    const normalized = verifiedTrainingSkills(evaluations, member.id, activeArea);
                     normalized.forEach(skill => {
                         if (stationCounts[skill]) {
                             stationCounts[skill].count += 1;
@@ -73,8 +82,7 @@ const TrainingStats = ({ onBack, activeArea }) => {
                 // Top certified collabs
                 const sortedCollabs = [...staff]
                     .map(s => {
-                        const memberSkills = s.skills || [];
-                        const normalized = [...new Set(memberSkills.map(sk => sk.toUpperCase()))];
+                        const normalized = verifiedTrainingSkills(evaluations, s.id, activeArea);
                         return {
                             name: `${s.name} ${s.lastName || ''}`.trim(),
                             certifiedCount: normalized.filter(skill => areaStations[skill]).length
@@ -117,6 +125,11 @@ const TrainingStats = ({ onBack, activeArea }) => {
             </div>
 
             <div className="p-4 sm:p-8 space-y-4 sm:space-y-8 max-w-5xl mx-auto w-full">
+                {historicalCount > 0 && (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-800">
+                        {historicalCount} {historicalCount === 1 ? 'evaluación histórica no verificada fue excluida' : 'evaluaciones históricas no verificadas fueron excluidas'} de estas estadísticas.
+                    </div>
+                )}
                 {/* Main Chart */}
                 <div className="bg-white p-4 sm:p-10 rounded-2xl sm:rounded-[48px] shadow-xl sm:shadow-2xl shadow-gray-200/50 border border-white">
                     <div className="flex justify-between items-center mb-5 sm:mb-10">

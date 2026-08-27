@@ -23,8 +23,7 @@ import {
     addDoc,
     updateDoc,
     doc,
-    serverTimestamp,
-    arrayUnion
+    serverTimestamp
 } from '../../lib/supabase/firestoreCompat';
 import { db } from '../../supabase';
 import {
@@ -106,6 +105,9 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
     const handleSubmit = async () => {
         setSaving(true);
         try {
+            if (initialData?.status === 'completed') {
+                throw new Error('Una evaluación completada y firmada es inmutable. Registra una nueva evaluación.');
+            }
             // Calculate score
             const totalPoints = Object.keys(responses).length;
             const completedPoints = Object.values(responses).filter(v => v === true).length;
@@ -147,23 +149,10 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                 evalId = evalRef.id;
             }
 
-            // 2. Update staff profile
-            const updates = {
-                lastEvaluationDate: new Date().toISOString().split('T')[0],
-                lastEvaluationScore: score,
-                lastStationEvaluated: selectedStation,
-                [`trainingScores.${selectedStation.toUpperCase()}`]: score
-            };
-
-            // If score >= 90, update skills
-            if (score >= 90) {
-                updates.skills = arrayUnion(selectedStation.toUpperCase());
-            }
-
-            await updateDoc(doc(db, 'staff_profiles', selectedCollab), updates);
-
-            // 3. Callback
-            onSave({ ...evaluationData, id: evalId });
+            // La base de datos actualiza el resumen, certifica la skill y sella
+            // la completion en la misma transacción. El contenedor reconsulta
+            // ese ID para mostrar exclusivamente la fila posterior al trigger.
+            await onSave(evalId);
         } catch (error) {
             console.error("Error saving evaluation:", error);
             alert("Error al guardar la evaluación. Por favor intenta de nuevo.");
@@ -173,6 +162,10 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
     };
 
     const handleSaveDraft = async () => {
+        if (initialData?.status === 'completed') {
+            alert('Una evaluación completada y firmada no puede volver a borrador.');
+            return;
+        }
         if (!selectedCollab) {
             alert("Selecciona al menos un colaborador para guardar el borrador.");
             return;

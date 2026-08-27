@@ -26,6 +26,12 @@ const number = (value, fallback = 0) => {
   const parsed = Number.parseFloat(String(value ?? '').replace(/[^\d,.-]/g, '').replace(',', '.'));
   return Number.isFinite(parsed) ? parsed : fallback;
 };
+const sumNumericObject = (value) => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return Object.values(value).reduce((sum, item) => sum + number(item), 0);
+  }
+  return number(value);
+};
 const durationMinutes = (data) => {
   if (Number.isFinite(data.durationMinutes)) return Math.max(0, Math.round(data.durationMinutes));
   if (Number.isFinite(data.totalExtraMinutes)) return Math.max(0, Math.round(data.totalExtraMinutes));
@@ -721,9 +727,16 @@ for (const doc of docs.filter((item) => /^stores\/[^/]+\/sales_history$/.test(it
     sales_amount: doc.data.totalSales ?? null,
     transactions: doc.data.totalTxs ?? null,
     hourly_data: doc.data.hourlyData ?? {},
+    hourly_transactions: doc.data.hourlyTxs ?? {},
     source_data: legacy(doc),
   });
-  for (const [hour, sales] of Object.entries(doc.data.hourlyData ?? {})) {
+  const hourKeys = new Set([
+    ...Object.keys(doc.data.hourlyData ?? {}),
+    ...Object.keys(doc.data.hourlyTxs ?? {}),
+  ]);
+  for (const hour of hourKeys) {
+    const sales = doc.data.hourlyData?.[hour] ?? {};
+    const transactions = doc.data.hourlyTxs?.[hour] ?? {};
     const salesHour = cleanTime(hour.includes(':') ? hour : `${hour}:00`);
     if (!salesHour) continue;
     tables.sales_hourly_history.push({
@@ -731,9 +744,9 @@ for (const doc of docs.filter((item) => /^stores\/[^/]+\/sales_history$/.test(it
       store_id: storeUuidByFirebaseId.get(firebaseStoreId),
       sales_date: date,
       sales_hour: salesHour,
-      sales_amount: number(sales),
-      transactions: Math.max(0, Math.round(number(doc.data.hourlyTxs?.[hour]))),
-      source_data: { sales, transactions: doc.data.hourlyTxs?.[hour] ?? null },
+      sales_amount: sumNumericObject(sales),
+      transactions: Math.max(0, Math.round(sumNumericObject(transactions))),
+      source_data: { sales, transactions },
     });
   }
 }

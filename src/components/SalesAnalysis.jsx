@@ -8,6 +8,7 @@ import {
     BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList
 } from 'recharts';
 import { startOfISOWeek, endOfISOWeek, format, startOfMonth, endOfMonth, startOfYear, endOfYear, subMonths, subDays } from 'date-fns';
+import { parseCanonicalSalesRows } from '../lib/supabase/salesHistoryCompat';
 
 const TURNOS = [
     { key: 'Apertura a 1pm', check: (h) => h >= 6 && h < 13 },
@@ -17,7 +18,11 @@ const TURNOS = [
     { key: '10pm al cierre', check: (h) => h >= 22 || h < 6 }
 ];
 
-const CANALES_FIJOS = ['SALÓN', 'DELIVERY', 'DRIVE THRU', 'SERV. FILA'];
+const CANALES_FIJOS = ['SALÓN', 'DELIVERY', 'DRIVE THRU', 'SERV. FILA', 'SIN CLASIFICAR'];
+const normalizeSalesChannel = (value) => {
+    const normalized = String(value ?? '').trim().toLocaleUpperCase('es-PE');
+    return CANALES_FIJOS.includes(normalized) ? normalized : 'SIN CLASIFICAR';
+};
 const DIAS_SEMANA = ['Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab', 'Dom'];
 const DIAS_SEMANA_GETDAY = [1, 2, 3, 4, 5, 6, 0];
 
@@ -383,6 +388,7 @@ export default function SalesAnalysis() {
     const [availableRange, setAvailableRange] = useState({ min: null, max: null });
     const [lastUploadInfo, setLastUploadInfo] = useState(null);
     const [activeQuickFilter, setActiveQuickFilter] = useState('week');
+    const [dataRevision, setDataRevision] = useState(0);
 
     useEffect(() => {
         const fetchStore = async () => {
@@ -506,6 +512,7 @@ export default function SalesAnalysis() {
                 const results = await Promise.all(datesArr.map(d => getDoc(doc(db, 'stores', storeId, 'sales_history', d))));
                 const agg = {
                     total: 0, txs: 0,
+                    rowCount: 0,
                     canales: {}, canalesTxs: {}, turnos: {}, turnosTxs: {}, dias: {}, diasTxs: {},
                     horasTxs: {}, horasTxsPorDia: {},
                     canalesHoras: {}, canalesHorasTxs: {}, canalesDias: {}, canalesDiasTxs: {},
@@ -542,6 +549,7 @@ export default function SalesAnalysis() {
                 results.forEach((snap, idx) => {
                     if (snap.exists()) {
                         const dayData = snap.data();
+                        agg.rowCount += 1;
                         agg.total += dayData.totalSales || 0;
                         agg.txs += dayData.totalTxs || 0;
 
@@ -558,12 +566,14 @@ export default function SalesAnalysis() {
                                 const hour = parseInt(hourStr, 10);
                                 let sumHour = 0, sumHourTxs = 0;
 
-                                Object.entries(canalData).forEach(([canal, val]) => {
+                                Object.entries(canalData).forEach(([rawCanal, rawValue]) => {
+                                    const canal = normalizeSalesChannel(rawCanal);
+                                    const val = Number(rawValue) || 0;
                                     if (!agg.canales[canal]) agg.canales[canal] = 0;
                                     agg.canales[canal] += val;
                                     sumHour += val;
 
-                                    const txsVal = dayData.hourlyTxs?.[hourStr]?.[canal] || 0;
+                                    const txsVal = Number(dayData.hourlyTxs?.[hourStr]?.[rawCanal]) || 0;
                                     if (!agg.canalesTxs[canal]) agg.canalesTxs[canal] = 0;
                                     agg.canalesTxs[canal] += txsVal;
                                     sumHourTxs += txsVal;
@@ -643,7 +653,7 @@ export default function SalesAnalysis() {
         if (startDate > endDate) return;
         const t = setTimeout(() => { loadAnalysisData(); }, 350);
         return () => clearTimeout(t);
-    }, [storeId, comparePeriod, startDate, endDate]);
+    }, [storeId, comparePeriod, startDate, endDate, dataRevision]);
 
     useEffect(() => {
         if (comparePeriod === 'month') {
@@ -720,7 +730,7 @@ export default function SalesAnalysis() {
                     header: true, skipEmptyLines: true,
                     complete: async (results) => {
                         try { await processSalesRows(results.data); }
-                        catch (err) { alert("Error al procesar el archivo CSV."); }
+                        catch (err) { alert(err?.message || "Error al procesar el archivo CSV."); }
                         finally {
                             setIsSaving(false);
                             if (fileInputRef.current) fileInputRef.current.value = null;
@@ -780,7 +790,7 @@ export default function SalesAnalysis() {
                 await processSalesRows(allRawData);
             } catch (err) {
                 console.error("Error al procesar Excel:", err);
-                alert("Hubo un error al procesar el archivo.");
+                alert(err?.message || "Hubo un error al procesar el archivo.");
             } finally {
                 setIsSaving(false);
                 if (fileInputRef.current) fileInputRef.current.value = null;
@@ -794,301 +804,44 @@ export default function SalesAnalysis() {
         if (!storeId) {
             throw new Error("No se pudo identificar la tienda para guardar el historial de ventas.");
         }
-        if (data.length === 0) return;
+        if (!Array.isArray(data) || data.length === 0) return;
 
-        const findValue = (row, possibleKeys) => {
-            const keys = Object.keys(row);
-            for (let pk of possibleKeys) {
-                const exact = keys.find(k => k.trim().toLowerCase() === pk);
-                if (exact) return row[exact];
-            }
-            for (let pk of possibleKeys) {
-                const pkClean = pk.replace(/[^a-z]/g, '');
-                const semiExact = keys.find(k => k.toLowerCase().replace(/[^a-z]/g, '') === pkClean);
-                if (semiExact) return row[semiExact];
-            }
-            for (let pk of possibleKeys) {
-                const match = keys.find(k => {
-                    const clean = k.trim().toLowerCase();
-                    if (pk === 'total' || pk === 'monto' || pk === 'importe') {
-                        if (clean.includes('sub') || clean.includes('dscto') || clean.includes('descuento') || clean.includes('igv') || clean.includes('impuesto') || clean.includes('propina') || clean.includes('recargo')) return false;
-                    }
-                    if (pk === 'pedido' || pk === 'comprobante' || pk === 'ticket') {
-                        if (clean.includes('tipo') || clean.includes('estado') || clean.includes('fecha') || clean.includes('hora')) return false;
-                    }
-                    return clean.includes(pk);
-                });
-                if (match) return row[match];
-            }
-            return undefined;
-        };
-
-        const cleanMonto = (raw) => {
-            if (raw === null || raw === undefined || raw === '') return 0;
-            if (typeof raw === 'number') return raw;
-            let text = String(raw).trim();
-            if (text === '') return 0;
-
-            // Salvavidas estricto: Prevenir que las fechas u horas se parseen como montos millonarios
-            if (/^\d{4}-\d{2}-\d{2}/.test(text) || /^\d{2}\/\d{2}\/\d{4}/.test(text)) return NaN;
-            if (/\d{2}:\d{2}:\d{2}/.test(text) || /^\d{2}:\d{2}$/.test(text)) return NaN;
-
-            let isNegative = text.includes('-') || (text.startsWith('(') && text.endsWith(')'));
-            text = text.replace(/[^\d.,]/g, '');
-            if (!text) return 0;
-            if (text.includes(',') && text.includes('.')) {
-                if (text.lastIndexOf(',') > text.lastIndexOf('.')) text = text.replace(/\./g, '').replace(',', '.');
-                else text = text.replace(/,/g, '');
-            } else if (text.includes(',')) {
-                const parts = text.split(',');
-                if (parts[parts.length - 1].length === 3) text = text.replace(/,/g, '');
-                else text = text.replace(',', '.');
-            }
-            let m = parseFloat(text);
-            return isNaN(m) ? NaN : (isNegative ? -Math.abs(m) : m);
-        };
-
-        const pedidosMap = new Map();
-        let currentPedidoId = null;
-        let currentPedidoIsValid = false;
-
-        data.forEach((fila) => {
-            if (!fila || typeof fila !== 'object') return;
-            const rawValStr = Object.values(fila).join(' ').toLowerCase();
-
-            if (rawValStr.includes('total general') || rawValStr.includes('resumen') || rawValStr.includes('total periodo')) return;
-
-            let colPedido = String(findValue(fila, ['nro. pedido', 'pedido', 'comprobante', 'documento', 'ticket']) || '').trim();
-            let isTotalRow = colPedido.toLowerCase().includes('total ped') || rawValStr.includes('total pedido :');
-
-            // 1. EVALUACIÓN Y SEGUIMIENTO DEL PEDIDO ACTIVO
-            if (!isTotalRow && colPedido && colPedido !== 'undefined') {
-                currentPedidoId = colPedido;
-                const estadoVal = String(findValue(fila, ['estado', 'status', 'estado pedido', 'condicion', 'situacion']) || '').trim().toUpperCase();
-
-                if (estadoVal) {
-                    currentPedidoIsValid = !(
-                        estadoVal.includes('ANULAD') || estadoVal.includes('CANCELAD') ||
-                        estadoVal.includes('VOID') || estadoVal.includes('NULO') ||
-                        estadoVal.includes('INACTIV') || estadoVal.includes('PENDIENTE') ||
-                        estadoVal.includes('ABIERTO') || estadoVal.includes('NO COBRADO') ||
-                        estadoVal.includes('ELIMINAD')
-                    );
-                }
-
-                if (currentPedidoIsValid && !pedidosMap.has(currentPedidoId)) {
-                    let docStr = String(findValue(fila, ['documento', 'comprobante']) || '').trim().toUpperCase();
-                    // Identificador estricto de Notas de Crédito en Perú
-                    let isNC = docStr.startsWith('NC') || docStr.startsWith('BC') || docStr.startsWith('FC') || docStr.startsWith('FN') || rawValStr.includes('nota de credito') || rawValStr.includes('devolucion');
-
-                    pedidosMap.set(currentPedidoId, {
-                        fechaRaw: findValue(fila, ['fecha', 'fechapedido', 'fecha pedido', 'date', 'fec.', 'fecha/hora']),
-                        horaRaw: findValue(fila, ['hora', 'time', 'horapedido', 'hr', 'hora pedido']),
-                        canalRaw: findValue(fila, ['canal venta', 'canal vta', 'canal', 'canal de venta', 'tipo pedido', 'origen', 'modalidad']),
-                        documento: docStr,
-                        itemsSum: 0,
-                        totalPedido: null,
-                        isNC: isNC
-                    });
-                } else if (currentPedidoIsValid && pedidosMap.has(currentPedidoId)) {
-                    // Si el documento aparece en las filas siguientes (Items), lo actualiza
-                    let docStr = String(findValue(fila, ['documento', 'comprobante']) || '').trim().toUpperCase();
-                    if (docStr && docStr !== '0' && docStr !== 'UNDEFINED' && !pedidosMap.get(currentPedidoId).documento) {
-                        pedidosMap.get(currentPedidoId).documento = docStr;
-                        if (docStr.startsWith('NC') || docStr.startsWith('BC') || docStr.startsWith('FC')) {
-                            pedidosMap.get(currentPedidoId).isNC = true;
-                        }
-                    }
-                }
-            }
-
-            // 2. EXTRACCIÓN ROBUSTA DE LA FILA DE TOTAL (Ignorando fechas/horas infiltradas)
-            if (isTotalRow) {
-                if (currentPedidoId && currentPedidoIsValid && pedidosMap.has(currentPedidoId)) {
-                    let rowVals = Object.values(fila);
-                    let possibleTotals = [];
-
-                    for (let val of rowVals) {
-                        let strVal = String(val).trim();
-                        if (!strVal || strVal.toLowerCase().includes('total')) continue;
-
-                        let num = cleanMonto(strVal);
-                        // Permitimos ceros (por si hubo 100% descuento) y descartamos NaN (fechas/letras)
-                        if (!isNaN(num)) possibleTotals.push(num);
-                    }
-
-                    let totalRowMonto = 0;
-                    if (possibleTotals.length > 0) {
-                        // El Total final es matemáticamente el último valor del bloque numérico
-                        totalRowMonto = possibleTotals[possibleTotals.length - 1];
-                    }
-
-                    if (pedidosMap.get(currentPedidoId).isNC) {
-                        totalRowMonto = -Math.abs(totalRowMonto);
-                    }
-
-                    pedidosMap.get(currentPedidoId).totalPedido = totalRowMonto;
-                }
-                return;
-            }
-
-            // 3. SUMA DE ÍTEMS INDIVIDUALES (Backup)
-            if (currentPedidoId && currentPedidoIsValid && pedidosMap.has(currentPedidoId)) {
-                let numStr = findValue(fila, ['total', 'monto', 'venta', 'importe', 'neto']);
-                let montoItem = cleanMonto(numStr);
-
-                if (!isNaN(montoItem)) {
-                    if (pedidosMap.get(currentPedidoId).isNC) {
-                        montoItem = -Math.abs(montoItem);
-                    }
-                    pedidosMap.get(currentPedidoId).itemsSum += montoItem;
-                }
-            }
-        });
-
-        // 4. PREPARACIÓN Y CONSOLIDACIÓN A FIREBASE
-        const dailyAggregations = {};
-        let debugSum = 0;
-
-        for (const [pedidoId, dataP] of pedidosMap.entries()) {
-            let monto = dataP.totalPedido !== null ? dataP.totalPedido : dataP.itemsSum;
-            // Se procesan montos de S/ 0 si son transacciones reales (ej. Cortesías con boleta), pero ignoramos vacíos rotundos
-            if (isNaN(monto)) continue;
-
-            let timeStr = "";
-            let dateStr = "";
-
-            if (dataP.fechaRaw instanceof Date) {
-                dateStr = `${dataP.fechaRaw.getFullYear()}-${dataP.fechaRaw.getMonth() + 1}-${dataP.fechaRaw.getDate()}`;
-                timeStr = `${dataP.fechaRaw.getHours()}:${dataP.fechaRaw.getMinutes()}:${dataP.fechaRaw.getSeconds()}`;
-            } else {
-                const cleanStr = String(dataP.fechaRaw).trim().replace(/\s+/g, ' ');
-                if (cleanStr.includes(' ')) {
-                    const parts = cleanStr.split(' ');
-                    dateStr = parts[0];
-                    if (!dataP.horaRaw) timeStr = parts.slice(1).join(' ');
-                } else {
-                    dateStr = cleanStr;
-                }
-                if (dataP.horaRaw) timeStr = String(dataP.horaRaw).trim();
-            }
-
-            let y, m, d;
-            const partesFecha = dateStr.split(/[\/\-]/);
-            if (partesFecha.length >= 3) {
-                if (partesFecha[0].length === 4) {
-                    y = parseInt(partesFecha[0], 10); m = parseInt(partesFecha[1], 10) - 1; d = parseInt(partesFecha[2], 10);
-                } else {
-                    d = parseInt(partesFecha[0], 10); m = parseInt(partesFecha[1], 10) - 1; y = parseInt(partesFecha[2], 10);
-                    if (y < 100) y += 2000;
-                }
-            }
-
-            let hh = 0, mm2 = 0, ss = 0;
-            if (timeStr) {
-                const tMatch = timeStr.match(/(\d+):(\d+)(?::(\d+))?\s*(a\.m\.|p\.m\.|am|pm)?/i);
-                if (tMatch) {
-                    hh = parseInt(tMatch[1], 10); mm2 = parseInt(tMatch[2], 10); ss = parseInt(tMatch[3] || 0, 10);
-                    const modifier = tMatch[4] ? tMatch[4].toLowerCase() : null;
-                    if (modifier && modifier.includes('p') && hh < 12) hh += 12;
-                    if (modifier && modifier.includes('a') && hh === 12) hh = 0;
-                }
-            }
-
-            let fechaObj = new Date(y, m, d, hh, mm2, ss);
-            if (!fechaObj || isNaN(fechaObj.getTime())) continue;
-
-            let rawHours = fechaObj.getHours();
-            let businessDate = new Date(fechaObj);
-            if (rawHours < 6) businessDate.setDate(businessDate.getDate() - 1);
-
-            const fecha = `${businessDate.getFullYear()}-${String(businessDate.getMonth() + 1).padStart(2, '0')}-${String(businessDate.getDate()).padStart(2, '0')}`;
-            let canalRawStr = String(dataP.canalRaw || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
-            let canal = 'SALÓN';
-
-            if (canalRawStr.includes('DELIVERY') || canalRawStr.includes('RAPPI') || canalRawStr.includes('PEDIDOS YA') || canalRawStr.includes('PEDIDOSYA') || canalRawStr.includes('DIDI') || canalRawStr.includes('UBER') || canalRawStr.includes('CALL CENTER')) canal = 'DELIVERY';
-            else if (canalRawStr.includes('DRIVE') || canalRawStr.includes('AUTO')) canal = 'DRIVE THRU';
-            else if (canalRawStr.includes('FILA') || canalRawStr.includes('MODULO') || canalRawStr.includes('MÓDULO')) canal = 'SERV. FILA';
-            else if (canalRawStr.includes('LOCAL') || canalRawStr.includes('SALON') || canalRawStr.includes('SALÓN')) canal = 'SALÓN';
-            else if (canalRawStr !== '') canal = 'SALÓN';
-
-            // El resumen de Inforest excluye pedidos sin comprobante en los
-            // canales fiscales. SERV. FILA es la excepción: los pedidos de
-            // kiosko pueden formar parte del total aun sin número de documento.
-            const hasDocument = String(dataP.documento || '').trim() !== '';
-            if (!hasDocument && canal !== 'SERV. FILA') continue;
-
-            if (!dailyAggregations[fecha]) {
-                dailyAggregations[fecha] = { totalSales: 0, hourlyData: {}, _pedidosGlobal: new Set(), _pedidosHoraCanal: {} };
-            }
-
-            const dayObj = dailyAggregations[fecha];
-
-            dayObj.totalSales += monto;
-            debugSum += monto;
-
-            // EL SEGUNDO GRAN CAMBIO: Contar por Documento en lugar de Pedido interno para limpiar tickets falsos y divisiones
-            let txId = dataP.documento ? dataP.documento : pedidoId;
-            dayObj._pedidosGlobal.add(txId);
-
-            if (!dayObj.hourlyData[rawHours]) {
-                dayObj.hourlyData[rawHours] = {};
-                dayObj._pedidosHoraCanal[rawHours] = {};
-            }
-            dayObj.hourlyData[rawHours][canal] = (dayObj.hourlyData[rawHours][canal] || 0) + monto;
-
-            if (!dayObj._pedidosHoraCanal[rawHours][canal]) dayObj._pedidosHoraCanal[rawHours][canal] = new Set();
-            dayObj._pedidosHoraCanal[rawHours][canal].add(txId);
+        const parsed = parseCanonicalSalesRows(data);
+        if (parsed.history.length === 0) {
+            throw new Error("No se encontraron pedidos válidos con fecha, hora, documento y monto para guardar.");
+        }
+        if (parsed.history.length > 1000) {
+            throw new Error("El archivo supera el máximo seguro de 1000 días por carga. Divídelo en dos archivos para conservar cada carga atómica.");
         }
 
-        let batch = writeBatch(db);
-        let count = 0;
-        for (const [date, dataRaw] of Object.entries(dailyAggregations)) {
-            const dataToSave = {
-                totalSales: dataRaw.totalSales,
-                totalTxs: dataRaw._pedidosGlobal.size,
-                hourlyData: dataRaw.hourlyData,
-                hourlyTxs: {}
-            };
-            for (const hr in dataRaw._pedidosHoraCanal) {
-                dataToSave.hourlyTxs[hr] = {};
-                for (const cn in dataRaw._pedidosHoraCanal[hr]) {
-                    dataToSave.hourlyTxs[hr][cn] = dataRaw._pedidosHoraCanal[hr][cn].size;
-                }
-            }
-
-            const docRef = doc(db, 'stores', storeId, 'sales_history', date);
-            batch.set(docRef, dataToSave);
-            count++;
-            if (count >= 490) {
-                await batch.commit();
-                batch = writeBatch(db);
-                count = 0;
-            }
-        }
-        if (count > 0) await batch.commit();
-
-        const fechasArchivo = Object.keys(dailyAggregations).sort();
-        const totalTxs = Object.keys(dailyAggregations).reduce((acc, k) => acc + dailyAggregations[k]._pedidosGlobal.size, 0);
-
-        if (fechasArchivo.length > 0) {
-            const min = fechasArchivo[0];
-            const max = fechasArchivo[fechasArchivo.length - 1];
-            setLastUploadInfo({
-                min, max,
-                dias: fechasArchivo.length,
-                ventas: debugSum,
-                txs: totalTxs,
+        const batch = writeBatch(db);
+        for (const day of parsed.history) {
+            batch.set(doc(db, 'stores', storeId, 'sales_history', day.date), {
+                totalSales: day.totalSales,
+                totalTxs: day.totalTxs,
+                hourlyData: day.hourlyData,
+                hourlyTxs: day.hourlyTxs,
             });
-            setStartDate(min);
-            setEndDate(max);
-            setActiveQuickFilter(null);
-            await fetchAvailableRange(storeId);
         }
+        await batch.commit();
 
-        alert(`¡Datos procesados con éxito!\n\nRango detectado: ${fechasArchivo[0] || '-'} a ${fechasArchivo[fechasArchivo.length - 1] || '-'}\nDías cargados: ${fechasArchivo.length}\nVenta Total Verificada: S/ ${debugSum.toLocaleString('es-PE', { minimumFractionDigits: 2 })}\nTransacciones Finales: ${totalTxs}`);
+        const min = parsed.dates[0];
+        const max = parsed.dates[parsed.dates.length - 1];
+        setLastUploadInfo({
+            min,
+            max,
+            dias: parsed.dates.length,
+            ventas: parsed.totalSales,
+            txs: parsed.totalTxs,
+        });
+        setStartDate(min);
+        setEndDate(max);
+        setActiveQuickFilter(null);
+        await fetchAvailableRange(storeId);
+        setDataRevision(revision => revision + 1);
+
+        alert(`¡Datos procesados con éxito!\n\nRango detectado: ${min} a ${max}\nDías cargados: ${parsed.dates.length}\nVenta Total Verificada: S/ ${parsed.totalSales.toLocaleString('es-PE', { minimumFractionDigits: 2 })}\nTransacciones Finales: ${parsed.totalTxs}`);
     };
-
     const allCanales = CANALES_FIJOS;
 
     const AnalysisSection = ({ title, compareData, compareLabel, colorCompare, colorCurrent, viewMode, showHourlyChart = false }) => {
@@ -2114,6 +1867,12 @@ export default function SalesAnalysis() {
                     </div>
                 )}
 
+                {availableRange.max && addDays(availableRange.max, 2) < todayStr() && (
+                    <div className="mb-3 rounded border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+                        Historial desactualizado: el último día registrado es {availableRange.max}. Los ceros posteriores no representan ventas confirmadas.
+                    </div>
+                )}
+
                 <div className="bg-white p-4 border border-gray-200 shadow-sm rounded flex flex-wrap items-end gap-6 mb-4">
                     <div className="flex items-center gap-6">
                         <div>
@@ -2205,6 +1964,11 @@ export default function SalesAnalysis() {
                     const proyPct = currentGoal > 0 ? (proyDif / currentGoal) * 100 : 0;
                     return (
                         <div className="bg-white p-6 border border-gray-200 shadow-sm rounded mb-8">
+                            {dataCurrent.rowCount > 0 && dataCurrent.rowCount < diasRango && (
+                                <p className="mb-4 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+                                    Cobertura incompleta: {dataCurrent.rowCount} de {diasRango} días tienen una fila de ventas.
+                                </p>
+                            )}
                             <div className="flex items-center justify-between mb-4">
                                 <div>
                                     <h3 className="text-sm font-black text-gray-800 uppercase tracking-tight">Meta vs Venta — {startDate} → {endDate}</h3>
@@ -2254,11 +2018,11 @@ export default function SalesAnalysis() {
 
                 {loading ? (
                     <div className="flex justify-center p-20"><div className="animate-spin rounded-full h-10 w-10 border-4 border-orange-500 border-t-transparent"></div></div>
-                ) : (dataCurrent && Number(dataCurrent.total || 0) === 0 && dataPrevWeek.total === 0 && dataPrevYear.total === 0) ? (
+                ) : (dataCurrent && dataCurrent.rowCount === 0) ? (
                     <div className="bg-white p-12 text-center border border-gray-200 rounded">
                         <AlertCircle className="w-12 h-12 text-gray-300 mx-auto mb-4" />
                         <h2 className="text-xl font-bold text-gray-600">No hay datos en este rango</h2>
-                        <p className="text-gray-500 mt-2">Sube un Excel de Inforest para poblar la base de datos.</p>
+                        <p className="text-gray-500 mt-2">No existe ninguna fila para {startDate} → {endDate}. Cambia el rango o carga el archivo de Inforest.</p>
                     </div>
                 ) : (
                     <>

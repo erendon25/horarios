@@ -45,7 +45,10 @@ import {
     where,
     getDoc,
     setDoc,
-    onSnapshot
+    onSnapshot,
+    saveStaffCessation,
+    finishStaffTraining,
+    importGeoVictoriaStaffProfile
 } from "../lib/supabase/firestoreCompat";
 import { db } from "../supabase";
 import StudyScheduleEditor from './StudyScheduleEditor';
@@ -57,6 +60,7 @@ import ScheduleRequestsManager from './ScheduleRequestsManager';
 import { isStaffActive } from './Training/staffStatus';
 import { exportExtraHoursPDF, exportExtraHoursGroupedPDF } from "../services/exportExtraHoursPDF";
 import GeoVictoriaUpload from './GeoVictoriaUpload';
+import { isCurrentGeoVictoriaEpisode, isImportableGeoVictoriaState } from '../lib/supabase/geoVictoriaCompat';
 
 
 
@@ -67,6 +71,9 @@ import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
 
 const normalizeDni = (value) => String(value ?? '').trim().replace(/\.0+$/, '').replace(/\D/g, '').trim();
+const limaToday = () => new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Lima', year: 'numeric', month: '2-digit', day: '2-digit'
+}).format(new Date());
 
 const parseGeoVictoriaDate = (value) => {
     if (!value) return '';
@@ -649,17 +656,8 @@ function AdminDashboard() {
 
 
     const handleUnlinkEmail = async (staffId) => {
-        try {
-            await updateDoc(doc(db, 'staff_profiles', staffId), {
-                email: '',
-                uid: '' // ❗ Quitamos también el UID
-            });
-            alert('Correo y UID desvinculados exitosamente.');
-            await fetchAllStaffProfiles();
-        } catch (err) {
-            console.error("Error desvinculando correo:", err);
-            alert("No se pudo desvincular el correo.");
-        }
+        void staffId;
+        alert('El vínculo de cuenta se conserva para proteger el historial. Registra un cese y usa el flujo de reingreso verificado si el colaborador vuelve.');
     };
     const fetchStoreName = async () => {
         if (!userData?.storeId) return;
@@ -885,9 +883,10 @@ function AdminDashboard() {
             const rows = readGeoVictoriaRows(workbook);
 
             const existingByDni = new Map();
+            const today = limaToday();
             staff.forEach((person) => {
                 const dni = normalizeDni(person.dni);
-                if (dni) existingByDni.set(dni, person);
+                if (dni && isCurrentGeoVictoriaEpisode(person, today)) existingByDni.set(dni, person);
             });
 
             const seenInFile = new Set();
@@ -896,8 +895,7 @@ function AdminDashboard() {
             let skippedCount = 0;
 
             for (const row of rows) {
-                const estado = String(row.Estado || '').trim().toLowerCase();
-                if (estado && !estado.includes('activ')) {
+                if (!isImportableGeoVictoriaState(row.Estado)) {
                     skippedCount++;
                     continue;
                 }
@@ -936,13 +934,15 @@ function AdminDashboard() {
                     isTrainee: false,
                     importedFrom: 'geovictoria',
                     importedAt: new Date().toISOString(),
+                    sourceFile: file.name,
                     needsCompletion: true,
                     status: 'pending',
                 };
 
-                const docRef = await addDoc(collection(db, "staff_profiles"), payload);
-                const newStaff = { id: docRef.id, ...payload };
-                created.push(newStaff);
+                const imported = await importGeoVictoriaStaffProfile(payload, file.name);
+                const newStaff = { id: imported.id, ...payload };
+                if (imported.created) created.push(newStaff);
+                else existingCount++;
                 existingByDni.set(dni, newStaff);
             }
 
@@ -1507,8 +1507,7 @@ function AdminDashboard() {
             let excludedManagementExcel = 0;
 
             rows.forEach((row) => {
-                const estado = String(getRowValue(row, ['Estado']) || '').trim().toLowerCase();
-                if (estado && !estado.includes('activ')) {
+                if (!isImportableGeoVictoriaState(getRowValue(row, ['Estado']))) {
                     skippedRows += 1;
                     return;
                 }
@@ -1686,12 +1685,10 @@ function AdminDashboard() {
                 await deleteDoc(doc(db, 'feriados_trabajados', holiday.id));
             }
 
-            // 2. Ajustar el balance en el perfil
+            // 2. El balance se deriva de worked_holidays; no se persiste un
+            // segundo contador que pueda quedar desincronizado.
             const impact = holiday.type === 'ganado' ? -1 : 1;
             const newBalance = (selectedStaff.feriados || 0) + impact;
-            await updateDoc(doc(db, "staff_profiles", selectedStaff.id), {
-                feriados: newBalance
-            });
 
             // 3. Actualizar estados locales
             setSelectedHolidays(prev => prev.filter(h => {
@@ -2200,43 +2197,31 @@ function AdminDashboard() {
     };
 
     const handleCessation = async (colab) => {
+        if (colab.isTrainee) {
+            const endDate = limaToday();
+            if (!window.confirm(`¿Finalizar el entrenamiento de ${colab.name} ${colab.lastName} hoy?`)) return;
+            try {
+                await finishStaffTraining(colab.id, endDate);
+                await fetchAllStaffProfiles();
+            } catch (err) {
+                alert('Error al finalizar el entrenamiento: ' + err.message);
+            }
+            return;
+        }
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const cessation = colab.cessationDate ? new Date(colab.cessationDate + 'T00:00:00') : null;
         const isAlreadyCeased = cessation && cessation < today;
 
         if (isAlreadyCeased) {
-            // Reactivar
-            const confirm = window.confirm(`¿Deseas reactivar a ${colab.name} ${colab.lastName}?`);
-            if (!confirm) return;
-            try {
-                await updateDoc(doc(db, 'staff_profiles', colab.id), { cessationDate: '' });
-                await fetchAllStaffProfiles();
-            } catch (err) {
-                alert('Error al reactivar el colaborador.');
-            }
+            alert(`El cese de ${colab.name} ${colab.lastName} se conserva como historial. Para un reingreso, crea una nueva ficha con el mismo correo y DNI; la cuenta se enlazará mediante el flujo verificado.`);
         } else {
             // Cesar hoy
-            const todayStr = today.toISOString().split('T')[0];
+            const todayStr = limaToday();
             const confirm = window.confirm(`¿Confirmas que ${colab.name} ${colab.lastName} fue cesado hoy (${todayStr.split('-').reverse().join('/')})?\n\nEl colaborador dejará de contarse a partir de mañana.`);
             if (!confirm) return;
             try {
-                // 1. Actualizar perfil del colaborador
-                await updateDoc(doc(db, 'staff_profiles', colab.id), { cessationDate: todayStr });
-                // 2. Guardar en colección independiente 'ceses' (persiste aunque se elimine al colaborador)
-                await setDoc(doc(db, 'ceses', `${colab.id}_${todayStr}`), {
-                    staffId: colab.id,
-                    name: colab.name,
-                    lastName: colab.lastName,
-                    modality: colab.modality || '',
-                    dni: colab.dni || '',
-                    gender: colab.gender || colab.sexo || '',
-                    position: colab.position || 'TEAM MEMBER',
-                    joinDate: colab.joinDate || colab.createdAt?.split?.('T')?.[0] || '',
-                    cessationDate: todayStr,
-                    storeId: colab.storeId || '',
-                    registeredAt: new Date().toISOString()
-                });
+                await saveStaffCessation(colab.id, { cessationDate: todayStr });
                 await fetchAllStaffProfiles();
             } catch (err) {
                 alert('Error al registrar el cese.');
@@ -2244,27 +2229,25 @@ function AdminDashboard() {
         }
     };
 
-    const handleDelete = async (uid, id) => {
-        const confirm = window.confirm("¿Estás seguro de que deseas eliminar este usuario?");
+    const handleDelete = async (_uid, colab) => {
+        if (colab.isTrainee) {
+            if (!window.confirm("Los datos del entrenamiento deben conservarse. ¿Deseas finalizar el entrenamiento hoy?")) return;
+            try {
+                await finishStaffTraining(colab.id, limaToday());
+                await fetchAllStaffProfiles();
+            } catch (err) {
+                alert(`Error al finalizar el entrenamiento: ${err.message}`);
+            }
+            return;
+        }
+        const confirm = window.confirm("Los datos laborales deben conservarse. ¿Deseas registrar el cese de este colaborador hoy en lugar de eliminar su historial?");
         if (!confirm) return;
         try {
-            // Eliminar el perfil de staff (siempre permitido para admins)
-            await deleteDoc(doc(db, "staff_profiles", id));
-
-            // Intentar eliminar el perfil de acceso (puede fallar por permisos;
-            // si falla, el perfil ya fue eliminado y el documento huérfano es inofensivo)
-            if (uid) {
-                try {
-                    await deleteDoc(doc(db, "users", uid));
-                } catch (permErr) {
-                    console.warn("No se pudo eliminar el documento de users (permisos). El perfil fue eliminado correctamente.", permErr.message);
-                }
-            }
-
-            setStaff((prev) => prev.filter((u) => u.id !== id));
+            await saveStaffCessation(colab.id, { cessationDate: limaToday() });
+            await fetchAllStaffProfiles();
         } catch (err) {
-            console.error("Error al eliminar usuario:", err);
-            alert(`Error al eliminar: ${err.message}`);
+            console.error("Error al registrar el cese:", err);
+            alert(`Error al registrar el cese: ${err.message}`);
         }
     };
 
@@ -3312,7 +3295,7 @@ function AdminDashboard() {
                                                     }`}
                                                 >
                                                     {colab.cessationDate && new Date(colab.cessationDate + 'T00:00:00') < new Date(new Date().setHours(0, 0, 0, 0))
-                                                        ? "Reactivar"
+                                                        ? "Reingreso: nueva ficha"
                                                         : "Cesar"
                                                     }
                                                 </button>
@@ -3322,11 +3305,10 @@ function AdminDashboard() {
                                                     {colab.isTrainee && (
                                                         <button
                                                             onClick={async () => {
-                                                                if (!window.confirm(`¿Finalizar el entrenamiento de ${colab.name} ${colab.lastName} y eliminar del sistema?`)) return;
+                                                                if (!window.confirm(`¿Finalizar el entrenamiento de ${colab.name} ${colab.lastName} y conservar su historial como cese?`)) return;
                                                                 try {
-                                                                    await deleteDoc(doc(db, "staff_profiles", colab.id));
-                                                                    if (colab.uid) await deleteDoc(doc(db, "users", colab.uid));
-                                                                    setStaff(prev => prev.filter(u => u.id !== colab.id));
+                                                                    await finishStaffTraining(colab.id, limaToday());
+                                                                    await fetchAllStaffProfiles();
                                                                 } catch (err) { alert('Error: ' + err.message); }
                                                             }}
                                                             className="text-[9px] font-black uppercase tracking-tighter text-orange-700 bg-orange-50 hover:bg-orange-100 border border-orange-200 px-2 py-1.5 rounded-lg transition-all"
@@ -3354,7 +3336,7 @@ function AdminDashboard() {
                                                             <Pencil className="w-4 h-4" />
                                                         </button>
                                                         <button
-                                                            onClick={() => handleDelete(colab.uid, colab.id)}
+                                                            onClick={() => handleDelete(colab.uid, colab)}
                                                             className="p-2 text-red-600 hover:bg-red-50 rounded-xl transition-all"
                                                             title="Eliminar"
                                                         >
@@ -3364,7 +3346,7 @@ function AdminDashboard() {
                                                             onClick={() => handleUnlinkEmail(colab.id)}
                                                             className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-all disabled:opacity-30"
                                                             disabled={!colab.uid}
-                                                            title="Desvincular correo"
+                                                            title="Vínculo protegido; usa el flujo de cese y reingreso"
                                                         >
                                                             <Unlink className="w-4 h-4" />
                                                         </button>

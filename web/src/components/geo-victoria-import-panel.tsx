@@ -7,11 +7,11 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { Clock3, FileDown, FileSpreadsheet, RefreshCw, Upload, UserPlus, UsersRound } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { parseExtraHours, parseLateArrivals, parseRoster, parseShiftMap, rowsFromMatrix, type GeoVictoriaImportSummary, type GeoVictoriaLateRow, type GeoVictoriaRosterSummary, type GeoVictoriaStaff, type SheetCell } from "@/lib/geo-victoria";
+import { isCurrentGeoVictoriaEpisode, parseExtraHours, parseLateArrivals, parseRoster, parseShiftMap, rowsFromMatrix, type GeoVictoriaImportSummary, type GeoVictoriaLateRow, type GeoVictoriaRosterSummary, type GeoVictoriaStaff, type SheetCell } from "@/lib/geo-victoria";
 import type { Json, Tables } from "@/types/database";
 
 type Store = Pick<Tables<"stores">, "id" | "name" | "is_active">;
-type Staff = Pick<Tables<"staff_profiles">, "id" | "firestore_id" | "user_id" | "dni" | "first_name" | "last_name" | "position" | "modality" | "cessation_date">;
+type Staff = Pick<Tables<"staff_profiles">, "id" | "firestore_id" | "user_id" | "dni" | "first_name" | "last_name" | "position" | "modality" | "status" | "cessation_date" | "is_trainee" | "training_end_date">;
 type Context = { stores: Store[]; defaultStoreId: string };
 type ShiftMeta = { fileName: string; count: number; updatedAt: string } | null;
 type ImportResult = GeoVictoriaImportSummary & { fileName: string; created: number; updated: number };
@@ -37,7 +37,7 @@ async function loadContext(forcedStoreId?: string): Promise<Context> {
 async function loadStoreData(storeId: string) {
   const supabase = createClient();
   const [staffResult, configResult] = await Promise.all([
-    supabase.from("staff_profiles").select("id,firestore_id,user_id,dni,first_name,last_name,position,modality,cessation_date").eq("store_id", storeId).order("first_name"),
+    supabase.from("staff_profiles").select("id,firestore_id,user_id,dni,first_name,last_name,position,modality,status,cessation_date,is_trainee,training_end_date").eq("store_id", storeId).order("first_name"),
     supabase.from("store_configs").select("value").eq("store_id", storeId).eq("config_key", "geovictoria_turnos").maybeSingle(),
   ]);
   if (staffResult.error) throw staffResult.error;
@@ -71,7 +71,7 @@ async function readMatrix(file: File) {
 }
 
 function asGeoStaff(rows: Staff[]): GeoVictoriaStaff[] {
-  return rows.map((row) => ({ id: row.id, firestoreId: row.firestore_id, userId: row.user_id, dni: row.dni, firstName: row.first_name, lastName: row.last_name, position: row.position, modality: row.modality, cessationDate: row.cessation_date }));
+  return rows.map((row) => ({ id: row.id, firestoreId: row.firestore_id, userId: row.user_id, dni: row.dni, firstName: row.first_name, lastName: row.last_name, position: row.position, modality: row.modality, status: row.status, cessationDate: row.cessation_date, isTrainee: row.is_trainee, trainingEndDate: row.training_end_date }));
 }
 
 function minutesLabel(minutes: number) {
@@ -153,19 +153,25 @@ export function GeoVictoriaImportPanel({ storeId: forcedStoreId }: { storeId?: s
     mutationFn: async ({ file, summary }: { file: File; summary: GeoVictoriaRosterSummary }) => {
       if (summary.candidates.length === 0) return { ...summary, fileName: file.name, created: 0, failed: [] } satisfies RosterResult;
       const supabase = createClient();
-      const createdIds: string[] = [];
+      let created = 0;
+      let idempotentExisting = 0;
       const failed: RosterResult["failed"] = [];
       for (const candidate of summary.candidates) {
-        const saved = await supabase.rpc("save_staff_profile", { p_staff_id: null, p_store_id: selectedStoreId, p_first_name: candidate.firstName, p_last_name: candidate.lastName, p_email: candidate.email || null, p_dni: candidate.dni, p_gender: null, p_birth_date: null, p_modality: "", p_position: "COLABORADOR", p_status: "pending", p_join_date: candidate.joinDate, p_sanitary_card_expiry: null, p_sanitary_card_unlock: false, p_is_trainee: false, p_training_end_date: null, p_modality_change_date: null, p_next_modality: null });
+        const saved = await supabase.rpc("import_geovictoria_staff_profile", {
+          p_store_id: selectedStoreId,
+          p_first_name: candidate.firstName,
+          p_last_name: candidate.lastName,
+          p_dni: candidate.dni,
+          p_email: candidate.email || null,
+          p_join_date: candidate.joinDate,
+          p_source_file: file.name,
+        });
         if (saved.error) failed.push({ dni: candidate.dni, message: saved.error.message });
-        else if (saved.data) createdIds.push(saved.data);
+        else if (saved.data?.[0]?.created) created += 1;
+        else if (saved.data?.[0]?.staff_id) idempotentExisting += 1;
+        else failed.push({ dni: candidate.dni, message: "Supabase no confirmó el alta." });
       }
-      if (createdIds.length > 0) {
-        const marked = await supabase.from("staff_profiles").update({ needs_completion: true, legacy_data: { importedFrom: "geovictoria", sourceFile: file.name, importedAt: new Date().toISOString() } }).in("id", createdIds).select("id");
-        if (marked.error) throw marked.error;
-        if (marked.data.length !== createdIds.length) throw new Error("No se pudieron marcar todas las altas para completar sus datos.");
-      }
-      return { ...summary, fileName: file.name, created: createdIds.length, failed } satisfies RosterResult;
+      return { ...summary, existing: summary.existing + idempotentExisting, fileName: file.name, created, failed } satisfies RosterResult;
     },
     onSuccess: async (saved) => {
       setRosterResult(saved);
@@ -202,7 +208,10 @@ export function GeoVictoriaImportPanel({ storeId: forcedStoreId }: { storeId?: s
     event.target.value = "";
     if (!file || !selectedStoreId) return;
     setFileError(""); setRosterResult(null);
-    try { importRoster.mutate({ file, summary: parseRoster(rowsFromMatrix(await readMatrix(file)), availableStaff.map((person) => person.dni)) }); }
+    try {
+      const currentDnis = asGeoStaff(availableStaff).filter((person) => isCurrentGeoVictoriaEpisode(person)).map((person) => person.dni);
+      importRoster.mutate({ file, summary: parseRoster(rowsFromMatrix(await readMatrix(file)), currentDnis) });
+    }
     catch (error) { setFileError(error instanceof Error ? error.message : "No se pudo leer el archivo de personal."); }
   }
 
@@ -227,7 +236,7 @@ export function GeoVictoriaImportPanel({ storeId: forcedStoreId }: { storeId?: s
     <div className="geovictoria-grid">
       <article><div className="geovictoria-card-icon"><Clock3/></div><div><p className="eyebrow">PASO 1</p><h3>Mapa de turnos</h3><p>Lee el ID, inicio y fin desde la primera hoja del Excel.</p>{storeData.data?.shiftMeta ? <small>Actual: {storeData.data.shiftMeta.count} turnos · {storeData.data.shiftMeta.fileName || "archivo anterior"}</small> : <small>Sin archivo configurado.</small>}</div><label className="upload-button"><Upload size={17}/>{saveShiftMap.isPending ? "Guardando…" : "Subir turnos"}<input type="file" accept=".xlsx" disabled={processing || !selectedStoreId} onChange={handleShiftFile}/></label></article>
       <article><div className="geovictoria-card-icon green"><UsersRound/></div><div><p className="eyebrow">PASO 2</p><h3>Tiempo extra</h3><p>Concilia el reporte por DNI y agrupa los subtotales por colaborador y periodo.</p><small>{availableStaff.length} perfiles disponibles para conciliar, incluido el historial de ceses.</small></div><label className="upload-button green"><Upload size={17}/>{importExtras.isPending ? "Importando…" : "Subir tiempo extra"}<input type="file" accept=".xlsx" disabled={processing || !selectedStoreId || availableStaff.length === 0} onChange={handleExtrasFile}/></label></article>
-      <article><div className="geovictoria-card-icon violet"><UserPlus/></div><div><p className="eyebrow">PASO 3</p><h3>Altas de personal</h3><p>Agrega únicamente personas activas cuyo DNI todavía no existe.</p><small>Las nuevas altas quedan pendientes para completar modalidad y carnet.</small></div><label className="upload-button violet"><Upload size={17}/>{importRoster.isPending ? "Importando…" : "Subir personal activo"}<input type="file" accept=".xlsx" disabled={processing || !selectedStoreId} onChange={handleRosterFile}/></label></article>
+      <article><div className="geovictoria-card-icon violet"><UserPlus/></div><div><p className="eyebrow">PASO 3</p><h3>Altas de personal</h3><p>Agrega personas activas sin un episodio laboral vigente, incluidos reingresos.</p><small>Las nuevas altas quedan pendientes para completar modalidad y carnet.</small></div><label className="upload-button violet"><Upload size={17}/>{importRoster.isPending ? "Importando…" : "Subir personal activo"}<input type="file" accept=".xlsx" disabled={processing || !selectedStoreId} onChange={handleRosterFile}/></label></article>
       <article><div className="geovictoria-card-icon orange"><FileDown/></div><div><p className="eyebrow">PASO 4</p><h3>Reporte de tardanzas</h3><p>Excluye filas justificadas y genera un PDF detallado con resumen por colaborador.</p><small>El archivo se procesa localmente y no modifica Supabase.</small></div><label className="upload-button orange"><FileDown size={17}/>Generar PDF<input type="file" accept=".xlsx" disabled={processing || availableStaff.length === 0} onChange={handleLateFile}/></label></article>
     </div>
     {(fileError || saveShiftMap.error || importExtras.error || importRoster.error) && <p className="form-alert error geovictoria-alert">{fileError || saveShiftMap.error?.message || importExtras.error?.message || importRoster.error?.message}</p>}

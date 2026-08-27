@@ -67,6 +67,7 @@ export function HrCessationsPanel({ storeId }: { storeId: string }) {
   const [selected, setSelected] = useState<HrRow | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [notice, setNotice] = useState<string | null>(null);
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 
   useEffect(() => {
     if (!selected) return;
@@ -104,6 +105,8 @@ export function HrCessationsPanel({ storeId }: { storeId: string }) {
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (!selected) return;
+      if (!form.cessationDate) throw new Error("cessation_date_required");
+      if (selected.cessation_date && selected.cessation_date < today && form.cessationDate !== selected.cessation_date) throw new Error("effective_cessation_immutable");
       const supabase = createClient();
       const { error: saveError } = await supabase.rpc("save_staff_cessation", {
         p_staff_id: selected.id,
@@ -111,10 +114,10 @@ export function HrCessationsPanel({ storeId }: { storeId: string }) {
         p_performance: form.performance,
         p_cessation_reason: form.cessationReason,
         p_real_reason: form.realReason,
-        p_store_comment: form.storeComment || null,
+        p_store_comment: form.storeComment,
         p_medical_leave_days: asNumber(form.medicalLeaveDays),
         p_absences: asNumber(form.absences),
-        p_tardiness: form.tardiness || null,
+        p_tardiness: form.tardiness,
         p_night_hours: asNumber(form.nightHours),
         p_extra_hours: asNumber(form.extraHours),
         p_holidays: asNumber(form.holidays),
@@ -129,13 +132,12 @@ export function HrCessationsPanel({ storeId }: { storeId: string }) {
         .maybeSingle();
       if (verification.error) throw verification.error;
       if (form.cessationDate && verification.data?.cessation_date !== form.cessationDate) throw new Error("cessation_not_synced");
-      if (!form.cessationDate && verification.data) throw new Error("cessation_not_removed");
-      return { name: `${selected.first_name} ${selected.last_name}`.trim(), removed: !form.cessationDate };
+      return { name: `${selected.first_name} ${selected.last_name}`.trim() };
     },
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ["hr", "cessations"] });
       setSelected(null);
-      setNotice(result?.removed ? `Se quitó el cese de ${result.name}.` : `Cese de ${result?.name} guardado y verificado.`);
+      setNotice(`Cese de ${result?.name} guardado y verificado.`);
     },
   });
 
@@ -200,9 +202,9 @@ export function HrCessationsPanel({ storeId }: { storeId: string }) {
     </section>
 
     {selected && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setSelected(null)}><section className="hr-modal" role="dialog" aria-modal="true" aria-labelledby="cessation-title">
-      <header><div><p className="eyebrow">RR. HH.</p><h2 id="cessation-title">Cese de {selected.first_name} {selected.last_name}</h2><p className="muted">Si borras la fecha, el registro dejará de aparecer en RR. HH.</p></div><button className="icon-button" onClick={() => setSelected(null)}><X size={20}/></button></header>
+      <header><div><p className="eyebrow">RR. HH.</p><h2 id="cessation-title">Cese de {selected.first_name} {selected.last_name}</h2><p className="muted">El historial de un cese efectivo se conserva. Un reingreso debe registrarse como una nueva ficha laboral.</p></div><button className="icon-button" onClick={() => setSelected(null)}><X size={20}/></button></header>
       <div className="hr-form-grid">
-        <label>Fecha de cese<input type="date" value={form.cessationDate} onChange={(e) => setForm({ ...form, cessationDate: e.target.value })}/></label>
+        <label>Fecha de cese<input type="date" required disabled={Boolean(selected.cessation_date && selected.cessation_date < today)} value={form.cessationDate} onChange={(e) => setForm({ ...form, cessationDate: e.target.value })}/></label>
         <label>Desempeño<select value={form.performance} onChange={(e) => setForm({ ...form, performance: e.target.value })}>{["EXCELENTE", "BUENO", "REGULAR", "MALO"].map((value) => <option key={value}>{value}</option>)}</select></label>
         <label>Motivo de cese<select value={form.cessationReason} onChange={(e) => setForm({ ...form, cessationReason: e.target.value })}>{reasons.map((value) => <option key={value}>{value}</option>)}</select></label>
         <label>Motivo real<select value={form.realReason} onChange={(e) => setForm({ ...form, realReason: e.target.value })}>{realReasons.map((value) => <option key={value}>{value}</option>)}</select></label>
@@ -210,8 +212,8 @@ export function HrCessationsPanel({ storeId }: { storeId: string }) {
         <label className="span-2">Tardanzas (minutos u horas)<input value={form.tardiness} onChange={(e) => setForm({ ...form, tardiness: e.target.value })}/></label>
         <label className="span-2">Comentario de tienda<textarea rows={3} value={form.storeComment} onChange={(e) => setForm({ ...form, storeComment: e.target.value })} placeholder="Describe con mayor detalle el motivo del retiro"/></label>
       </div>
-      {saveMutation.error && <p className="form-alert error">{saveMutation.error.message === "cessation_not_synced" ? "La fecha no quedó sincronizada con el registro de cese." : saveMutation.error.message === "cessation_not_removed" ? "El registro de cese no pudo retirarse." : `No se pudo guardar el cese: ${saveMutation.error.message}`}</p>}
-      <footer><button className="plain-button" onClick={() => setSelected(null)}>Cancelar</button><button className="primary-button" disabled={saveMutation.isPending} onClick={() => saveMutation.mutate()}>{saveMutation.isPending ? "Guardando…" : form.cessationDate ? "Guardar cese" : "Quitar cese"}</button></footer>
+      {saveMutation.error && <p className="form-alert error">{saveMutation.error.message === "cessation_not_synced" ? "La fecha no quedó sincronizada con el registro de cese." : saveMutation.error.message === "cessation_date_required" ? "La fecha de cese es obligatoria. El historial no se elimina desde esta pantalla." : saveMutation.error.message === "effective_cessation_immutable" ? "La fecha de un cese efectivo forma parte del historial y no se modifica." : `No se pudo guardar el cese: ${saveMutation.error.message}`}</p>}
+      <footer><button className="plain-button" onClick={() => setSelected(null)}>Cancelar</button><button className="primary-button" disabled={saveMutation.isPending || !form.cessationDate} onClick={() => saveMutation.mutate()}>{saveMutation.isPending ? "Guardando…" : "Guardar cese"}</button></footer>
     </section></div>}
   </>;
 }

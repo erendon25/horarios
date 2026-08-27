@@ -75,6 +75,9 @@ function Login() {
             if (!userRole) return; // Espera a que se cargue el rol
 
             switch (userRole) {
+                case 'registration':
+                    navigate('/link-account');
+                    break;
                 case 'superadmin':
                     navigate('/superadmin');
                     break;

@@ -1,14 +1,12 @@
 // ✅ StaffModal.jsx
 import { useState } from 'react';
-import {
-  getFirestore, doc, collection, getDoc, updateDoc,
-  getDocs, query, where, writeBatch
-} from '../lib/supabase/firestoreCompat';
+import { saveStaffProfileAndCessation } from '../lib/supabase/firestoreCompat';
 
 function StaffModal({ staff = null, userData, onClose, onSaved }) {
   const [form, setForm] = useState({
     name: staff?.name || '',
     lastName: staff?.lastName || '',
+    email: staff?.email || '',
     modality: staff ? (staff.modality ?? '') : 'Full-Time',
     dni: staff?.dni || '',
     gender: staff?.gender || '',
@@ -23,7 +21,10 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
     sanitaryCardUnlock: staff?.sanitaryCardUnlock || false,
   });
   const [loading, setLoading] = useState(false);
-  const db = getFirestore();
+  const today = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Lima', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(new Date());
+  const effectiveCessation = Boolean(staff?.cessationDate && staff.cessationDate < today);
 
   function handleChange(e) {
     const { name, value } = e.target;
@@ -33,101 +34,23 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
   async function handleSave(e) {
     e.preventDefault();
     if (!form.name || !form.lastName) return alert('Nombre y apellido son obligatorios');
+    const normalizedEmail = form.email.trim().toLowerCase();
+    if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return alert('Registra un correo válido. Debe ser el mismo que usará el colaborador en su cuenta.');
+    }
+    if (staff?.cessationDate && !form.cessationDate) {
+      return alert('Un cese existente no se puede borrar. Para un reingreso, crea una nueva ficha laboral.');
+    }
     setLoading(true);
 
     try {
-      const profileRef = staff
-        ? doc(db, 'staff_profiles', staff.id)
-        : doc(collection(db, 'staff_profiles'));
-      const profileId = profileRef.id;
-      const profilePayload = staff
-        ? {
-          ...staff,
-          ...form,
-          needsCompletion: staff.needsCompletion
-            ? !(form.modality && form.sanitaryCardDate)
-            : (staff.needsCompletion || false),
-        }
-        : {
-          ...form,
-          storeId: userData?.storeId,
-          status: 'pending',
-          createdAt: new Date().toISOString(),
-        };
-
-      // Mantener RR. HH. sincronizado con la fecha de cese del perfil.
-      // Perfil y cese se escriben juntos para evitar estados inconsistentes.
-      const cesesSnap = await getDocs(query(
-        collection(db, 'ceses'),
-        where('staffId', '==', profileId)
-      ));
-      const cesesNormales = cesesSnap.docs.filter(snapshot => !snapshot.data().isModalityChange);
-      const registroAnterior = cesesNormales.find(snapshot => snapshot.id === `${profileId}_${staff?.cessationDate}`)
-        || cesesNormales[0];
-      const datosAnteriores = registroAnterior?.data() || {};
-      const batch = writeBatch(db);
-      const nuevoCeseId = form.cessationDate ? `${profileId}_${form.cessationDate}` : null;
-
-      batch.set(profileRef, profilePayload);
-      cesesNormales
-        .filter(snapshot => snapshot.id !== nuevoCeseId)
-        .forEach(snapshot => batch.update(snapshot.ref, {
-          isCancelled: true,
-          cancelledAt: new Date().toISOString(),
-          lastUpdated: new Date().toISOString(),
-        }));
-
-      if (form.cessationDate) {
-        batch.set(doc(db, 'ceses', nuevoCeseId), {
-          ...datosAnteriores,
-          staffId: profileId,
-          name: form.name || '',
-          lastName: form.lastName || '',
-          modality: form.modality || '',
-          dni: form.dni || '',
-          gender: form.gender || '',
-          position: form.position || 'TEAM MEMBER',
-          joinDate: form.joinDate || '',
-          cessationDate: form.cessationDate,
-          storeId: userData?.storeId || staff?.storeId || '',
-          motivoCese: datosAnteriores.motivoCese || 'RENUNCIA VOLUNTARIA',
-          motivoReal: datosAnteriores.motivoReal || 'MEJORA ECONÓMICA',
-          registeredAt: datosAnteriores.registeredAt || new Date().toISOString(),
-          migratedFromProfile: true,
-          isCancelled: false,
-          cancelledAt: '',
-          lastUpdated: new Date().toISOString(),
-        });
-      }
-
-      await batch.commit();
-
-      // Sync role as a secondary operation
-      try {
-        const targetUid = form.uid || staff?.uid;
-        if (targetUid) {
-          const userDocRef = doc(db, 'users', targetUid);
-          const userSnap = await getDoc(userDocRef);
-
-          if (userSnap.exists()) {
-            const currentRole = userSnap.data().role;
-            if (currentRole !== 'superadmin') {
-              let newRole = 'collaborator';
-              if (form.position === 'GERENTE') {
-                newRole = 'admin';
-              } else if (form.position === 'ENTRENADOR') {
-                newRole = 'trainer';
-              }
-              if (currentRole !== newRole) {
-                await updateDoc(userDocRef, { role: newRole });
-              }
-            }
-          }
-        }
-      } catch (roleErr) {
-        console.warn('Sincronización de rol omitida o fallida:', roleErr);
-        // No lanzamos error para no confundir al usuario ya que el perfil principal se guardó
-      }
+      await saveStaffProfileAndCessation(staff?.id ?? null, {
+        ...staff,
+        ...form,
+        email: normalizedEmail,
+        storeId: userData?.storeId || staff?.storeId,
+        status: staff?.status || 'pending',
+      });
 
       onSaved();
     } catch (err) {
@@ -165,6 +88,21 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
               <label className={labelCls}>Apellido *</label>
               <input type="text" name="lastName" value={form.lastName} onChange={handleChange} className={inputCls} placeholder="Ej: Cari Sanchez" />
             </div>
+          </div>
+
+          <div>
+            <label className={labelCls}>Correo de la cuenta *</label>
+            <input
+              type="email"
+              name="email"
+              value={form.email}
+              onChange={handleChange}
+              className={inputCls}
+              placeholder="nombre@empresa.com"
+              required
+              disabled={Boolean(staff?.uid || staff?.userId)}
+            />
+            <p className="mt-1 text-[11px] text-gray-500">{staff?.uid || staff?.userId ? 'Cuenta vinculada: cambia el correo mediante un flujo coordinado con Auth.' : 'Debe coincidir exactamente con el correo confirmado en Supabase Auth.'}</p>
           </div>
 
           {/* DNI + Sexo */}
@@ -265,13 +203,14 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
           {!form.isTrainee && (
             <div>
               <label className="block text-sm font-medium text-red-600 mb-1">
-                Fecha de Cese <span className="font-normal text-gray-400">(dejar vacío si está activo)</span>
+                Fecha de Cese <span className="font-normal text-gray-400">{effectiveCessation ? '(historial inmutable)' : '(dejar vacío si está activo)'}</span>
               </label>
               <input
                 type="date"
                 name="cessationDate"
                 value={form.cessationDate}
                 onChange={handleChange}
+                disabled={effectiveCessation}
                 className="w-full border border-red-300 p-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-400 text-sm"
               />
               {form.cessationDate && (
@@ -285,8 +224,8 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
 
           {/* Trainee toggle */}
           <div
-            onClick={() => setForm(prev => ({ ...prev, isTrainee: !prev.isTrainee, cessationDate: '', trainingEndDate: '' }))}
-            className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all select-none ${form.isTrainee
+            onClick={() => !effectiveCessation && setForm(prev => ({ ...prev, isTrainee: !prev.isTrainee, cessationDate: '', trainingEndDate: '' }))}
+            className={`flex items-center gap-3 p-3 rounded-xl border-2 transition-all select-none ${effectiveCessation ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'} ${form.isTrainee
               ? 'border-orange-400 bg-orange-50'
               : 'border-gray-200 bg-gray-50 hover:border-gray-300'
               }`}

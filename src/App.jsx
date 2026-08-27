@@ -19,6 +19,8 @@ import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import SuperAdminDashboard from './components/SuperAdminDashboard';
 import TrainingApp from './components/Training/TrainingApp';
+import AccountLinking from './components/AccountLinking';
+import UpdatePassword from './components/UpdatePassword';
 
 
 <ToastContainer />
@@ -33,11 +35,15 @@ function AppRouter() {
             ? '/superadmin'
             : userRole === 'admin'
               ? '/admin'
+              : userRole === 'registration'
+                ? '/link-account'
               : '/staff'
         } />
       } />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
+      <Route path="/update-password" element={<UpdatePassword />} />
+      <Route path="/link-account" element={<AccountLinking />} />
       <Route path="/unauthorized" element={<h1>Acceso no autorizado</h1>} />
 
       <Route

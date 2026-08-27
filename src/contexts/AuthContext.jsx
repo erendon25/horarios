@@ -43,17 +43,6 @@ export function AuthProvider({ children }) {
 
       let { data: profile, error } = await readProfile();
 
-      if (!profile && user.email) {
-        const link = await supabase.functions.invoke("staff-account-admin", {
-          body: { operation: "register_staff_by_email" },
-        });
-        if (!link.error) {
-          const retry = await readProfile();
-          profile = retry.data;
-          error = retry.error;
-        }
-      }
-
       // La restauración de sesión y SIGNED_IN pueden coincidir. Reintenta una
       // lectura transitoria, pero nunca cierres una sesión válida por ese error.
       if (error) {
@@ -65,14 +54,34 @@ export function AuthProvider({ children }) {
 
       if (!active || requestId !== accessRequest) return;
       let cessationDate = null;
+      let trainingEndDate = null;
+      let isTrainee = false;
+      let staffLinkValid = true;
+      let storeIsActive = profile?.role === "superadmin";
+      if (!error && profile?.store_id) {
+        const store = await supabase
+          .from("stores")
+          .select("is_active")
+          .eq("id", profile.store_id)
+          .maybeSingle();
+        if (store.error) error = store.error;
+        storeIsActive = Boolean(store.data?.is_active);
+      }
       if (!error && profile?.staff_profile_id) {
         const staff = await supabase
           .from("staff_profiles")
-          .select("cessation_date")
+          .select("id,user_id,store_id,cessation_date,is_trainee,training_end_date")
           .eq("id", profile.staff_profile_id)
           .maybeSingle();
         if (staff.error) error = staff.error;
         cessationDate = staff.data?.cessation_date ?? null;
+        trainingEndDate = staff.data?.training_end_date ?? null;
+        isTrainee = Boolean(staff.data?.is_trainee);
+        staffLinkValid = Boolean(
+          staff.data
+          && staff.data.user_id === profile.id
+          && staff.data.store_id === profile.store_id
+        );
       }
 
       if (!active || requestId !== accessRequest) return;
@@ -82,6 +91,7 @@ export function AuthProvider({ children }) {
         month: "2-digit",
         day: "2-digit",
       }).format(new Date());
+      const trainingEnded = Boolean(isTrainee && trainingEndDate && today > trainingEndDate);
 
       if (error) {
         console.error("No se pudo validar el perfil de acceso:", error);
@@ -90,13 +100,43 @@ export function AuthProvider({ children }) {
         return;
       }
 
-      if (!profile || profile.status !== "active" || (cessationDate && today > cessationDate)) {
+      const collaboratorNeedsLink = !profile
+        || (["collaborator", "trainer"].includes(profile.role)
+          && (
+            profile.status !== "active"
+            || profile.registration_pending
+            || !profile.staff_profile_id
+            || !profile.store_id
+            || !storeIsActive
+            || !staffLinkValid
+            || Boolean(cessationDate && today > cessationDate)
+            || trainingEnded
+          ));
+      if (collaboratorNeedsLink) {
+        setUserRole("registration");
+        setUserData({
+          id: user.id,
+          uid: user.id,
+          email: profile?.email ?? user.email,
+          role: "registration",
+          registrationPending: true,
+        });
+        setAccessError(null);
+        setLoading(false);
+        return;
+      }
+
+      if (!profile || profile.status !== "active" || !storeIsActive || (cessationDate && today > cessationDate) || trainingEnded) {
         await supabase.auth.signOut();
         setCurrentUser(null);
         setUserRole(null);
         setUserData(null);
-        if (cessationDate && today > cessationDate) {
+        if (trainingEnded) {
+          alert("Tu etapa de entrenamiento ya finalizó. Solicita una nueva ficha si inicia otro vínculo laboral.");
+        } else if (cessationDate && today > cessationDate) {
           alert("Tu acceso ha sido revocado debido al cese de actividades.");
+        } else if (profile && !storeIsActive) {
+          alert("Tu tienda está inactiva. Solicita a un administrador que revise tu asignación.");
         }
         setLoading(false);
         return;

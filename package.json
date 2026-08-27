@@ -7,6 +7,7 @@
     "dev": "vite",
     "prebuild": "node scripts/verify-env.mjs",
     "build": "vite build",
+    "test": "node --test src/lib/supabase/*.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

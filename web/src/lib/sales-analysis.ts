@@ -1,6 +1,7 @@
 import type { Json } from "@/types/database";
+import { SALES_CHANNELS } from "./sales-channels";
 
-export const SALES_CHANNELS = ["SALÓN", "DELIVERY", "DRIVE THRU", "SERV. FILA"] as const;
+export { SALES_CHANNELS } from "./sales-channels";
 export const SALES_SHIFTS = ["Apertura", "Día", "Cierre"] as const;
 export const WEEKDAYS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"] as const;
 
@@ -9,7 +10,9 @@ export type SalesHistoryInput = {
   sales_amount: number | null;
   transactions: number | null;
   hourly_data: Json;
+  hourly_transactions: Json;
   source_data: Json;
+  updated_at: string;
 };
 
 export type SalesMonthConfigInput = { month_start: string; monthly_data: Json };
@@ -33,6 +36,26 @@ function record(value: unknown): Record<string, unknown> {
 
 function numberRecord(value: unknown) {
   return Object.fromEntries(Object.entries(record(value)).map(([key, raw]) => [key, Number(raw) || 0]));
+}
+
+export const SALES_HISTORY_PAGE_SIZE = 500;
+
+export async function paginateSalesHistory<T extends { sales_date: string }>(
+  fetchPage: (beforeDate?: string) => Promise<T[]>,
+  pageSize = SALES_HISTORY_PAGE_SIZE,
+) {
+  const rows: T[] = [];
+  let beforeDate: string | undefined;
+
+  while (true) {
+    const page = await fetchPage(beforeDate);
+    rows.push(...page);
+    if (page.length < pageSize) return rows;
+
+    const nextCursor = page.at(-1)?.sales_date;
+    if (!nextCursor || nextCursor === beforeDate) throw new Error("sales_history_pagination_stalled");
+    beforeDate = nextCursor;
+  }
 }
 
 export function addIsoDays(date: string, days: number) {
@@ -96,7 +119,10 @@ export function aggregateSales(rows: SalesHistoryInput[], start: string, end: st
     result.weekdaysTransactions[weekday] += dayTransactions;
 
     const hourlySales = record(row.hourly_data);
-    const hourlyTransactions = record(record(row.source_data).hourlyTxs);
+    const canonicalHourlyTransactions = record(row.hourly_transactions);
+    const hourlyTransactions = Object.keys(canonicalHourlyTransactions).length
+      ? canonicalHourlyTransactions
+      : record(record(row.source_data).hourlyTxs);
     new Set([...Object.keys(hourlySales), ...Object.keys(hourlyTransactions)]).forEach((hourKey) => {
       const hour = Number.parseInt(hourKey, 10);
       if (!Number.isFinite(hour)) return;

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, CalendarRange, CircleDollarSign, Goal, ReceiptText, TrendingDown, TrendingUp } from "lucide-react";
+import { Activity, CalendarRange, CircleDollarSign, Goal, ReceiptText, RefreshCw, TrendingDown, TrendingUp } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import {
   SALES_CHANNELS,
@@ -11,8 +11,11 @@ import {
   addIsoDays,
   aggregateSales,
   businessHourEntries,
+  daysBetween,
+  paginateSalesHistory,
   previousPeriod,
   previousYearPeriod,
+  SALES_HISTORY_PAGE_SIZE,
   salesGoal,
   variation,
   type SalesHistoryInput,
@@ -21,7 +24,7 @@ import {
 
 type Store = { id: string; name: string; is_active: boolean };
 type Context = { stores: Store[]; defaultStoreId: string };
-type AnalysisData = { rows: SalesHistoryInput[]; configs: SalesMonthConfigInput[] };
+type AnalysisData = { rows: SalesHistoryInput[]; configs: SalesMonthConfigInput[]; loadedAt: string };
 
 async function loadContext(forcedStoreId?: string): Promise<Context> {
   const supabase = createClient();
@@ -43,13 +46,23 @@ async function loadContext(forcedStoreId?: string): Promise<Context> {
 
 async function loadAnalysis(storeId: string): Promise<AnalysisData> {
   const supabase = createClient();
-  const [history, configs] = await Promise.all([
-    supabase.from("sales_daily_history").select("sales_date,sales_amount,transactions,hourly_data,source_data").eq("store_id", storeId).order("sales_date", { ascending: false }).limit(500),
+  const [rows, configs] = await Promise.all([
+    paginateSalesHistory(async (beforeDate) => {
+      let query = supabase
+        .from("sales_daily_history")
+        .select("sales_date,sales_amount,transactions,hourly_data,hourly_transactions,source_data,updated_at")
+        .eq("store_id", storeId)
+        .order("sales_date", { ascending: false })
+        .limit(SALES_HISTORY_PAGE_SIZE);
+      if (beforeDate) query = query.lt("sales_date", beforeDate);
+      const history = await query;
+      if (history.error) throw history.error;
+      return history.data;
+    }),
     supabase.from("sales_month_configs").select("month_start,monthly_data").eq("store_id", storeId).order("month_start"),
   ]);
-  if (history.error) throw history.error;
   if (configs.error) throw configs.error;
-  return { rows: history.data, configs: configs.data };
+  return { rows, configs: configs.data, loadedAt: new Date().toISOString() };
 }
 
 function money(value: number) {
@@ -58,6 +71,14 @@ function money(value: number) {
 
 function percent(value: number) {
   return `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
+}
+
+function limaDate() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
+function timestamp(value: string) {
+  return new Intl.DateTimeFormat("es-PE", { timeZone: "America/Lima", dateStyle: "short", timeStyle: "short" }).format(new Date(value));
 }
 
 export function SalesAnalysisPanel({ storeId }: { storeId?: string } = {}) {
@@ -71,7 +92,7 @@ function SalesAnalysisStore({ context }: { context: Context }) {
   const [storeId, setStoreId] = useState(context.defaultStoreId);
   const query = useQuery({ queryKey: ["sales-analysis", storeId], queryFn: () => loadAnalysis(storeId), enabled: Boolean(storeId) });
   return <>
-    {context.stores.length > 1 && <div className="sales-config-selector"><label>Tienda<select value={storeId} onChange={(event) => setStoreId(event.target.value)}>{context.stores.map((store) => <option key={store.id} value={store.id}>{store.name}{store.is_active ? "" : " (inactiva)"}</option>)}</select></label></div>}
+    <div className="sales-config-selector">{context.stores.length > 1 && <label>Tienda<select value={storeId} onChange={(event) => setStoreId(event.target.value)}>{context.stores.map((store) => <option key={store.id} value={store.id}>{store.name}{store.is_active ? "" : " (inactiva)"}</option>)}</select></label>}<button type="button" className="plain-button" onClick={() => query.refetch()} disabled={query.isFetching}><RefreshCw size={15}/>{query.isFetching ? "Actualizando…" : "Actualizar historial"}</button></div>
     {query.isPending ? <div className="study-loading">Consultando historial…</div> : query.error || !query.data ? <p className="form-alert error">No se pudo cargar el historial de ventas.</p> : <SalesAnalysisView key={`${storeId}-${query.data.rows[0]?.sales_date ?? "empty"}`} data={query.data}/>} 
   </>;
 }
@@ -98,27 +119,37 @@ function SalesAnalysisView({ data }: { data: AnalysisData }) {
   const previousMetric = mode === "sales" ? analysis.previous.sales : analysis.previous.transactions;
   const yearMetric = mode === "sales" ? analysis.year.sales : analysis.year.transactions;
   const valueFor = (sales: Record<string, number>, transactions: Record<string, number>) => mode === "sales" ? sales : transactions;
+  const selectedDays = start <= end ? daysBetween(start, end) : 0;
+  const missingRows = Math.max(0, selectedDays - analysis.current.daysWithData);
+  const freshnessDays = Math.max(0, daysBetween(latestDate, limaDate()) - 1);
+  const currentValue = analysis.current.daysWithData ? (mode === "sales" ? money(metric) : metric.toLocaleString("es-PE")) : "Sin filas";
+  const comparisonValue = (value: number, days: number) => days ? (mode === "sales" ? money(value) : value.toLocaleString("es-PE")) : "Sin filas";
+  const hasPreviousComparison = Boolean(analysis.current.daysWithData && analysis.previous.daysWithData);
+  const hasYearComparison = Boolean(analysis.current.daysWithData && analysis.year.daysWithData);
 
-  if (!data.rows.length) return <div className="sales-empty large"><Activity size={40}/><h3>Sin historial de ventas</h3><p>Carga ventas desde Configuración para habilitar el comparativo.</p></div>;
+  if (!data.rows.length) return <div className="sales-empty large"><Activity size={40}/><h3>Sin historial de ventas</h3><p>La consulta se actualizó el {timestamp(data.loadedAt)}, pero la tienda no tiene filas de venta. Carga y guarda un archivo desde Configuración.</p></div>;
 
   return <section className="sales-analysis-panel">
-    <header className="weekly-header"><div><p className="eyebrow">COMPARATIVO DE VENTAS</p><h2>Análisis por periodo</h2><p className="muted">Historial disponible del {earliestDate} al {latestDate}.</p></div><TrendingUp size={30}/></header>
+    <header className="weekly-header"><div><p className="eyebrow">COMPARATIVO DE VENTAS</p><h2>Análisis por periodo</h2><p className="muted">Historial del {earliestDate} al {latestDate} · último registro modificado {timestamp(data.rows[0].updated_at)} · consulta {timestamp(data.loadedAt)}.</p></div><TrendingUp size={30}/></header>
     <div className="sales-analysis-toolbar">
       <label>Desde<input type="date" min={earliestDate} max={latestDate} value={start} onChange={(event) => setStart(event.target.value)}/></label>
       <label>Hasta<input type="date" min={earliestDate} max={latestDate} value={end} onChange={(event) => setEnd(event.target.value)}/></label>
       <div className="sales-mode-switch" role="group" aria-label="Métrica analizada"><button className={mode === "sales" ? "active" : ""} onClick={() => setMode("sales")}>VTA</button><button className={mode === "transactions" ? "active" : ""} onClick={() => setMode("transactions")}>TXS</button></div>
     </div>
     {start > end && <p className="form-alert error sales-message">La fecha inicial no puede ser posterior a la fecha final.</p>}
+    {freshnessDays > 1 && <p className="form-alert warning sales-message">Historial desactualizado: el último día con ventas es {latestDate}, hace {freshnessDays} días.</p>}
+    {start <= end && analysis.current.daysWithData === 0 && <p className="form-alert warning sales-message">El periodo {start} al {end} no contiene filas de ventas. Los ceros no representan actividad confirmada.</p>}
+    {analysis.current.daysWithData > 0 && missingRows > 0 && <p className="form-alert warning sales-message">Cobertura incompleta: hay {analysis.current.daysWithData} filas para {selectedDays} días; faltan {missingRows} días sin registro.</p>}
     <div className="sales-analysis-metrics">
-      <Metric icon={CircleDollarSign} label={mode === "sales" ? "Venta del periodo" : "Transacciones"} value={mode === "sales" ? money(metric) : metric.toLocaleString("es-PE")} detail={`${analysis.current.daysWithData} días con datos`}/>
-      <Metric icon={Goal} label="Cumplimiento de meta" value={analysis.goal ? `${((analysis.current.sales / analysis.goal) * 100).toFixed(1)}%` : "Sin meta"} detail={analysis.goal ? `${money(analysis.current.sales)} / ${money(analysis.goal)}` : "Configura las metas del periodo"}/>
-      <Metric icon={ReceiptText} label="Ticket promedio" value={money(analysis.current.transactions ? analysis.current.sales / analysis.current.transactions : 0)} detail={`${analysis.current.transactions.toLocaleString("es-PE")} transacciones`}/>
-      <Metric icon={variation(metric, previousMetric) >= 0 ? TrendingUp : TrendingDown} label="Vs. periodo anterior" value={percent(variation(metric, previousMetric))} detail={`${analysis.previousDates.start} al ${analysis.previousDates.end}`} tone={variation(metric, previousMetric) >= 0 ? "positive" : "negative"}/>
+      <Metric icon={CircleDollarSign} label={mode === "sales" ? "Venta del periodo" : "Transacciones"} value={currentValue} detail={`${analysis.current.daysWithData} de ${selectedDays} días con fila`}/>
+      <Metric icon={Goal} label="Cumplimiento de meta" value={!analysis.current.daysWithData ? "Sin filas" : analysis.goal ? `${((analysis.current.sales / analysis.goal) * 100).toFixed(1)}%` : "Sin meta"} detail={analysis.goal ? `${money(analysis.current.sales)} / ${money(analysis.goal)}` : "Configura las metas del periodo"}/>
+      <Metric icon={ReceiptText} label="Ticket promedio" value={!analysis.current.daysWithData ? "Sin filas" : money(analysis.current.transactions ? analysis.current.sales / analysis.current.transactions : 0)} detail={`${analysis.current.transactions.toLocaleString("es-PE")} transacciones`}/>
+      <Metric icon={variation(metric, previousMetric) >= 0 ? TrendingUp : TrendingDown} label="Vs. periodo anterior" value={hasPreviousComparison ? percent(variation(metric, previousMetric)) : "Sin comparación"} detail={`${analysis.previousDates.start} al ${analysis.previousDates.end} · ${analysis.previous.daysWithData} filas`} tone={!hasPreviousComparison ? "" : variation(metric, previousMetric) >= 0 ? "positive" : "negative"}/>
     </div>
     <div className="sales-period-comparison" aria-label="Comparativo con periodos anteriores">
-      <article><CalendarRange size={18}/><span>Periodo actual</span><strong>{mode === "sales" ? money(metric) : metric.toLocaleString("es-PE")}</strong><small>{start} al {end}</small></article>
-      <article><TrendingUp size={18}/><span>Semana/periodo anterior</span><strong>{mode === "sales" ? money(previousMetric) : previousMetric.toLocaleString("es-PE")}</strong><small>{analysis.previousDates.start} al {analysis.previousDates.end} · {percent(variation(metric, previousMetric))}</small></article>
-      <article><CalendarRange size={18}/><span>Mismo periodo del año pasado</span><strong>{mode === "sales" ? money(yearMetric) : yearMetric.toLocaleString("es-PE")}</strong><small>{analysis.yearDates.start} al {analysis.yearDates.end} · {percent(variation(metric, yearMetric))}</small></article>
+      <article><CalendarRange size={18}/><span>Periodo actual</span><strong>{currentValue}</strong><small>{start} al {end} · {analysis.current.daysWithData} filas</small></article>
+      <article><TrendingUp size={18}/><span>Semana/periodo anterior</span><strong>{comparisonValue(previousMetric, analysis.previous.daysWithData)}</strong><small>{analysis.previousDates.start} al {analysis.previousDates.end} · {hasPreviousComparison ? percent(variation(metric, previousMetric)) : "sin comparación"}</small></article>
+      <article><CalendarRange size={18}/><span>Mismo periodo del año pasado</span><strong>{comparisonValue(yearMetric, analysis.year.daysWithData)}</strong><small>{analysis.yearDates.start} al {analysis.yearDates.end} · {hasYearComparison ? percent(variation(metric, yearMetric)) : "sin comparación"}</small></article>
     </div>
     <div className="sales-analysis-grid">
       <Breakdown title={mode === "sales" ? "Ventas por canal" : "Transacciones por canal"} values={valueFor(analysis.current.channelsSales, analysis.current.channelsTransactions)} labels={SALES_CHANNELS} moneyMode={mode === "sales"}/>

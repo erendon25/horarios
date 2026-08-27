@@ -45,11 +45,6 @@ const CollaboratorDashboard = () => {
   const [storeName, setStoreName] = useState("");
   const [loading, setLoading] = useState(true);
   const [modalType, setModalType] = useState(null);
-  const [stores, setStores] = useState([]);
-  const [selectedStore, setSelectedStore] = useState("");
-  const [availableStaff, setAvailableStaff] = useState([]);
-  const [selectedStaffId, setSelectedStaffId] = useState("");
-
   const [dailyQuote, setDailyQuote] = useState("");
   const [isEditingBirthday, setIsEditingBirthday] = useState(false);
   const [tempBirthDate, setTempBirthDate] = useState("");
@@ -232,82 +227,6 @@ const CollaboratorDashboard = () => {
     fetchPerfil();
   }, [currentUser]);
 
-  useEffect(() => {
-    const loadStores = async () => {
-      const db = getFirestore();
-      const storeSnap = await getDocs(collection(db, "stores"));
-      setStores(storeSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    };
-    loadStores();
-  }, []);
-
-  useEffect(() => {
-    const loadAvailableStaff = async () => {
-      if (!selectedStore) return;
-      const db = getFirestore();
-      // Traer todos los perfiles de la tienda (las reglas permiten leer perfiles
-      // sin uid para el flujo de vincular). El filtrado de "sin vincular" se hace
-      // en cliente para cubrir uid==null, uid=="" y campo ausente.
-      const q = query(
-        collection(db, "staff_profiles"),
-        where("storeId", "==", selectedStore)
-      );
-      const snap = await getDocs(q);
-
-      const libres = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(p => !p.uid) // filtra uid==null, uid=="" y campo ausente
-        .sort((a, b) => a.name.localeCompare(b.name, "es"));
-
-      setAvailableStaff(libres);
-    };
-    loadAvailableStaff();
-  }, [selectedStore]);
-
-  const vincularCuenta = async () => {
-    if (!selectedStaffId || !currentUser) return;
-    const db = getFirestore();
-    try {
-      // 1. Leer el perfil seleccionado para obtener el storeId
-      const { setDoc, getDoc: getDocument, updateDoc: updateDocument, serverTimestamp } = await import("../lib/supabase/firestoreCompat");
-      const staffDocRef = doc(db, "staff_profiles", selectedStaffId);
-      const staffSnap = await getDocument(staffDocRef);
-      const staffData = staffSnap.exists() ? staffSnap.data() : {};
-      const staffStoreId = staffData.storeId || "";
-
-      // 2. Vincular el perfil de staff con la cuenta de auth
-      await updateDoc(doc(db, "staff_profiles", selectedStaffId), {
-        uid: currentUser.uid,
-        email: currentUser.email || ""
-      });
-
-      // 3. Asegurar que exista el documento de usuario con rol y storeId correctos
-      const userDocRef = doc(db, "users", currentUser.uid);
-      const userSnap = await getDocument(userDocRef);
-      if (!userSnap.exists()) {
-        await setDoc(userDocRef, {
-          email: currentUser.email || "",
-          role: "collaborator",
-          storeId: staffStoreId,
-          createdAt: serverTimestamp(),
-        });
-      } else {
-        // Actualizar storeId en caso de que no lo tenga
-        const existingData = userSnap.data();
-        if (!existingData.storeId && staffStoreId) {
-          await updateDocument(userDocRef, { storeId: staffStoreId });
-        }
-      }
-
-      window.location.reload();
-    } catch (err) {
-      console.error("Error al vincular cuenta:", err);
-      alert("Error al vincular la cuenta. Intenta de nuevo.");
-    }
-  };
-
-
-
   const handleSaveBirthday = async () => {
     if (!perfil?.id) return;
     try {
@@ -349,58 +268,10 @@ const CollaboratorDashboard = () => {
             <div className="w-16 h-16 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center mx-auto mb-4">
               <User className="w-8 h-8 text-white" />
             </div>
-            <h2 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-              Vincular cuenta a perfil existente
-            </h2>
-            <p className="text-gray-600 mt-2 text-sm">Selecciona tu tienda y nombre para continuar</p>
+            <h2 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">Vinculación pendiente</h2>
+            <p className="text-gray-600 mt-2 text-sm">La cuenta todavía no tiene una ficha canónica vinculada.</p>
           </div>
-
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
-                <Building2 className="w-4 h-4" />
-                Selecciona tu tienda:
-              </label>
-              <select
-                value={selectedStore}
-                onChange={e => setSelectedStore(e.target.value)}
-                className="w-full border-2 border-gray-300 rounded-lg px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white"
-              >
-                <option value="">-- Selecciona una tienda --</option>
-                {stores.map(store => (
-                  <option key={store.id} value={store.id}>{store.name}</option>
-                ))}
-              </select>
-            </div>
-
-            {selectedStore && (
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
-                  <User className="w-4 h-4" />
-                  Selecciona tu nombre:
-                </label>
-                <select
-                  value={selectedStaffId}
-                  onChange={e => setSelectedStaffId(e.target.value)}
-                  className="w-full border-2 border-gray-300 rounded-lg px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white"
-                >
-                  <option value="">-- Selecciona tu nombre --</option>
-                  {availableStaff.map(persona => (
-                    <option key={persona.id} value={persona.id}>{persona.name} {persona.lastName}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            <button
-              onClick={vincularCuenta}
-              disabled={!selectedStaffId}
-              className="w-full bg-gradient-to-r from-green-500 to-green-600 text-white py-3 rounded-lg font-semibold shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-2"
-            >
-              <CheckCircle className="w-5 h-5" />
-              Confirmar vinculación
-            </button>
-          </div>
+          <button onClick={() => navigate('/link-account')} className="w-full bg-gradient-to-r from-green-500 to-green-600 text-white py-3 rounded-lg font-semibold shadow-md">Continuar al flujo seguro</button>
         </div>
       </div>
     );
@@ -714,16 +585,12 @@ const CollaboratorDashboard = () => {
                 <p className="text-gray-500 text-sm">Visualiza las áreas que has dominado en la tienda.</p>
               </div>
 
-              {/* Solo Trainees pueden auto-gestionarse, o si el admin lo permite. 
-                  Para colaboradores regulares, el progreso lo marca el Trainer/Admin */}
+              {/* Las habilidades son certificaciones: las actualiza una
+                  evaluación o un responsable, nunca el propio colaborador. */}
               {perfil.isTrainee && (
-                <button
-                  onClick={() => setModalType("skills")}
-                  className="px-6 py-3 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-xl font-bold shadow-md hover:shadow-lg transition-all flex items-center gap-2"
-                >
-                  <PlusCircle className="w-5 h-5" />
-                  Actualizar Mis Skills
-                </button>
+                <span className="px-4 py-2 rounded-xl bg-orange-50 text-orange-700 border border-orange-200 text-sm font-semibold">
+                  Se actualiza mediante evaluación
+                </span>
               )}
             </div>
 
@@ -842,12 +709,10 @@ const CollaboratorDashboard = () => {
                 <h3 className="text-xl font-bold text-white flex items-center gap-2">
                   {modalType === "study" && <BookOpen className="w-5 h-5" />}
                   {modalType === "feriados" && <Calendar className="w-5 h-5" />}
-                  {modalType === "skills" && <Award className="w-5 h-5" />}
                   {modalType === "trainer_skills" && <Award className="w-5 h-5" />}
                   {modalType === "request" && <ClipboardList className="w-5 h-5" />}
                   {modalType === "study" && "Editar horarios de estudio"}
                   {modalType === "feriados" && "Registrar feriado"}
-                  {modalType === "skills" && "Mis Habilidades"}
                   {modalType === "trainer_skills" && `Gestionar: ${selectedTrainerStaff?.name}`}
                   {modalType === "request" && "Solicitar Horario"}
                 </h3>
@@ -863,22 +728,6 @@ const CollaboratorDashboard = () => {
                 {modalType === "study" && <StudyScheduleForm onSuccess={closeModal} />}
                 {modalType === "feriados" && <HolidayForm />}
                 {modalType === "request" && <ScheduleRequestForm perfil={perfil} onSuccess={closeModal} />}
-                {modalType === "skills" && (
-                  <ModalSelectorDePosiciones
-                    docId={perfil.id}
-                    storeId={perfil.storeId}
-                    onClose={() => {
-                      closeModal();
-                      // Refrescar perfil localmente para ver cambios
-                      const fetchPerfil = async () => {
-                        const db = getFirestore();
-                        const snap = await getDoc(doc(db, "staff_profiles", perfil.id));
-                        if (snap.exists()) setPerfil({ id: snap.id, ...snap.data() });
-                      };
-                      fetchPerfil();
-                    }}
-                  />
-                )}
                 {modalType === "trainer_skills" && (
                   <ModalSelectorDePosiciones
                     docId={selectedTrainerStaff.id}

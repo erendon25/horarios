@@ -240,6 +240,7 @@ export type Database = {
           created_at: string
           firestore_id: string | null
           hourly_data: Json
+          hourly_transactions: Json
           id: number
           sales_amount: number | null
           sales_date: string
@@ -252,6 +253,7 @@ export type Database = {
           created_at?: string
           firestore_id?: string | null
           hourly_data?: Json
+          hourly_transactions?: Json
           id?: never
           sales_amount?: number | null
           sales_date: string
@@ -264,6 +266,7 @@ export type Database = {
           created_at?: string
           firestore_id?: string | null
           hourly_data?: Json
+          hourly_transactions?: Json
           id?: never
           sales_amount?: number | null
           sales_date?: string
@@ -712,6 +715,9 @@ export type Database = {
           gender: string | null
           holiday_balance: number
           id: string
+          import_source: string | null
+          import_source_file: string | null
+          imported_at: string | null
           is_trainee: boolean
           join_date: string | null
           last_evaluation_date: string | null
@@ -747,6 +753,9 @@ export type Database = {
           gender?: string | null
           holiday_balance?: number
           id?: string
+          import_source?: string | null
+          import_source_file?: string | null
+          imported_at?: string | null
           is_trainee?: boolean
           join_date?: string | null
           last_evaluation_date?: string | null
@@ -782,6 +791,9 @@ export type Database = {
           gender?: string | null
           holiday_balance?: number
           id?: string
+          import_source?: string | null
+          import_source_file?: string | null
+          imported_at?: string | null
           is_trainee?: boolean
           join_date?: string | null
           last_evaluation_date?: string | null
@@ -1145,6 +1157,8 @@ export type Database = {
         Row: {
           area: string | null
           collaborator_signature_path: string | null
+          completion_verified_at: string | null
+          completion_version: number | null
           created_at: string
           current_step: number | null
           evaluation_date: string
@@ -1168,6 +1182,8 @@ export type Database = {
         Insert: {
           area?: string | null
           collaborator_signature_path?: string | null
+          completion_verified_at?: string | null
+          completion_version?: number | null
           created_at?: string
           current_step?: number | null
           evaluation_date: string
@@ -1191,6 +1207,8 @@ export type Database = {
         Update: {
           area?: string | null
           collaborator_signature_path?: string | null
+          completion_verified_at?: string | null
+          completion_version?: number | null
           created_at?: string
           current_step?: number | null
           evaluation_date?: string
@@ -1350,6 +1368,59 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      clear_staff_pending_holidays: {
+        Args: { p_staff_id: string }
+        Returns: undefined
+      }
+      import_geovictoria_staff_profile: {
+        Args: {
+          p_dni: string
+          p_email?: string | null
+          p_first_name: string
+          p_join_date?: string | null
+          p_last_name: string
+          p_source_file?: string | null
+          p_store_id: string
+        }
+        Returns: {
+          created: boolean
+          staff_id: string
+        }[]
+      }
+      mark_staff_import_state: {
+        Args: {
+          p_needs_completion: boolean
+          p_source?: string | null
+          p_source_file?: string | null
+          p_staff_ids: string[]
+        }
+        Returns: number
+      }
+      replace_staff_skills: {
+        Args: {
+          p_skill_codes: string[]
+          p_staff_id: string
+        }
+        Returns: undefined
+      }
+      save_sales_history_batch: {
+        Args: {
+          p_days: Json
+          p_store_id: string
+        }
+        Returns: number
+      }
+      save_sales_configuration: {
+        Args: {
+          p_daily_hourly_parts: Json
+          p_days?: Json
+          p_month_start: string
+          p_monthly_data: Json
+          p_real_sales_data: Json
+          p_store_id: string
+        }
+        Returns: number
+      }
       save_staff_cessation: {
         Args: {
           p_absences?: number
@@ -1391,6 +1462,30 @@ export type Database = {
         }
         Returns: string
       }
+      save_staff_profile_and_cessation: {
+        Args: {
+          p_birth_date?: string
+          p_cessation_date?: string
+          p_dni?: string
+          p_email?: string
+          p_first_name?: string
+          p_gender?: string
+          p_is_trainee?: boolean
+          p_join_date?: string
+          p_last_name?: string
+          p_modality?: string
+          p_modality_change_date?: string
+          p_next_modality?: string
+          p_position?: string
+          p_sanitary_card_expiry?: string
+          p_sanitary_card_unlock?: boolean
+          p_staff_id?: string
+          p_status?: Database["public"]["Enums"]["record_status"]
+          p_store_id?: string
+          p_training_end_date?: string
+        }
+        Returns: string
+      }
       save_study_schedule: {
         Args: {
           p_schedule: Json
@@ -1404,6 +1499,14 @@ export type Database = {
           p_week_start: string
         }
         Returns: Json
+      }
+      update_own_staff_profile: {
+        Args: {
+          p_birth_date?: string
+          p_pending_holidays?: Json
+          p_position_abilities?: Json
+        }
+        Returns: boolean
       }
     }
     Enums: {

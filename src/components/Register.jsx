@@ -6,7 +6,7 @@ import background from "../assets/background.png";
 function Register() {
   const emailRef = useRef();
   const passwordRef = useRef();
-  const { register, logout } = useAuth();
+  const { register } = useAuth();
   const navigate = useNavigate();
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -21,11 +21,10 @@ function Register() {
       const email = emailRef.current.value.trim().toLowerCase();
       const credential = await register(email, passwordRef.current.value);
       if (credential.session) {
-        setMessage("Cuenta creada. Tu perfil se enlazará automáticamente al iniciar sesión con el correo registrado por tu administrador.");
-        await logout().catch(() => {});
-        setTimeout(() => navigate("/login"), 2500);
+        setMessage("Cuenta creada. Ahora valida tu identidad para enlazarla con tu ficha de colaborador.");
+        setTimeout(() => navigate("/link-account"), 1200);
       } else {
-        setMessage("Revisa tu correo para confirmar la cuenta. Después podrás iniciar sesión y tu perfil se enlazará automáticamente.");
+        setMessage("Revisa tu correo para confirmar la cuenta. Al iniciar sesión podrás validar tu identidad y enlazar tu ficha de colaborador.");
       }
     } catch (err) {
       console.error(err);

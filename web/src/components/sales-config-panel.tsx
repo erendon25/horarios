@@ -19,6 +19,7 @@ import {
   type HourlyParticipation,
   type MonthlySalesData,
   type RealSalesData,
+  type SalesHistoryDayPayload,
 } from "@/lib/sales-config";
 import type { SheetCell } from "@/lib/geo-victoria";
 
@@ -111,6 +112,7 @@ function LoadedSalesConfig({ storeId, month, initial }: { storeId: string; month
   const [monthly, setMonthly] = useState(initial.monthly);
   const [hourly, setHourly] = useState(initial.hourly);
   const [real, setReal] = useState(initial.real);
+  const [pendingHistory, setPendingHistory] = useState<SalesHistoryDayPayload[]>([]);
   const [dirty, setDirty] = useState(false);
   const [fileMessage, setFileMessage] = useState("");
   const [fileError, setFileError] = useState("");
@@ -120,20 +122,25 @@ function LoadedSalesConfig({ storeId, month, initial }: { storeId: string; month
 
   const save = useMutation({
     mutationFn: async () => {
-      const result = await createClient().from("sales_month_configs").upsert({
-        store_id: storeId,
-        month_start: `${month}-01`,
-        monthly_data: monthly as unknown as Json,
-        daily_hourly_parts: hourly as unknown as Json,
-        real_sales_data: real as unknown as Json,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "store_id,month_start" }).select("id").maybeSingle();
+      const supabase = createClient();
+      const result = await supabase.rpc("save_sales_configuration", {
+        p_store_id: storeId,
+        p_month_start: `${month}-01`,
+        p_monthly_data: monthly as unknown as Json,
+        p_daily_hourly_parts: hourly as unknown as Json,
+        p_real_sales_data: real as unknown as Json,
+        p_days: pendingHistory as unknown as Json,
+      });
       if (result.error) throw result.error;
-      if (!result.data) throw new Error("Supabase no confirmó el guardado.");
+      return result.data;
     },
     onSuccess: async () => {
       setDirty(false);
-      await queryClient.invalidateQueries({ queryKey: ["sales-config", storeId, month] });
+      setPendingHistory([]);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["sales-config", storeId, month] }),
+        queryClient.invalidateQueries({ queryKey: ["sales-analysis", storeId] }),
+      ]);
     },
   });
 
@@ -161,9 +168,14 @@ function LoadedSalesConfig({ storeId, month, initial }: { storeId: string; month
     setFileError(""); setFileMessage("");
     try {
       const parsed = parseSalesMatrix(await readSalesFile(file));
-      if (!parsed.rows || !Object.keys(parsed.real).length) throw new Error("No se encontraron filas de venta válidas. Revisa las columnas Fecha, Hora, Pedido y Total.");
-      setHourly(parsed.hourly); setReal(parsed.real); setDirty(true);
-      setFileMessage(`${parsed.rows} filas procesadas · ${Object.keys(parsed.real).length} días de venta real cargados desde ${file.name}.`);
+      const dates = Object.keys(parsed.real).filter((date) => date.startsWith(`${month}-`));
+      if (!parsed.rows || !dates.length) throw new Error(`No se encontraron ventas válidas para ${month}. Revisa las columnas Fecha, Hora, Pedido y Total.`);
+      const selectedHourly = Object.fromEntries(dates.map((date) => [date, parsed.hourly[date]]));
+      const selectedReal = Object.fromEntries(dates.map((date) => [date, parsed.real[date]]));
+      const selectedHistory = parsed.history.filter((day) => day.date.startsWith(`${month}-`));
+      setHourly(selectedHourly); setReal(selectedReal); setPendingHistory(selectedHistory); setDirty(true);
+      const ignoredDays = Object.keys(parsed.real).length - dates.length;
+      setFileMessage(`${parsed.rows} filas procesadas · ${dates.length} días de ${month} listos para guardar${ignoredDays ? ` · ${ignoredDays} días de otros meses omitidos` : ""}.`);
     } catch (error) {
       setFileError(error instanceof Error ? error.message : "No se pudo procesar el archivo.");
     }
@@ -171,14 +183,14 @@ function LoadedSalesConfig({ storeId, month, initial }: { storeId: string; month
 
   return <section className="sales-config-panel">
     <header className="weekly-header"><div><p className="eyebrow">VENTAS Y DEMANDA</p><h2>Configuración mensual</h2><p className="muted">Define metas diarias y carga ventas reales para construir la participación horaria.</p></div><TrendingUp size={30}/></header>
-    <div className="sales-config-actions"><label className="upload-button sales-upload"><Upload size={16}/>Cargar Excel/CSV<input type="file" accept=".xlsx,.xls,.csv" onChange={upload}/></label><button className="primary-button" disabled={!dirty || save.isPending} onClick={() => save.mutate()}><Save size={16}/>{save.isPending ? "Guardando…" : "Guardar configuración"}</button></div>
+    <div className="sales-config-actions"><label className="upload-button sales-upload"><Upload size={16}/>Cargar Excel/CSV<input type="file" accept=".xlsx,.csv" onChange={upload}/></label><button className="primary-button" disabled={!dirty || save.isPending} onClick={() => save.mutate()}><Save size={16}/>{save.isPending ? "Guardando…" : "Guardar configuración"}</button></div>
     {fileMessage && <p className="form-alert success sales-message">{fileMessage}</p>}
     {(fileError || save.error) && <p className="form-alert error sales-message">{fileError || save.error?.message || "No se pudo guardar."}</p>}
-    {save.isSuccess && !dirty && <p className="form-alert success sales-message">Configuración guardada correctamente en Supabase.</p>}
+    {save.isSuccess && !dirty && <p className="form-alert success sales-message">Configuración guardada correctamente en Supabase{save.data ? ` · ${save.data} días incorporados al historial canónico` : ""}.</p>}
     <div className="sales-summary"><article><FileSpreadsheet/><span>Venta meta del mes</span><strong>S/ {totals.sales.toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></article><article><Activity/><span>Transacciones meta</span><strong>{totals.transactions.toLocaleString("es-PE")}</strong></article><article><CalendarDays/><span>Ventas reales cargadas</span><strong>{Object.keys(real).length} días</strong></article></div>
     <div className="sales-config-grid">
       <section className="data-card sales-targets"><div className="data-card-heading"><div><strong>Metas diarias · {month}</strong><span>Pega columnas completas desde Excel si lo necesitas.</span></div></div><div className="table-scroll"><table><thead><tr><th>Día</th><th>VTA</th><th>TXS</th></tr></thead><tbody>{days.map((day) => <tr key={day}><td><strong>{weekday(month, day)} {day}</strong></td><td><label><span>S/</span><input inputMode="decimal" value={monthly[day]?.vta ?? ""} onChange={(event) => change(day, "vta", event.target.value)} onPaste={(event) => paste(event, "vta", day)} placeholder="0.00"/></label></td><td><input inputMode="numeric" value={monthly[day]?.txs ?? ""} onChange={(event) => change(day, "txs", event.target.value)} onPaste={(event) => paste(event, "txs", day)} placeholder="0"/></td></tr>)}</tbody><tfoot><tr><td>Total</td><td>S/ {totals.sales.toLocaleString("es-PE", { maximumFractionDigits: 2 })}</td><td>{totals.transactions.toLocaleString("es-PE")}</td></tr></tfoot></table></div></section>
-      <section className="data-card sales-hourly"><div className="data-card-heading"><div><strong>Participación horaria diaria</strong><span>Jornada comercial 06:00–05:00.</span></div>{Object.keys(hourly).length > 0 && <button className="icon-button danger" title="Limpiar matriz" onClick={() => { if (window.confirm("¿Limpiar la matriz horaria cargada?")) { setHourly({}); setReal({}); setDirty(true); } }}><Trash2 size={15}/></button>}</div><HourlyTable rows={Object.entries(hourly).sort(([a], [b]) => a.localeCompare(b)).map(([label, values]) => ({ label, values }))}/></section>
+      <section className="data-card sales-hourly"><div className="data-card-heading"><div><strong>Participación horaria diaria</strong><span>Jornada comercial 06:00–05:00. Cada pedido único se asigna a su primera hora y canal válidos.</span></div>{Object.keys(hourly).length > 0 && <button className="icon-button danger" title="Limpiar matriz" onClick={() => { if (window.confirm("¿Limpiar la matriz horaria cargada?")) { setHourly({}); setReal({}); setPendingHistory([]); setDirty(true); } }}><Trash2 size={15}/></button>}</div><HourlyTable rows={Object.entries(hourly).sort(([a], [b]) => a.localeCompare(b)).map(([label, values]) => ({ label, values }))}/></section>
     </div>
     <section className="data-card sales-averages"><div className="data-card-heading"><div><strong>Promedios por día de semana</strong><span>Calculados desde las ventas reales cargadas.</span></div></div><HourlyTable rows={averages.map((row) => ({ label: row.name, values: row.hourly, sales: row.sales, transactions: row.transactions }))} averages/></section>
   </section>;

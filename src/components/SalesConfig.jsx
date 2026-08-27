@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Save, Calendar, Clock, DollarSign, Activity, TrendingUp, ArrowLeft, Upload } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
+import { parseCanonicalSalesRows } from '../lib/supabase/salesHistoryCompat';
 
 const normalizeNumericInput = (value) => {
     let text = String(value ?? '').trim().replace(/[^\d.,-]/g, '');
@@ -57,6 +58,7 @@ export default function SalesConfig() {
 
     // Estado de Ventas Reales (desde Excel/CSV) para la tabla de Promedios Base
     const [realSalesData, setRealSalesData] = useState({});
+    const [pendingHistory, setPendingHistory] = useState([]);
 
     // Cargar tienda del usuario
     useEffect(() => {
@@ -103,10 +105,12 @@ export default function SalesConfig() {
                     setMonthlyData(sanitizedMonthlyData);
                     setDailyHourlyParts(data.dailyHourlyParts || {});
                     setRealSalesData(data.realSalesData || {});
+                    setPendingHistory([]);
                 } else {
                     setMonthlyData({});
                     setDailyHourlyParts({});
                     setRealSalesData({});
+                    setPendingHistory([]);
                 }
             } catch (e) {
                 console.error("Error al cargar config de ventas: ", e);
@@ -223,156 +227,26 @@ export default function SalesConfig() {
     };
 
     const procesarRows = (data) => {
-        if (data.length === 0) return;
+        setPendingHistory([]);
+        const parsed = parseCanonicalSalesRows(data);
+        const selectedHistory = parsed.history.filter((day) => day.date.startsWith(`${selectedMonth}-`));
+        if (selectedHistory.length === 0) {
+            alert(`No se encontraron ventas válidas para ${selectedMonth}. Revisa Fecha, Hora, Nro. Pedido/Documento, Estado y Total.`);
+            return;
+        }
 
-        // Diagnóstico: columnas disponibles
-        console.log('=== DIAGNÓSTICO XLSX ===');
-        console.log('Primera fila campos:', Object.keys(data[0]));
-        console.log('Muestra:', { FechaPedido: data[0].FechaPedido || data[0].Fecha, Total: data[0].Total, Pedido: data[0].Pedido });
-        console.log('========================');
+        const selectedDates = new Set(selectedHistory.map((day) => day.date));
+        setDailyHourlyParts(Object.fromEntries(
+            Object.entries(parsed.dailyHourlyParts).filter(([date]) => selectedDates.has(date))
+        ));
+        setRealSalesData(Object.fromEntries(
+            Object.entries(parsed.realSalesData).filter(([date]) => selectedDates.has(date))
+        ));
+        setPendingHistory(selectedHistory);
 
-
-                // Función utilitaria para buscar columnas sin importar espacios ni mayúsculas
-                const findValue = (row, possibleKeys) => {
-                    const keys = Object.keys(row);
-                    for (let key of keys) {
-                        if (possibleKeys.includes(key.trim().toLowerCase())) {
-                            return row[key];
-                        }
-                    }
-                    return undefined;
-                };
-
-                const ventasPorDiaHora = {}; 
-                const totalesDiarios = {};   
-                const pedidosPorDia = {}; // Pedidos únicos por día para TXS correcto
-
-                data.forEach(fila => {
-                    if (!fila || typeof fila !== 'object') return;
-
-                    // Ignorar ítems anulados/cancelados
-                    const estadoItem = String(findValue(fila, ['estadoitem', 'estado item', 'estado']) || '').trim().toLowerCase();
-                    if (estadoItem && (estadoItem.includes('anulad') || estadoItem.includes('cancel'))) return;
-
-                    // Si es Inforest, ignoramos su fila de resumen final
-                    const pedidoRaw = String(findValue(fila, ['pedido']) || '').trim();
-                    if (pedidoRaw.includes("Total Pedido")) return;
-
-                    const fechaRaw = findValue(fila, ['fecha', 'fechapedido', 'fecha pedido', 'date']);
-                    const totalRaw = findValue(fila, ['total', 'monto', 'venta', 'ventas']);
-                    
-                    if (!fechaRaw || totalRaw === undefined || totalRaw === null || totalRaw === '') return;
-
-                    // Parseo agnóstico de dinero (S/ 1,500.50 -> 1500.50)
-                    let numStr = String(totalRaw).replace(/[^\d.,-]/g, '');
-                    if (numStr.includes(',') && numStr.includes('.')) {
-                        if (numStr.indexOf(',') < numStr.indexOf('.')) {
-                            numStr = numStr.replace(/,/g, ''); // 1,500.50
-                        } else {
-                            numStr = numStr.replace(/\./g, '').replace(',', '.'); // 1.500,50
-                        }
-                    } else if (numStr.includes(',')) {
-                        numStr = numStr.replace(',', '.'); // 500,50
-                    }
-                    const monto = parseFloat(numStr);
-                    if (isNaN(monto) || monto === 0) return;
-
-                    // Parseo de fecha a prueba de balas
-                    let fechaObj;
-                    if (fechaRaw instanceof Date) {
-                        fechaObj = fechaRaw;
-                    } else if (typeof fechaRaw === 'string') {
-                        const cleanStr = fechaRaw.trim().replace(/\s+/g, ' ');
-                        const [datePart, ...timeParts] = cleanStr.split(' ');
-                        const timePart = timeParts.join(' ');
-                        const partes = datePart.split(/[\/\-]/);
-                        if (partes.length === 3) {
-                            let y, m, d;
-                            if (partes[0].length === 4) {
-                                y = parseInt(partes[0], 10); m = parseInt(partes[1], 10) - 1; d = parseInt(partes[2], 10);
-                            } else {
-                                d = parseInt(partes[0], 10); m = parseInt(partes[1], 10) - 1; y = parseInt(partes[2], 10);
-                                if (y < 100) y += 2000;
-                            }
-                            let hh = 0, mm2 = 0, ss = 0;
-                            if (timePart) {
-                                const tParts = timePart.split(':');
-                                hh = parseInt(tParts[0], 10) || 0; mm2 = parseInt(tParts[1], 10) || 0; ss = parseInt(tParts[2], 10) || 0;
-                            }
-                            fechaObj = new Date(y, m, d, hh, mm2, ss);
-                        } else {
-                            fechaObj = new Date(fechaRaw);
-                        }
-                    } else {
-                        fechaObj = new Date(fechaRaw);
-                    }
-
-                    if (!fechaObj || isNaN(fechaObj.getTime())) return;
-
-                    let yr = fechaObj.getFullYear();
-                    let mo = fechaObj.getMonth() + 1;
-                    let da = fechaObj.getDate();
-                    const rawHours = fechaObj.getHours();
-
-                    // Ajuste de Día de Negocio (Shift de Trasnoche)
-                    // Ventas registradas hasta las 05:59am se computan hacia el día anterior
-                    if (rawHours < 6) {
-                        const prevDay = new Date(fechaObj);
-                        prevDay.setDate(prevDay.getDate() - 1);
-                        yr = prevDay.getFullYear();
-                        mo = prevDay.getMonth() + 1;
-                        da = prevDay.getDate();
-                    }
-
-                    const fecha = `${yr}-${String(mo).padStart(2, '0')}-${String(da).padStart(2, '0')}`;
-                    const horaStr = String(rawHours).padStart(2, '0') + ':00'; 
-
-                    if (!ventasPorDiaHora[fecha]) ventasPorDiaHora[fecha] = {};
-                    ventasPorDiaHora[fecha][horaStr] = (ventasPorDiaHora[fecha][horaStr] || 0) + monto;
-                    totalesDiarios[fecha] = (totalesDiarios[fecha] || 0) + monto;
-
-                    // Contar Pedidos ÚNICOS por día (no ítems individuales)
-                    if (!pedidosPorDia[fecha]) pedidosPorDia[fecha] = new Set();
-                    if (pedidoRaw) pedidosPorDia[fecha].add(pedidoRaw);
-                });
-
-                // Log de totales por fecha para diagnóstico
-                console.log('=== TOTALES PARSEADOS POR FECHA ===');
-                Object.keys(totalesDiarios).sort().forEach(f => {
-                    console.log(`${f}: S/${totalesDiarios[f].toFixed(2)} | TXS: ${pedidosPorDia[f]?.size || 0}`);
-                });
-                console.log('===================================');
-
-                const txsDiarios = {};
-                Object.keys(pedidosPorDia).forEach(f => {
-                    txsDiarios[f] = pedidosPorDia[f].size;
-                });
-
-                // Mantener los metas manuales intactos
-                const participacionFinal = {}; 
-                const newRealSalesData = {};
-
-                Object.keys(ventasPorDiaHora).forEach(fecha => {
-                    participacionFinal[fecha] = {};
-                    hourlyLabels.forEach(hourLabel => {
-                        const ventaHora = ventasPorDiaHora[fecha][hourLabel] || 0;
-                        participacionFinal[fecha][hourLabel] = totalesDiarios[fecha] > 0 
-                                                               ? ((ventaHora / totalesDiarios[fecha]) * 100).toFixed(2) 
-                                                               : "0.00";
-                    });
-
-                    // Guardar los totales reales de este CSV para promediarlos
-                    newRealSalesData[fecha] = {
-                        vta: totalesDiarios[fecha],
-                        txs: txsDiarios[fecha] || 0
-                    };
-                });
-
-                setDailyHourlyParts(participacionFinal);
-                setRealSalesData(newRealSalesData);
-                alert("¡Datos procesados! La matriz de participación por hora se ha rellenado correctamente con las proporciones leídas del archivo.\n\nEl cuadro de metas (Ventas Diarias) se mantiene intacto. No olvides guardar.");
-    }; // fin procesarRows
-
+        const ignoredDays = parsed.history.length - selectedHistory.length;
+        alert(`¡Datos procesados! ${selectedHistory.length} día(s) de ${selectedMonth} listos para guardarse atómicamente${ignoredDays ? `; ${ignoredDays} día(s) de otros meses omitidos` : ''}.\n\nEl cuadro de metas se mantiene intacto. No olvides guardar.`);
+    };
     const saveData = async () => {
         if (!storeId) return;
         setIsSaving(true);
@@ -382,8 +256,10 @@ export default function SalesConfig() {
             await setDoc(docRef, {
                 monthlyData,
                 dailyHourlyParts,
-                realSalesData
+                realSalesData,
+                pendingHistory,
             }, { merge: true });
+            setPendingHistory([]);
             
             alert('Configuración guardada correctamente.');
         } catch (e) {

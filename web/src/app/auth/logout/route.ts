@@ -4,6 +4,9 @@ export async function GET(request: NextRequest) {
   const supabase = await createClient();
   await supabase.auth.signOut();
   const url = new URL("/login", request.url);
-  if (request.nextUrl.searchParams.get("reason") === "cessation") url.searchParams.set("reason", "cessation");
+  const reason = request.nextUrl.searchParams.get("reason");
+  if (["cessation", "inactive", "inactive_store", "registration"].includes(reason ?? "")) {
+    url.searchParams.set("reason", reason!);
+  }
   return NextResponse.redirect(url);
 }

@@ -1,4 +1,6 @@
 import { supabase } from "./client";
+import { mapSalesHistoryRow, salesConfigurationRpcArgs, salesHistoryDayPayload } from "./salesHistoryCompat";
+import { buildTrainingEvidencePaths, uploadTrainingEvidencePair } from "./trainingEvidenceCompat";
 
 export const db = Object.freeze({ kind: "supabase-database" });
 export const getFirestore = () => db;
@@ -59,19 +61,29 @@ const mapStaff = (row) => ({
   joinDate: row.join_date,
   cessationDate: row.cessation_date ?? "",
   sanitaryCardExpiry: row.sanitary_card_expiry,
+  // Alias temporal para las pantallas Vite heredadas. Ambos nombres apuntan
+  // a la misma columna canónica; así el carnet no termina en legacy_data.
+  sanitaryCardDate: row.sanitary_card_expiry,
   sanitaryCardUnlock: row.sanitary_card_unlock,
   isTrainee: row.is_trainee,
   trainingEndDate: row.training_end_date,
   modalityChangeDate: row.modality_change_date,
   nextModality: row.next_modality,
   needsCompletion: row.needs_completion,
+  importedFrom: row.import_source ?? legacy(row).importedFrom ?? null,
+  sourceFile: row.import_source_file ?? legacy(row).sourceFile ?? null,
+  importedAt: row.imported_at ?? legacy(row).importedAt ?? null,
   holidayBalance: row.holiday_balance,
   lastEvaluationDate: row.last_evaluation_date,
   lastEvaluationScore: row.last_evaluation_score,
   lastStationEvaluated: row.last_station_evaluated,
   trainingScores: row.training_scores ?? {},
-  skills: row.position_abilities ?? [],
-  positionAbilities: row.position_abilities ?? [],
+  skills: Array.isArray(row.staff_skills)
+    ? row.staff_skills.map((skill) => skill.skill_code)
+    : row.position_abilities ?? [],
+  positionAbilities: Array.isArray(row.staff_skills)
+    ? row.staff_skills.map((skill) => skill.skill_code)
+    : row.position_abilities ?? [],
   pendingHolidays: row.pending_holidays ?? [],
   linkedAt: row.linked_at,
 });
@@ -150,7 +162,7 @@ const mappers = {
   extra_hours: (row) => ({ ...legacy(row), uid: row.user_id, staffId: row.staff_id, storeId: row.store_id, fecha: row.work_date, inicio: clock(row.start_time), fin: clock(row.end_time), duracion: row.duration_minutes, durationMinutes: row.duration_minutes, extraMinutesPre: row.pre_shift_minutes, extraMinutesPost: row.post_shift_minutes, actividad: row.activity, source: row.source, sourceFile: row.source_file, importedAt: row.imported_at, segments: row.segments ?? [], dailyDetails: row.daily_details ?? [] }),
   ceses: (row) => ({ ...legacy(row), staffId: row.staff_id, storeId: row.store_id, joinDate: row.join_date, cessationDate: row.cessation_date, modality: row.previous_modality, nextModality: row.next_modality, isModalityChange: row.is_modality_change, desempenio: row.performance, motivoCese: row.cessation_reason, motivoReal: row.real_reason, comentario: row.store_comment, diasDescansoMedico: row.medical_leave_days, inasistencias: row.absences, tardanzas: row.tardiness, horasNocturnas: row.night_hours, horasExtras: row.extra_hours, feriados: row.holidays, descuentos: row.discounts, registeredAt: row.registered_at, lastUpdated: row.updated_at }),
   schedule_requests: (row) => ({ ...legacy(row), uid: row.user_id, staffId: row.staff_id, storeId: row.store_id, date: row.requested_date, shiftType: row.shift_type, startTime: clock(row.start_time), endTime: clock(row.end_time), reason: row.reason, status: row.status, adminComment: row.admin_comment, reviewedBy: row.reviewed_by, reviewedAt: row.reviewed_at, createdAt: row.created_at }),
-  training_evaluations: (row) => ({ ...legacy(row), collaboratorId: row.staff_id, trainerId: row.trainer_id, storeId: row.store_id, date: row.evaluation_date, area: row.area, station: row.station_code, stationName: row.station_name, score: row.score, responses: row.responses ?? {}, feedback: row.feedback ?? {}, generalFindings: row.general_findings, status: row.status, step: row.current_step, collabSignature: row.collaborator_signature_url ?? row.collaborator_signature_path, trainerSignature: row.trainer_signature_url ?? row.trainer_signature_path, isEdited: row.is_edited, timestamp: row.created_at, lastUpdated: row.updated_at }),
+  training_evaluations: (row) => ({ ...legacy(row), collaboratorId: row.staff_id, trainerId: row.trainer_id, storeId: row.store_id, date: row.evaluation_date, area: row.area, station: row.station_code, stationName: row.station_name, score: row.score, responses: row.responses ?? {}, feedback: row.feedback ?? {}, generalFindings: row.general_findings, status: row.status, step: row.current_step, collabSignature: row.collaborator_signature_url ?? row.collaborator_signature_path, trainerSignature: row.trainer_signature_url ?? row.trainer_signature_path, completionVerifiedAt: row.completion_verified_at, completionVersion: row.completion_version, isEdited: row.is_edited, timestamp: row.created_at, lastUpdated: row.updated_at }),
 };
 
 const pathOf = (parts) => parts.filter((part) => part !== db && part != null).flatMap((part) => part?.path ?? String(part)).join("/");
@@ -254,11 +266,11 @@ async function fetchRows(ref) {
     throwIfError(result.error); rows = result.data ?? []; map = (row) => ({ monthlyData: row.monthly_data ?? {}, dailyHourlyParts: row.daily_hourly_parts ?? {}, realSalesData: row.real_sales_data ?? {}, hourlyParticipation: row.real_sales_data?.hourlyParticipation ?? null });
   } else if (segments[0] === "stores" && segments[2] === "sales_history") {
     const result = await supabase.from("sales_daily_history").select("*").eq("store_id", segments[1]);
-    throwIfError(result.error); rows = result.data ?? []; map = (row) => ({ ...legacy(row), totalSales: row.sales_amount, totalTxs: row.transactions, hourlyData: row.hourly_data ?? {}, date: row.sales_date });
+    throwIfError(result.error); rows = result.data ?? []; map = mapSalesHistoryRow;
   } else {
     const table = ROOT_TABLE[root];
     if (!table) throw new Error(`Colección no migrada a Supabase: ${ref.path}`);
-    const result = await supabase.from(table).select("*");
+    const result = await supabase.from(table).select(root === "staff_profiles" ? "*,staff_skills(skill_code)" : "*");
     throwIfError(result.error); rows = result.data ?? [];
     if (root === "training_evaluations") {
       const paths = [...new Set(rows.flatMap((row) => [row.collaborator_signature_path, row.trainer_signature_path]).filter(Boolean))];
@@ -333,6 +345,33 @@ export async function getDoc(ref) {
     throwIfError(days.error);
     return new DocumentSnapshot(ref, id, mapStudy({ staff_id: staff.data.id, staff: staff.data, days: days.data ?? [] }));
   }
+  if (segments[0] === "stores" && segments[2] === "sales_history") {
+    const result = await supabase
+      .from("sales_daily_history")
+      .select("*")
+      .eq("store_id", segments[1])
+      .eq("sales_date", id)
+      .maybeSingle();
+    throwIfError(result.error);
+    const row = result.data;
+    return new DocumentSnapshot(ref, id, row ? mapSalesHistoryRow(row) : undefined);
+  }
+  if (segments[0] === "stores" && segments[2] === "sales_config") {
+    const result = await supabase
+      .from("sales_month_configs")
+      .select("*")
+      .eq("store_id", segments[1])
+      .eq("month_start", `${id}-01`)
+      .maybeSingle();
+    throwIfError(result.error);
+    const row = result.data;
+    return new DocumentSnapshot(ref, id, row ? {
+      monthlyData: row.monthly_data ?? {},
+      dailyHourlyParts: row.daily_hourly_parts ?? {},
+      realSalesData: row.real_sales_data ?? {},
+      hourlyParticipation: row.real_sales_data?.hourlyParticipation ?? null,
+    } : undefined);
+  }
   const parent = { kind: "collection", path: segments.slice(0, -1).join("/") };
   const items = await fetchRows(parent);
   const item = items.find((candidate) => candidate.id === id || String(candidate.row?.firestore_id) === id);
@@ -341,7 +380,7 @@ export async function getDoc(ref) {
 
 const oldToColumns = {
   users: { email: "email", role: "role", storeId: "store_id", staffProfileId: "staff_profile_id", name: "first_name", lastName: "last_name", status: "status", registrationPending: "registration_pending", createdAt: "created_at" },
-  staff_profiles: { uid: "user_id", storeId: "store_id", name: "first_name", lastName: "last_name", email: "email", dni: "dni", gender: "gender", birthDate: "birth_date", modality: "modality", position: "position", status: "status", joinDate: "join_date", cessationDate: "cessation_date", sanitaryCardExpiry: "sanitary_card_expiry", sanitaryCardUnlock: "sanitary_card_unlock", isTrainee: "is_trainee", trainingEndDate: "training_end_date", modalityChangeDate: "modality_change_date", nextModality: "next_modality", needsCompletion: "needs_completion", holidayBalance: "holiday_balance", lastEvaluationDate: "last_evaluation_date", lastEvaluationScore: "last_evaluation_score", lastStationEvaluated: "last_station_evaluated", trainingScores: "training_scores", skills: "position_abilities", positionAbilities: "position_abilities", pendingHolidays: "pending_holidays", linkedAt: "linked_at" },
+  staff_profiles: { uid: "user_id", storeId: "store_id", name: "first_name", lastName: "last_name", email: "email", dni: "dni", gender: "gender", birthDate: "birth_date", modality: "modality", position: "position", status: "status", joinDate: "join_date", cessationDate: "cessation_date", sanitaryCardExpiry: "sanitary_card_expiry", sanitaryCardDate: "sanitary_card_expiry", sanitaryCardUnlock: "sanitary_card_unlock", isTrainee: "is_trainee", trainingEndDate: "training_end_date", modalityChangeDate: "modality_change_date", nextModality: "next_modality", needsCompletion: "needs_completion", holidayBalance: "holiday_balance", lastEvaluationDate: "last_evaluation_date", lastEvaluationScore: "last_evaluation_score", lastStationEvaluated: "last_station_evaluated", trainingScores: "training_scores", skills: "position_abilities", positionAbilities: "position_abilities", pendingHolidays: "pending_holidays", linkedAt: "linked_at" },
   stores: { name: "name", city: "city", ciudad: "city", address: "address", direccion: "address", active: "is_active", isActive: "is_active", createdAt: "created_at" },
   feriados_trabajados: { uid: "user_id", staffId: "staff_id", storeId: "store_id", date: "holiday_date", name: "name", type: "balance_type", createdAt: "created_at" },
   extra_hours: { uid: "user_id", staffId: "staff_id", storeId: "store_id", fecha: "work_date", periodStart: "work_date", inicio: "start_time", entrada: "start_time", fin: "end_time", salida: "end_time", durationMinutes: "duration_minutes", duracion: "duration_minutes", extraMinutesPre: "pre_shift_minutes", extraMinutesPost: "post_shift_minutes", actividad: "activity", source: "source", sourceFile: "source_file", importedAt: "imported_at", segments: "segments", dailyDetails: "daily_details" },
@@ -385,7 +424,7 @@ const sanitizeScheduleMetadata = (metadata) => {
   return out;
 };
 
-async function saveSchedule(ref, data) {
+function scheduleChange(ref, data) {
   const match = ref.path.split("/").at(-1).match(/^(.*?)_(\d{4}-\d{2}-\d{2})_to_\d{4}-\d{2}-\d{2}$/);
   const staffId = data.staffId ?? match?.[1];
   const start = isoDate(data.weekKey) ?? match?.[2];
@@ -395,7 +434,12 @@ async function saveSchedule(ref, data) {
     const { start: shiftStart = "", end = "", position = "", off = false, feriado = false, holiday = false, notes = "", ...metadata } = shift;
     return { date: addDays(start, index), start: shiftStart, end, position, off: Boolean(off), holiday: Boolean(feriado || holiday), notes, metadata: sanitizeScheduleMetadata(metadata) };
   });
-  const result = await supabase.rpc("save_weekly_schedules", { p_week_start: start, p_changes: [{ staffId, days }] });
+  return { start, change: { staffId, days } };
+}
+
+async function saveSchedule(ref, data) {
+  const { start, change } = scheduleChange(ref, data);
+  const result = await supabase.rpc("save_weekly_schedules", { p_week_start: start, p_changes: [change] });
   throwIfError(result.error);
 }
 
@@ -430,11 +474,14 @@ async function persist(ref, data, merge) {
     return throwIfError(result.error);
   }
   if (segments[0] === "stores" && segments[2] === "sales_config") {
-    const result = await supabase.from("sales_month_configs").upsert({ store_id: segments[1], month_start: `${id}-01`, monthly_data: data.monthlyData ?? {}, daily_hourly_parts: data.dailyHourlyParts ?? {}, real_sales_data: { ...(data.realSalesData ?? {}), hourlyParticipation: data.hourlyParticipation ?? data.realSalesData?.hourlyParticipation ?? null } }, { onConflict: "store_id,month_start" });
+    const result = await supabase.rpc("save_sales_configuration", salesConfigurationRpcArgs(segments[1], id, data));
     return throwIfError(result.error);
   }
   if (segments[0] === "stores" && segments[2] === "sales_history") {
-    const result = await supabase.from("sales_daily_history").upsert({ store_id: segments[1], sales_date: id, sales_amount: data.totalSales ?? null, transactions: data.totalTxs ?? null, hourly_data: data.hourlyData ?? {}, source_data: data }, { onConflict: "store_id,sales_date" });
+    const result = await supabase.rpc("save_sales_history_batch", {
+      p_store_id: segments[1],
+      p_days: [salesHistoryDayPayload(id, data)],
+    });
     return throwIfError(result.error);
   }
   const table = ROOT_TABLE[root];
@@ -442,22 +489,65 @@ async function persist(ref, data, merge) {
   const previousSnap = merge ? await getDoc(ref) : null;
   const previous = previousSnap?.data() ?? {};
   if (root === "staff_profiles" && merge) {
+    const hasAbilities = Object.hasOwn(data, "skills") || Object.hasOwn(data, "positionAbilities");
+    const abilities = data.skills ?? data.positionAbilities;
+    const nonAbilityKeys = Object.keys(data).filter((key) => !["id", "skills", "positionAbilities"].includes(key));
+    if (hasAbilities && nonAbilityKeys.length === 0) {
+      const result = await supabase.rpc("replace_staff_skills", {
+        p_staff_id: id,
+        p_skill_codes: Array.isArray(abilities) ? abilities : [],
+      });
+      throwIfError(result.error);
+      return id;
+    }
     const session = await supabase.auth.getSession();
     const isOwner = previous.uid && previous.uid === session.data.session?.user?.id;
     const selfKeys = Object.keys(data).filter((key) => !["id"].includes(key));
     const allowedSelfKeys = new Set(["birthDate", "skills", "positionAbilities", "pendingHolidays"]);
     if (isOwner && selfKeys.every((key) => allowedSelfKeys.has(key))) {
-      const abilities = data.skills ?? data.positionAbilities;
       const result = await supabase.rpc("update_own_staff_profile", {
         p_birth_date: data.birthDate ?? null,
-        p_position_abilities: abilities ?? null,
+        p_position_abilities: null,
         p_pending_holidays: data.pendingHolidays ?? null,
       });
       throwIfError(result.error);
+      if (hasAbilities) {
+        const skillsResult = await supabase.rpc("replace_staff_skills", {
+          p_staff_id: id,
+          p_skill_codes: Array.isArray(abilities) ? abilities : [],
+        });
+        throwIfError(skillsResult.error);
+      }
       return id;
     }
   }
   let prepared = merge ? { ...previous, ...data } : { ...data };
+  if (root === "users") {
+    throw new Error("Los roles y vínculos de cuenta solo pueden cambiarse mediante el flujo seguro de invitación o vinculación.");
+  }
+  if (root === "staff_profiles") {
+    const pendingHolidaysSpecified = Object.hasOwn(data, "pendingHolidays");
+    if (pendingHolidaysSpecified
+      && (!Array.isArray(data.pendingHolidays) || data.pendingHolidays.length > 0)) {
+      throw new Error("Los feriados pendientes se guardan como registros vinculados; el arreglo legado solo puede limpiarse.");
+    }
+    if (merge && pendingHolidaysSpecified) {
+      const cleared = await supabase.rpc("clear_staff_pending_holidays", { p_staff_id: id });
+      throwIfError(cleared.error);
+    }
+    const hasImportState = Object.hasOwn(data, "needsCompletion")
+      || Object.hasOwn(data, "importedFrom")
+      || Object.hasOwn(data, "sourceFile");
+    if (hasImportState) {
+      if (!merge && String(prepared.importedFrom ?? "").trim().toLowerCase() === "geovictoria") {
+        const imported = await importGeoVictoriaStaffProfile(prepared, prepared.sourceFile || null);
+        return imported.id;
+      }
+      throw new Error("El estado de importación sólo puede guardarse mediante el alta atómica de GeoVictoria.");
+    }
+    const savedId = await saveStaffProfileAndCessation(merge ? id : null, prepared);
+    return savedId;
+  }
   if (["extra_hours", "feriados_trabajados", "schedule_requests"].includes(root)) {
     // staff_id y user_id son columnas uuid con FK. El identificador entrante
     // (staffId o uid) puede ser: el uuid del perfil, un user_id de auth, o un
@@ -467,21 +557,21 @@ async function persist(ref, data, merge) {
     //   - completar store_id,
     //   - fijar user_id al auth.users real o null (un id de staff_profiles
     //     como user_id viola la FK *_user_id_fkey).
-    const needsResolve = !prepared.staffId || !UUID_RE.test(prepared.staffId) || !prepared.storeId;
     const key = prepared.staffId || prepared.uid;
-    if (needsResolve && key) {
+    if (key) {
       const conditions = UUID_RE.test(key) ? [`id.eq.${key}`, `user_id.eq.${key}`] : [`firestore_id.eq.${key}`];
       const owner = await supabase.from("staff_profiles").select("id,store_id,user_id").or(conditions.join(",")).limit(1);
       throwIfError(owner.error);
       const profile = owner.data?.[0];
-      if (profile) {
-        prepared = {
-          ...prepared,
-          staffId: profile.id,
-          storeId: prepared.storeId ?? profile.store_id,
-          uid: profile.user_id ?? null,
-        };
+      if (!profile) {
+        throw new Error("No se encontró la ficha canónica del colaborador para guardar este registro.");
       }
+      prepared = {
+        ...prepared,
+        staffId: profile.id,
+        storeId: profile.store_id,
+        uid: profile.user_id ?? null,
+      };
     }
   }
   if (root === "extra_hours") {
@@ -498,15 +588,65 @@ async function persist(ref, data, merge) {
       : toMinutes(prepared.inicio ?? prepared.entrada, prepared.fin ?? prepared.salida);
     delete prepared.duracion;
   }
-  if (root === "training_evaluations") {
-    for (const [field, suffix] of [["collabSignature", "collaborator"], ["trainerSignature", "trainer"]]) {
+  if (root === "training_evaluations" && prepared.status === "completed") {
+    const signatureFields = [
+      ["collabSignature", "collaborator"],
+      ["trainerSignature", "trainer"],
+    ];
+    const inlineSignatures = signatureFields.filter(([field]) => {
       const value = prepared[field];
-      if (typeof value !== "string" || !value.startsWith("data:image/png;base64,")) continue;
-      const blob = await (await fetch(value)).blob();
-      const path = `${prepared.storeId}/${prepared.collaboratorId}/${Date.now()}-${suffix}.png`;
-      const upload = await supabase.storage.from("training-signatures").upload(path, blob, { contentType: "image/png", upsert: false });
-      throwIfError(upload.error);
-      prepared[field] = path;
+      return typeof value === "string" && value.startsWith("data:image/png;base64,");
+    });
+
+    if (inlineSignatures.length > 0) {
+      if (inlineSignatures.length !== signatureFields.length) {
+        throw new Error("Se requieren las dos firmas nuevas para completar la evaluación.");
+      }
+
+      // The database identity is part of the evidence path. Persist the working
+      // row as a draft first, then upload one fresh evidence pair and cross the
+      // validated draft -> completed boundary.
+      const draftColumns = columnsFor(root, {
+        ...prepared,
+        status: "draft",
+        collabSignature: null,
+        trainerSignature: null,
+      }, legacy(previous));
+      let draftResult;
+      if (/^\d+$/.test(id)) {
+        draftResult = await supabase.from(table).update(draftColumns).eq("id", Number(id)).select("id").single();
+      } else {
+        draftColumns.firestore_id = id;
+        draftResult = await supabase.from(table).upsert(draftColumns, { onConflict: "firestore_id" }).select("id").single();
+      }
+      throwIfError(draftResult.error);
+
+      const evaluationId = draftResult.data?.id;
+      if (!evaluationId) throw new Error("Supabase no devolvió el identificador de la evaluación.");
+      const paths = buildTrainingEvidencePaths(prepared.storeId, evaluationId);
+      const signatureBucket = supabase.storage.from("training-signatures");
+      await uploadTrainingEvidencePair({
+        bucket: signatureBucket,
+        signatures: {
+          collabSignature: prepared.collabSignature,
+          trainerSignature: prepared.trainerSignature,
+        },
+        paths,
+      });
+
+      const completionColumns = columnsFor(root, {
+        ...prepared,
+        collabSignature: paths.collabSignature,
+        trainerSignature: paths.trainerSignature,
+      }, legacy(previous));
+      const completed = await supabase.from(table).update(completionColumns).eq("id", evaluationId).select("id").single();
+      if (completed.error) {
+        // A network-ambiguous committed completion is protected by Storage RLS;
+        // remove succeeds only while neither object is referenced as completed.
+        await signatureBucket.remove(Object.values(paths));
+        throw completed.error;
+      }
+      return evaluationId;
     }
   }
   const isUuid = (value) => typeof value === "string"
@@ -514,9 +654,7 @@ async function persist(ref, data, merge) {
   const columns = columnsFor(root, prepared, legacy(previous));
   const entityWithUuid = ["staff_profiles", "stores", "users"].includes(root);
   let result;
-  if (root === "users") {
-    result = await supabase.from(table).update(columns).eq("id", id).select("id").single();
-  } else if (entityWithUuid) {
+  if (entityWithUuid) {
     // id es uuid con default gen_random_uuid(). Si el id entrante es un uuid
     // válido lo respetamos; si es un id legacy de Firebase lo tratamos como
     // firestore_id para no violar el tipo uuid de la columna id.
@@ -538,6 +676,84 @@ async function persist(ref, data, merge) {
 }
 
 export const setDoc = (ref, data, options = {}) => persist(ref, data, Boolean(options.merge));
+export async function replaceStaffSkills(staffId, skillCodes) {
+  const result = await supabase.rpc("replace_staff_skills", {
+    p_staff_id: staffId,
+    p_skill_codes: Array.isArray(skillCodes) ? skillCodes : [],
+  });
+  throwIfError(result.error);
+}
+
+export async function saveStaffCessation(staffId, cessation = {}) {
+  const result = await supabase.rpc("save_staff_cessation", {
+    p_staff_id: staffId,
+    p_cessation_date: cessation.cessationDate || null,
+    p_performance: cessation.performance ?? null,
+    p_cessation_reason: cessation.cessationReason ?? null,
+    p_real_reason: cessation.realReason ?? null,
+    p_store_comment: cessation.storeComment ?? null,
+    p_medical_leave_days: cessation.medicalLeaveDays == null ? null : Number(cessation.medicalLeaveDays),
+    p_absences: cessation.absences == null ? null : Number(cessation.absences),
+    p_tardiness: cessation.tardiness == null ? null : String(cessation.tardiness),
+    p_night_hours: cessation.nightHours == null ? null : Number(cessation.nightHours),
+    p_extra_hours: cessation.extraHours == null ? null : Number(cessation.extraHours),
+    p_holidays: cessation.holidays == null ? null : Number(cessation.holidays),
+    p_discounts: cessation.discounts == null ? null : Number(cessation.discounts),
+  });
+  throwIfError(result.error);
+  return result.data;
+}
+
+export async function finishStaffTraining(staffId, trainingEndDate) {
+  const result = await supabase.rpc("finish_staff_training", {
+    p_staff_id: staffId,
+    p_training_end_date: trainingEndDate,
+  });
+  throwIfError(result.error);
+}
+
+export async function importGeoVictoriaStaffProfile(profile = {}, sourceFile = null) {
+  const result = await supabase.rpc("import_geovictoria_staff_profile", {
+    p_store_id: profile.storeId || null,
+    p_first_name: profile.name || null,
+    p_last_name: profile.lastName || null,
+    p_dni: profile.dni || null,
+    p_email: profile.email || null,
+    p_join_date: profile.joinDate || null,
+    p_source_file: sourceFile || profile.sourceFile || null,
+  });
+  throwIfError(result.error);
+  const imported = result.data?.[0];
+  if (!imported?.staff_id) throw new Error("Supabase no confirmó el alta de GeoVictoria.");
+  return { id: imported.staff_id, created: Boolean(imported.created) };
+}
+
+export async function saveStaffProfileAndCessation(staffId, profile = {}) {
+  const result = await supabase.rpc("save_staff_profile_and_cessation", {
+    p_staff_id: staffId || null,
+    p_store_id: profile.storeId || null,
+    p_first_name: profile.name || null,
+    p_last_name: profile.lastName || null,
+    p_email: profile.email || null,
+    p_dni: profile.dni || null,
+    p_gender: profile.gender || null,
+    p_birth_date: profile.birthDate || null,
+    p_modality: profile.modality || "Full-Time",
+    p_position: profile.position || "COLABORADOR",
+    p_status: profile.status || "pending",
+    p_join_date: profile.joinDate || null,
+    p_sanitary_card_expiry: profile.sanitaryCardDate || profile.sanitaryCardExpiry || null,
+    p_sanitary_card_unlock: Boolean(profile.sanitaryCardUnlock),
+    p_is_trainee: Boolean(profile.isTrainee),
+    p_training_end_date: profile.isTrainee ? profile.trainingEndDate || null : null,
+    p_modality_change_date: profile.modalityChangeDate || null,
+    p_next_modality: profile.nextModality || null,
+    p_cessation_date: profile.cessationDate || null,
+  });
+  throwIfError(result.error);
+  return result.data;
+}
+
 export async function updateDoc(ref, data) {
   const current = await getDoc(ref);
   if (!current.exists()) throw new Error(`Documento no encontrado: ${ref.path}`);
@@ -582,10 +798,49 @@ export function onSnapshot(ref, onNext, onError) {
 export function writeBatch() {
   const operations = [];
   return {
-    set: (ref, data, options) => operations.push(() => setDoc(ref, data, options)),
-    update: (ref, data) => operations.push(() => updateDoc(ref, data)),
-    delete: (ref) => operations.push(() => deleteDoc(ref)),
-    commit: async () => { for (const operation of operations) await operation(); },
+    set: (ref, data, options) => operations.push({ kind: "set", ref, data, options }),
+    update: (ref, data) => operations.push({ kind: "update", ref, data }),
+    delete: (ref) => operations.push({ kind: "delete", ref }),
+    commit: async () => {
+      if (!operations.length) return;
+
+      const allScheduleSets = operations.every((operation) => operation.kind === "set" && operation.ref.path.split("/")[0] === "schedules");
+      if (allScheduleSets) {
+        const payloads = operations.map((operation) => scheduleChange(operation.ref, operation.data));
+        const starts = new Set(payloads.map((payload) => payload.start));
+        if (starts.size !== 1) throw new Error("Un lote de horarios solo puede contener una semana.");
+        const result = await supabase.rpc("save_weekly_schedules", {
+          p_week_start: payloads[0].start,
+          p_changes: payloads.map((payload) => payload.change),
+        });
+        return throwIfError(result.error);
+      }
+
+      const allSalesSets = operations.every((operation) => {
+        const parts = operation.ref.path.split("/");
+        return operation.kind === "set" && parts[0] === "stores" && parts[2] === "sales_history";
+      });
+      if (allSalesSets) {
+        const storeIds = new Set(operations.map((operation) => operation.ref.path.split("/")[1]));
+        if (storeIds.size !== 1) throw new Error("Un lote de ventas solo puede contener una tienda.");
+        const result = await supabase.rpc("save_sales_history_batch", {
+          p_store_id: operations[0].ref.path.split("/")[1],
+          p_days: operations.map((operation) => salesHistoryDayPayload(
+            operation.ref.path.split("/")[3],
+            operation.data,
+          )),
+        });
+        return throwIfError(result.error);
+      }
+
+      // Compatibilidad para lotes heterogéneos antiguos. Los flujos críticos
+      // anteriores se resuelven arriba mediante una única transacción SQL.
+      for (const operation of operations) {
+        if (operation.kind === "set") await setDoc(operation.ref, operation.data, operation.options);
+        else if (operation.kind === "update") await updateDoc(operation.ref, operation.data);
+        else await deleteDoc(operation.ref);
+      }
+    },
   };
 }
 

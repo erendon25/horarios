@@ -14,6 +14,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { collection, query, where, getDocs } from '../../lib/supabase/firestoreCompat';
 import { db } from '../../supabase';
 import { SERVICE_STATIONS, PRODUCTION_STATIONS } from '../../constants/trainingPoints';
+import { isVerifiedTrainingCompletion, verifiedTrainingSkills } from '../../lib/supabase/trainingEvidenceCompat';
 import { isStaffActive } from './staffStatus';
 
 const TrainingDashboard = ({ onStartEvaluation, activeArea, onAreaChange, onSelectCollaborator, onShowStats, drafts = [], loadingDrafts = false, onSelectDraft }) => {
@@ -21,6 +22,7 @@ const TrainingDashboard = ({ onStartEvaluation, activeArea, onAreaChange, onSele
     const [searchTerm, setSearchTerm] = useState('');
     const [filter, setFilter] = useState('all');
     const [collaborators, setCollaborators] = useState([]);
+    const [historicalCount, setHistoricalCount] = useState(0);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -28,19 +30,34 @@ const TrainingDashboard = ({ onStartEvaluation, activeArea, onAreaChange, onSele
             if (!userData?.storeId) return;
             setLoading(true);
             try {
-                const q = query(
+                const staffQuery = query(
                     collection(db, 'staff_profiles'),
                     where('storeId', '==', userData.storeId)
                 );
-                const querySnapshot = await getDocs(q);
+                const evaluationsQuery = query(
+                    collection(db, 'training_evaluations'),
+                    where('storeId', '==', userData.storeId),
+                    where('status', '==', 'completed')
+                );
+                const [querySnapshot, evaluationsSnapshot] = await Promise.all([
+                    getDocs(staffQuery),
+                    getDocs(evaluationsQuery)
+                ]);
+                const evaluations = evaluationsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                setHistoricalCount(evaluations.filter(evaluation => evaluation.area === activeArea && !isVerifiedTrainingCompletion(evaluation)).length);
 
                 const staffData = querySnapshot.docs.map(doc => {
                     const data = doc.data();
                     if (!isStaffActive(data)) return null;
 
-                    // Normalize skills to unique uppercase keys
-                    const rawSkills = data.skills || [];
-                    const normalizedSkills = [...new Set(rawSkills.map(s => s.toUpperCase()))];
+                    const normalizedSkills = verifiedTrainingSkills(evaluations, doc.id, activeArea);
+                    const verifiedDates = evaluations
+                        .filter(evaluation => isVerifiedTrainingCompletion(evaluation)
+                            && evaluation.collaboratorId === doc.id
+                            && evaluation.area === activeArea)
+                        .map(evaluation => evaluation.date)
+                        .filter(Boolean)
+                        .sort((a, b) => String(b).localeCompare(String(a)));
 
                     const areaStations = activeArea === 'service' ? SERVICE_STATIONS : PRODUCTION_STATIONS;
                     const totalStations = Object.keys(areaStations).length;
@@ -56,8 +73,8 @@ const TrainingDashboard = ({ onStartEvaluation, activeArea, onAreaChange, onSele
                         name: `${data.name} ${data.lastName || ''}`.trim(),
                         position: data.position || 'Colaborador',
                         progress,
-                        lastEvaluation: data.lastEvaluationDate || 'Nunca',
-                        skills: normalizedSkills, // Use normalized for consistency
+                        lastEvaluation: verifiedDates[0] || 'Nunca verificada',
+                        skills: normalizedSkills,
                         area: activeArea
                     };
                 }).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name, 'es'));
@@ -131,6 +148,12 @@ const TrainingDashboard = ({ onStartEvaluation, activeArea, onAreaChange, onSele
                     </button>
                 </div>
             </div>
+
+            {historicalCount > 0 && (
+                <div className="mx-4 sm:mx-6 mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-800">
+                    Histórico no verificado: {historicalCount} {historicalCount === 1 ? 'evaluación conservada' : 'evaluaciones conservadas'}. No aportan certificaciones ni estadísticas.
+                </div>
+            )}
 
             {/* Drafts Section */}
             {drafts.length > 0 && (

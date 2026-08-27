@@ -2,14 +2,17 @@
 import { useState, useEffect } from 'react';
 import { getFirestore, doc, getDoc, setDoc } from '../lib/supabase/firestoreCompat';
 import { useParams } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 
 export default function StudyScheduleEditor({ uid: propUid, onClose }) {
     const { uid: paramUid } = useParams();
-    const uid = propUid || paramUid;
+    const { currentUser } = useAuth();
+    const uid = propUid || paramUid || currentUser?.uid;
     const db = getFirestore();
 
     const [schedule, setSchedule] = useState({});
     const [loading, setLoading] = useState(true);
+    const [saveError, setSaveError] = useState('');
 
     const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
     const labels = {
@@ -81,6 +84,7 @@ export default function StudyScheduleEditor({ uid: propUid, onClose }) {
 
     const handleSave = async () => {
         if (!uid) return;
+        setSaveError('');
         try {
             const payload = Object.fromEntries(
                 days.map(day => [day, {
@@ -92,6 +96,7 @@ export default function StudyScheduleEditor({ uid: propUid, onClose }) {
             alert('Horario guardado correctamente.');
         } catch (e) {
             console.error('Error al guardar:', e);
+            setSaveError(e?.message || 'No se pudo guardar el horario.');
         }
     };
 
@@ -156,6 +161,7 @@ export default function StudyScheduleEditor({ uid: propUid, onClose }) {
                     className="bg-green-600 text-white px-4 py-2 rounded"
                 >Guardar horario</button>
             </div>
+            {saveError && <p className="mt-3 text-sm font-semibold text-red-600">{saveError}</p>}
         </div>
     );
 }

@@ -9,10 +9,10 @@ import {
   deleteDoc,
   updateDoc,
   getDocs,
-  writeBatch,
+  saveStaffCessation,
+  finishStaffTraining,
   updateDoc as updateFirestoreDoc
 } from '../lib/supabase/firestoreCompat';
-import { supabase } from '../lib/supabase/client';
 import { toast } from 'react-toastify';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -122,80 +122,44 @@ function SuperAdminDashboard() {
   };
 
   const handleCreateAdmin = async () => {
-    try {
-      if (!adminEmail.includes('@') || adminPassword.length < 6 || !selectedStoreId) {
-        toast.error('Email inválido, contraseña muy corta (mín. 6) o tienda no seleccionada');
-        return;
-      }
-
-      const { error } = await supabase.functions.invoke('staff-account-admin', {
-        body: {
-          operation: 'create_admin',
-          email: adminEmail,
-          password: adminPassword,
-          storeId: selectedStoreId,
-        },
-      });
-      if (error) throw error;
-
-      toast.success('Administrador creado exitosamente');
-      setAdminEmail('');
-      setAdminPassword('');
-      setSelectedStoreId('');
-    } catch (err) {
-      console.error(err);
-      toast.error('Error al crear administrador: ' + err.message);
-    }
+    toast.info('La creación directa con contraseña está deshabilitada por seguridad. Usa una invitación administrativa gestionada en Supabase.');
   };
 
   const handleUnlinkEmail = async (id) => {
-    const confirm = window.confirm('¿Estás seguro de desvincular el correo del colaborador?');
-    if (!confirm) return;
-
-    try {
-      const { error } = await supabase.functions.invoke('staff-account-admin', {
-        body: { operation: 'unlink_staff', staffId: id },
-      });
-      if (error) throw error;
-      toast.success('Correo y acceso desvinculados');
-      setStaffProfiles(prev => prev.map(p => p.id === id ? { ...p, email: '', uid: '' } : p));
-    } catch (error) {
-      toast.error('No se pudo desvincular el correo');
-    }
-  };
-
-  const deleteRefsInBatches = async (refs) => {
-    const uniqueRefs = Array.from(
-      new Map(refs.filter(Boolean).map(ref => [ref.path, ref])).values()
-    );
-
-    for (let i = 0; i < uniqueRefs.length; i += 450) {
-      const batch = writeBatch(db);
-      uniqueRefs.slice(i, i + 450).forEach(ref => batch.delete(ref));
-      await batch.commit();
-    }
-
-    return uniqueRefs.length;
+    void id;
+    toast.info('Para conservar la trazabilidad, el vínculo no se elimina desde esta pantalla. Registra el cese o usa el flujo de reingreso verificado por DNI.');
   };
 
   const handleDeleteStaffCompletely = async (profile) => {
     const fullName = `${profile.name || ''} ${profile.lastName || ''}`.trim() || 'este colaborador';
-    const confirm = window.confirm(
-      `Eliminar definitivamente a ${fullName}?\n\nSe borrarán de Supabase su perfil, cuenta, horarios, solicitudes, feriados, ceses, horas extra y evaluaciones relacionadas.`
-    );
+    if (profile.isTrainee) {
+      const confirmTraining = window.confirm(`Los datos de ${fullName} deben conservarse. ¿Finalizar su entrenamiento hoy?`);
+      if (!confirmTraining) return;
+      try {
+        const trainingEndDate = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'America/Lima', year: 'numeric', month: '2-digit', day: '2-digit'
+        }).format(new Date());
+        await finishStaffTraining(profile.id, trainingEndDate);
+        setStaffProfiles(prev => prev.map(p => p.id === profile.id ? { ...p, trainingEndDate } : p));
+        toast.success('Entrenamiento finalizado; el historial se conservó.');
+      } catch (error) {
+        toast.error('No se pudo finalizar el entrenamiento: ' + error.message);
+      }
+      return;
+    }
+    const confirm = window.confirm(`Los datos de ${fullName} deben conservarse. ¿Registrar su cese hoy?`);
     if (!confirm) return;
 
     try {
-      const staffId = profile.id;
-      const { data, error } = await supabase.functions.invoke('staff-account-admin', {
-        body: { operation: 'delete_staff', staffId },
-      });
-      if (error) throw error;
-      setStaffProfiles(prev => prev.filter(p => p.id !== staffId));
-      toast.success(`Colaborador y cuenta eliminados de Supabase (${data?.deletedRecords ?? 1} perfil).`);
+      const cessationDate = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Lima', year: 'numeric', month: '2-digit', day: '2-digit'
+      }).format(new Date());
+      await saveStaffCessation(profile.id, { cessationDate });
+      setStaffProfiles(prev => prev.map(p => p.id === profile.id ? { ...p, cessationDate } : p));
+      toast.success('Cese registrado; el historial del colaborador se conservó.');
     } catch (error) {
-      console.error('Error eliminando usuario completamente:', error);
-      toast.error('No se pudo eliminar el usuario por completo: ' + error.message);
+      console.error('Error registrando el cese:', error);
+      toast.error('No se pudo registrar el cese: ' + error.message);
     }
   };
 

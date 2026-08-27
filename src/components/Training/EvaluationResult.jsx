@@ -17,6 +17,7 @@ import {
     PRODUCTION_GENERAL_POINTS,
     PRODUCTION_STATIONS
 } from '../../constants/trainingPoints';
+import { isVerifiedTrainingCompletion } from '../../lib/supabase/trainingEvidenceCompat';
 
 const EvaluationResult = ({ data, onBackToDashboard, onEdit, canEdit }) => {
     // Helper to find point text by ID
@@ -53,7 +54,8 @@ const EvaluationResult = ({ data, onBackToDashboard, onEdit, canEdit }) => {
     const passedPoints = Object.values(data.responses || {}).filter(v => v === true).length;
     const score = totalPoints > 0 ? Math.round((passedPoints / totalPoints) * 100) : 0;
 
-    const isCertified = score >= 90;
+    const isVerified = isVerifiedTrainingCompletion(data);
+    const isCertified = isVerified && score >= 90;
 
     const chartData = [
         { name: 'Cumple', value: passedPoints },
@@ -90,13 +92,18 @@ const EvaluationResult = ({ data, onBackToDashboard, onEdit, canEdit }) => {
                     <div className="inline-flex items-center gap-2 sm:gap-3 px-4 sm:px-8 py-3 bg-white/10 backdrop-blur-xl rounded-full border border-white/20 text-white">
                         <div className="w-2 h-2 bg-white rounded-full animate-pulse shadow-[0_0_8px_white]"></div>
                             <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.12em] sm:tracking-[0.3em]">
-                            {isCertified ? 'Miembro Certificado' : 'Entrenamiento Pendiente'}
+                            {isVerified ? (isCertified ? 'Miembro Certificado' : 'Entrenamiento Pendiente') : 'Histórico no verificado'}
                         </span>
                     </div>
                 </div>
             </div>
 
             <div className="px-4 sm:px-6 -mt-6 sm:-mt-12 space-y-5 sm:space-y-8 pb-16 sm:pb-32 max-w-4xl mx-auto w-full relative z-20">
+                {!isVerified && (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-center text-xs font-bold text-amber-800 shadow-lg">
+                        Evaluación histórica no verificada. Se conserva para consulta, pero no acredita certificación ni participa en estadísticas.
+                    </div>
+                )}
                 {/* Detailed Stats */}
                 <div className="bg-white p-5 sm:p-10 rounded-2xl sm:rounded-[48px] shadow-2xl shadow-gray-200/50 flex flex-col md:flex-row items-center gap-6 sm:gap-10 border border-white transition-transform hover:scale-[1.01] duration-500">
                     <div className="w-40 h-40 shrink-0 relative">
@@ -215,7 +222,7 @@ const EvaluationResult = ({ data, onBackToDashboard, onEdit, canEdit }) => {
                     <Home size={20} strokeWidth={2.5} />
                     Finalizar Sesión
                 </button>
-                {canEdit && (
+                {canEdit && data.status !== 'completed' && (
                     <button
                         onClick={onEdit}
                         className="w-full md:w-auto px-5 sm:px-10 py-4 sm:py-5 bg-emerald-50 text-emerald-600 border-2 border-emerald-100 rounded-2xl sm:rounded-[28px] font-black uppercase tracking-[0.1em] sm:tracking-[0.2em] text-[9px] sm:text-[10px] flex items-center justify-center gap-3 transition-all hover:bg-emerald-100 active:scale-95"

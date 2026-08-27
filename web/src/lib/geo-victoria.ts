@@ -11,7 +11,10 @@ export type GeoVictoriaStaff = {
   lastName: string;
   position: string;
   modality: string | null;
+  status: string;
   cessationDate: string | null;
+  isTrainee: boolean;
+  trainingEndDate: string | null;
 };
 
 export type GeoVictoriaExtraRecord = {
@@ -54,6 +57,33 @@ export function normalizeHeader(value: SheetCell) {
 
 export function normalizeDni(value: SheetCell) {
   return String(value ?? "").trim().replace(/\.0+$/, "").replace(/\D/g, "");
+}
+
+function limaDateKey(value: Date) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Lima",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(value);
+  const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${byType.year}-${byType.month}-${byType.day}`;
+}
+
+export function isCurrentGeoVictoriaEpisode(
+  staff: Pick<GeoVictoriaStaff, "status" | "cessationDate" | "isTrainee" | "trainingEndDate">,
+  referenceDate = new Date(),
+) {
+  const today = limaDateKey(referenceDate);
+  if (staff.cessationDate && staff.cessationDate < today) return false;
+  if (staff.isTrainee && staff.trainingEndDate && staff.trainingEndDate < today) return false;
+  return true;
+}
+
+export function isImportableGeoVictoriaState(value: SheetCell) {
+  const state = normalizeHeader(value);
+  if (!state) return true;
+  return /^(?:activ[oa]|active|activad[oa])(?:$|[\s(/_-])/.test(state);
 }
 
 export function rowsFromMatrix(matrix: SheetCell[][]): SheetRow[] {
@@ -150,8 +180,7 @@ export function parseRoster(rows: SheetRow[], existingDnis: Array<string | null>
   const candidates: GeoVictoriaRosterCandidate[] = [];
   let existingCount = 0, skipped = 0;
   rows.forEach((row) => {
-    const state = String(rowValue(row, ["Estado"]) ?? "").trim().toLocaleLowerCase("es");
-    if (state && !state.includes("activ")) { skipped += 1; return; }
+    if (!isImportableGeoVictoriaState(rowValue(row, ["Estado"]))) { skipped += 1; return; }
     const dni = normalizeDni(rowValue(row, ["Identificador", "DNI", "Documento"]));
     if (!dni || seen.has(dni)) { skipped += 1; return; }
     seen.add(dni);

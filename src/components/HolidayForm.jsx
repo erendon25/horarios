@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import {
   getFirestore,
-  doc,
+  addDoc,
   getDocs,
-  updateDoc,
-  arrayUnion,
-  collection
+  collection,
+  query,
+  where
 } from "../lib/supabase/firestoreCompat";
 import { useAuth } from "../contexts/AuthContext";
 
@@ -15,6 +15,8 @@ function HolidayForm() {
   const [selectedDate, setSelectedDate] = useState("");
   const [savedDates, setSavedDates] = useState([]);
   const [profileId, setProfileId] = useState(null);
+  const [storeId, setStoreId] = useState(null);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     const fetchHolidays = async () => {
@@ -25,8 +27,13 @@ function HolidayForm() {
       const profile = list.find(p => p.uid === currentUser.uid);
 
       if (profile) {
-        setSavedDates(profile.pendingHolidays || []);
         setProfileId(profile.id);
+        setStoreId(profile.storeId);
+        const holidays = await getDocs(query(
+          collection(db, "feriados_trabajados"),
+          where("staffId", "==", profile.id)
+        ));
+        setSavedDates(holidays.docs.map(item => item.data().date).filter(Boolean).sort());
       }
     };
 
@@ -34,15 +41,23 @@ function HolidayForm() {
   }, [currentUser, db]);
 
   const handleAddHoliday = async () => {
-    if (!selectedDate || !profileId) return;
-
-    const ref = doc(db, "staff_profiles", profileId);
-    await updateDoc(ref, {
-      pendingHolidays: arrayUnion(selectedDate)
-    });
-
-    setSavedDates(prev => [...prev, selectedDate]);
-    setSelectedDate("");
+    if (!selectedDate || !profileId || !storeId || savedDates.includes(selectedDate)) return;
+    setError("");
+    try {
+      await addDoc(collection(db, "feriados_trabajados"), {
+        staffId: profileId,
+        uid: currentUser.uid,
+        storeId,
+        date: selectedDate,
+        name: "Feriado trabajado",
+        type: "ganado",
+      });
+      setSavedDates(prev => [...prev, selectedDate].sort());
+      setSelectedDate("");
+    } catch (saveError) {
+      console.error("Error al registrar feriado:", saveError);
+      setError("No se pudo registrar el feriado. Verifica que no exista y vuelve a intentar.");
+    }
   };
 
   return (
@@ -61,10 +76,11 @@ function HolidayForm() {
       <button
         onClick={handleAddHoliday}
         className="bg-blue-600 text-white px-4 py-2 rounded w-full"
-        disabled={!selectedDate}
+        disabled={!selectedDate || !profileId || !storeId || savedDates.includes(selectedDate)}
       >
         Agregar feriado
       </button>
+      {error && <p className="text-sm text-red-600 mt-3">{error}</p>}
 
       <h3 className="text-lg font-medium mt-6 mb-2">Tus feriados registrados</h3>
       {savedDates.length > 0 ? (

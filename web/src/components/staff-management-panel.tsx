@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarClock, MailPlus, Pencil, Plus, Search, ShieldCheck, Trash2, UserRoundCheck, X } from "lucide-react";
+import { CalendarClock, MailPlus, Pencil, Plus, Search, ShieldCheck, UserRoundCheck, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import type { Enums, Tables } from "@/types/database";
 import { StudyScheduleEditor } from "@/components/study-schedule-editor";
@@ -83,13 +83,16 @@ export function StaffManagementPanel({ storeId }: { storeId: string }) {
       if (!form.firstName.trim() || !form.lastName.trim() || !form.storeId) throw new Error("required_fields");
       if (Boolean(form.modalityChangeDate) !== Boolean(form.nextModality)) throw new Error("modality_pair");
       const isNew = editing === "new";
+      const normalizedEmail = form.email.trim().toLowerCase();
+      if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) throw new Error("invalid_email");
+      if (!isNew && editing.user_id && normalizedEmail !== (editing.email ?? "").trim().toLowerCase()) throw new Error("linked_email");
       const supabase = createClient();
       const { data: staffId, error: saveError } = await supabase.rpc("save_staff_profile", {
         p_staff_id: editing === "new" ? null : editing.id,
         p_store_id: form.storeId,
         p_first_name: form.firstName,
         p_last_name: form.lastName,
-        p_email: nullable(form.email),
+        p_email: normalizedEmail,
         p_dni: nullable(form.dni),
         p_gender: nullable(form.gender),
         p_birth_date: nullable(form.birthDate),
@@ -107,19 +110,24 @@ export function StaffManagementPanel({ storeId }: { storeId: string }) {
       if (saveError) throw saveError;
       if (!staffId) throw new Error("missing_staff_id");
 
-      if (isNew && form.email.trim()) {
+      if (isNew) {
         const { data: invitation, error: invitationError } = await supabase.functions.invoke("staff-account-admin", {
           body: { operation: "invite_staff", staffId },
         });
-        if (invitationError || !invitation?.invited) {
+        if (invitationError || (!invitation?.invited && !invitation?.reactivated)) {
           const context = (invitationError as { context?: Response } | null)?.context;
           const payload = context ? await context.json().catch(() => null) as { error?: string } | null : null;
-          return { invited: false, invitationError: payload?.error ?? invitation?.error ?? "invite_failed", email: form.email.trim() };
+          return { invited: false, reactivated: false, invitationError: payload?.error ?? invitation?.error ?? "invite_failed", email: normalizedEmail };
         }
-        return { invited: true, invitationError: null, email: form.email.trim() };
+        return {
+          invited: Boolean(invitation?.invited),
+          reactivated: Boolean(invitation?.reactivated),
+          invitationError: null,
+          email: normalizedEmail,
+        };
       }
 
-      return { invited: false, invitationError: null, email: "" };
+      return { invited: false, reactivated: false, invitationError: null, email: "" };
     },
     onSuccess: async (result) => {
       await Promise.all([
@@ -129,6 +137,8 @@ export function StaffManagementPanel({ storeId }: { storeId: string }) {
       setEditing(null);
       if (result?.invited) {
         setNotice({ kind: "success", text: `Colaborador guardado e invitación enviada a ${result.email}.` });
+      } else if (result?.reactivated) {
+        setNotice({ kind: "success", text: `Colaborador guardado y cuenta existente reactivada para ${result.email}.` });
       } else if (result?.invitationError) {
         setNotice({ kind: "warning", text: `El colaborador quedó guardado, pero no se pudo enviar la invitación a ${result.email}. Usa el botón de correo para reintentarlo.` });
       } else {
@@ -147,36 +157,15 @@ export function StaffManagementPanel({ storeId }: { storeId: string }) {
         const payload = context ? await context.json().catch(() => null) as { error?: string } | null : null;
         throw new Error(payload?.error ?? "invite_failed");
       }
-      if (!result?.invited) throw new Error(result?.error ?? "invite_failed");
-      return row.email;
+      if (!result?.invited && !result?.reactivated) throw new Error(result?.error ?? "invite_failed");
+      return { email: row.email, reactivated: Boolean(result.reactivated) };
     },
-    onSuccess: async (email) => {
+    onSuccess: async ({ email, reactivated }) => {
       await queryClient.invalidateQueries({ queryKey: ["staff-management"] });
-      setNotice({ kind: "success", text: `Invitación enviada a ${email}.` });
-    },
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: async (row: StaffRow) => {
-      const { data: deleted, error: deleteError } = await createClient()
-        .from("staff_profiles")
-        .delete()
-        .eq("id", row.id)
-        .eq("store_id", storeId)
-        .eq("status", "inactive")
-        .select("id")
-        .maybeSingle();
-      if (deleteError) throw deleteError;
-      if (!deleted) throw new Error("not_inactive");
-      return `${row.first_name} ${row.last_name}`.trim();
-    },
-    onSuccess: async (deletedName) => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["staff-management"] }),
-        queryClient.invalidateQueries({ queryKey: ["hr", "cessations"] }),
-        queryClient.invalidateQueries({ queryKey: ["weekly-schedule"] }),
-      ]);
-      setNotice({ kind: "success", text: `${deletedName} fue eliminado definitivamente.` });
+      setNotice({
+        kind: "success",
+        text: reactivated ? `Cuenta existente reactivada para ${email}.` : `Invitación enviada a ${email}.`,
+      });
     },
   });
 
@@ -214,7 +203,7 @@ export function StaffManagementPanel({ storeId }: { storeId: string }) {
       <button className="secondary-button" onClick={openNew}><Plus size={17}/> Nuevo colaborador</button>
     </section>
     {notice && <p className={`form-alert ${notice.kind}`}>{notice.text}</p>}
-    {(error || inviteMutation.error || deleteMutation.error) && <p className="form-alert error">{deleteMutation.error ? "No se pudo eliminar. Solo se pueden borrar definitivamente colaboradores inactivos de tu tienda." : inviteMutation.error ? (inviteMutation.error.message === "app_url_not_configured" ? "Las invitaciones se habilitarán al publicar Next.js y configurar su URL pública." : "No se pudo enviar la invitación. Verifica que el correo no esté registrado y que tengas permisos sobre la tienda.") : "No se pudo cargar la lista de colaboradores."}</p>}
+    {(error || inviteMutation.error) && <p className="form-alert error">{inviteMutation.error ? (inviteMutation.error.message === "app_url_not_configured" ? "Las invitaciones se habilitarán al publicar Next.js y configurar su URL pública." : "No se pudo enviar la invitación. Verifica que el correo no esté registrado y que tengas permisos sobre la tienda.") : "No se pudo cargar la lista de colaboradores."}</p>}
     <section className="data-card">
       <div className="data-card-heading"><div><strong>{isPending ? "Cargando…" : `${rows.length} colaboradores ${statusFilter === "active" ? "activos" : statusFilter === "inactive" ? "inactivos" : "en total"}`}</strong><span>{rows.filter((row) => row.user_id).length} cuentas vinculadas · {rows.filter((row) => !row.user_id).length} sin cuenta</span></div></div>
       <div className="table-scroll"><table className="hr-table staff-table"><thead><tr><th>Colaborador</th><th>Tienda</th><th>Estado</th><th>Cuenta</th><th>Modalidad</th><th/></tr></thead><tbody>
@@ -224,7 +213,7 @@ export function StaffManagementPanel({ storeId }: { storeId: string }) {
           <td><span className={`status-pill ${inactive ? "ceased" : row.status === "pending" ? "pending" : "active"}`}>{inactive ? "Inactivo" : row.status === "pending" ? "Pendiente" : "Activo"}</span></td>
           <td>{row.user_id ? <span className="account-state linked"><ShieldCheck size={14}/> Vinculada<small>{row.email}</small></span> : <span className="account-state"><UserRoundCheck size={14}/> Sin cuenta<small>{row.email || "Falta correo"}</small></span>}</td>
           <td>{row.is_trainee ? "Entrenamiento" : row.modality || "—"}</td>
-          <td><div className="row-actions"><button className="icon-button" onClick={() => openEdit(row)} title="Editar colaborador"><Pencil size={16}/></button><button className="icon-button schedule" onClick={() => setScheduleTarget(row)} title="Editar disponibilidad"><CalendarClock size={16}/></button><button className="icon-button invite" disabled={Boolean(row.user_id) || !row.email || row.status === "inactive" || inviteMutation.isPending} onClick={() => inviteMutation.mutate(row)} title={row.user_id ? "Cuenta ya vinculada" : !row.email ? "Registra un correo primero" : "Enviar invitación"}><MailPlus size={16}/></button>{row.status === "inactive" && <button className="icon-button danger" disabled={deleteMutation.isPending} onClick={() => window.confirm(`Se eliminará definitivamente a ${row.first_name} ${row.last_name} y su historial relacionado. ¿Continuar?`) && deleteMutation.mutate(row)} title="Eliminar definitivamente"><Trash2 size={16}/></button>}</div></td>
+          <td><div className="row-actions"><button className="icon-button" onClick={() => openEdit(row)} title="Editar colaborador"><Pencil size={16}/></button><button className="icon-button schedule" onClick={() => setScheduleTarget(row)} title="Editar disponibilidad"><CalendarClock size={16}/></button><button className="icon-button invite" disabled={Boolean(row.user_id) || !row.email || row.status === "inactive" || inviteMutation.isPending} onClick={() => inviteMutation.mutate(row)} title={row.user_id ? "Cuenta ya vinculada" : !row.email ? "Registra un correo primero" : "Enviar invitación"}><MailPlus size={16}/></button></div></td>
         </tr>})}
       </tbody></table></div>
     </section>
@@ -236,7 +225,7 @@ export function StaffManagementPanel({ storeId }: { storeId: string }) {
         <label>Apellidos *<input value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })}/></label>
         <label>Tienda *<select value={form.storeId} onChange={(e) => setForm({ ...form, storeId: e.target.value })}><option value="">Seleccionar tienda</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>
         <label>Estado<select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as FormState["status"] })}><option value="active">Activo</option><option value="inactive">Inactivo</option></select></label>
-        <label>Correo<input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="nombre@empresa.com"/><small>{editing === "new" ? "Si registras un correo, se enviará automáticamente la invitación de acceso." : "La cuenta vinculada conservará este correo."}</small></label>
+        <label>Correo de cuenta *<input type="email" required disabled={editing !== "new" && Boolean(editing.user_id)} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="nombre@empresa.com"/><small>{editing !== "new" && editing.user_id ? "Cuenta vinculada: el correo debe cambiarse junto con Supabase Auth." : "Debe coincidir con el correo confirmado; al crear se enviará la invitación."}</small></label>
         <label>DNI<input value={form.dni} onChange={(e) => setForm({ ...form, dni: e.target.value })} maxLength={15}/></label>
         <label>Sexo<select value={form.gender} onChange={(e) => setForm({ ...form, gender: e.target.value })}><option value="">Sin especificar</option><option value="MASCULINO">MASCULINO</option><option value="FEMENINO">FEMENINO</option></select></label>
         <label>Fecha de nacimiento<input type="date" value={form.birthDate} onChange={(e) => setForm({ ...form, birthDate: e.target.value })}/></label>
@@ -250,7 +239,7 @@ export function StaffManagementPanel({ storeId }: { storeId: string }) {
         <label>Nueva modalidad<select value={form.nextModality} onChange={(e) => setForm({ ...form, nextModality: e.target.value, modalityChangeDate: e.target.value ? form.modalityChangeDate : "" })}><option value="">Sin cambio programado</option><option value="Full-Time">Full-Time</option><option value="Part-Time">Part-Time</option></select></label>
         <label>Fecha del cambio<input type="date" disabled={!form.nextModality} value={form.modalityChangeDate} onChange={(e) => setForm({ ...form, modalityChangeDate: e.target.value })}/></label>
       </div>
-      {saveMutation.error && <p className="form-alert error">{saveMutation.error.message === "modality_pair" ? "Completa la nueva modalidad y su fecha." : "No se pudo guardar. Revisa los campos y los permisos de la tienda."}</p>}
+      {saveMutation.error && <p className="form-alert error">{saveMutation.error.message === "modality_pair" ? "Completa la nueva modalidad y su fecha." : saveMutation.error.message === "invalid_email" ? "Registra un correo válido para que la cuenta pueda enlazarse." : saveMutation.error.message === "linked_email" ? "El correo de una cuenta vinculada no se cambia desde RR. HH.; debe actualizarse junto con Supabase Auth." : "No se pudo guardar. Revisa los campos y los permisos de la tienda."}</p>}
       <footer><button className="plain-button" onClick={() => setEditing(null)}>Cancelar</button><button className="primary-button" disabled={saveMutation.isPending} onClick={() => saveMutation.mutate()}>{saveMutation.isPending ? "Guardando…" : "Guardar colaborador"}</button></footer>
     </section></div>}
     {scheduleTarget && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setScheduleTarget(null)}><div className="study-modal"><StudyScheduleEditor staffId={scheduleTarget.id} adminMode onClose={() => setScheduleTarget(null)}/></div></div>}

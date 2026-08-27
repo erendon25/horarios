@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { addIsoDays, aggregateSales, previousPeriod, previousYearPeriod, salesGoal, variation, type SalesHistoryInput } from "./sales-analysis";
+import { addIsoDays, aggregateSales, paginateSalesHistory, previousPeriod, previousYearPeriod, salesGoal, variation, type SalesHistoryInput } from "./sales-analysis";
 
 const rows: SalesHistoryInput[] = [{
   sales_date: "2026-06-30",
   sales_amount: 100,
   transactions: 4,
   hourly_data: { "10": { "SALÓN": 40, DELIVERY: 10 }, "19": { "SALÓN": 50 } },
-  source_data: { hourlyTxs: { "10": { "SALÓN": 1, DELIVERY: 1 }, "19": { "SALÓN": 2 } } },
+  hourly_transactions: { "10": { "SALÓN": 1, DELIVERY: 1 }, "19": { "SALÓN": 2 } },
+  source_data: { hourlyTxs: { "10": { "SALÓN": 99 }, "19": { "SALÓN": 99 } } },
+  updated_at: "2026-07-01T01:00:00Z",
 }];
 
 describe("sales analysis", () => {
@@ -19,6 +21,24 @@ describe("sales analysis", () => {
     expect(result.shiftsSales.Cierre).toBe(50);
     expect(result.weekdaysSales.Martes).toBe(100);
     expect(result.hourlyTransactions["19:00"]).toBe(2);
+  });
+
+  it("usa transacciones horarias canónicas y conserva el JSON legado como fallback", () => {
+    const legacyOnly = [{ ...rows[0], hourly_transactions: {}, source_data: { hourlyTxs: { "10": { "SIN CLASIFICAR": 3 } } } }];
+    expect(aggregateSales(legacyOnly, "2026-06-30", "2026-06-30").channelsTransactions["SIN CLASIFICAR"]).toBe(3);
+    expect(aggregateSales(rows, "2026-06-30", "2026-06-30").channelsTransactions["SALÓN"]).toBe(3);
+  });
+
+  it("pagina el historial con cursor de fecha sin un límite silencioso", async () => {
+    const pages = new Map<string | undefined, Array<{ sales_date: string }>>([
+      [undefined, [{ sales_date: "2026-07-04" }, { sales_date: "2026-07-03" }]],
+      ["2026-07-03", [{ sales_date: "2026-07-02" }, { sales_date: "2026-07-01" }]],
+      ["2026-07-01", []],
+    ]);
+    const cursors: Array<string | undefined> = [];
+    const result = await paginateSalesHistory(async (cursor) => { cursors.push(cursor); return pages.get(cursor) ?? []; }, 2);
+    expect(result.map((row) => row.sales_date)).toEqual(["2026-07-04", "2026-07-03", "2026-07-02", "2026-07-01"]);
+    expect(cursors).toEqual([undefined, "2026-07-03", "2026-07-01"]);
   });
 
   it("calcula periodos y desplazamientos ISO", () => {

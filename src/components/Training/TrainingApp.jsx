@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { collection, query, where, orderBy, limit, getDocs } from '../../lib/supabase/firestoreCompat';
+import { collection, query, where, orderBy, limit, getDocs, getDoc, doc } from '../../lib/supabase/firestoreCompat';
 import { Loader2 } from 'lucide-react';
 import { db } from '../../supabase';
 import { useAuth } from '../../contexts/AuthContext';
@@ -8,6 +8,7 @@ import EvaluationForm from './EvaluationForm';
 import EvaluationResult from './EvaluationResult';
 import TrainingStats from './TrainingStats';
 import { isStaffActive } from './staffStatus';
+import { verifiedTrainingCompletionFromSnapshot } from '../../lib/supabase/trainingEvidenceCompat';
 
 const TrainingApp = () => {
     const { userData } = useAuth();
@@ -70,11 +71,17 @@ const TrainingApp = () => {
         setView('form');
     };
 
-    const handleSaveEvaluation = (data) => {
-        console.log('Guardando evaluación:', data);
-        setLastEvaluationData({ ...data, area: activeArea });
-        setView('result');
-        fetchDrafts(); // Refresh drafts list
+    const handleSaveEvaluation = async (evaluationId) => {
+        setLoadingHistory(true);
+        try {
+            const snapshot = await getDoc(doc(db, 'training_evaluations', evaluationId));
+            const persistedEvaluation = verifiedTrainingCompletionFromSnapshot(snapshot);
+            setLastEvaluationData(persistedEvaluation);
+            setView('result');
+            fetchDrafts(); // Refresh drafts list
+        } finally {
+            setLoadingHistory(false);
+        }
     };
 
     const handleBackToDashboard = () => {
@@ -94,6 +101,7 @@ const TrainingApp = () => {
                 where('storeId', '==', userData.storeId),
                 where('collaboratorId', '==', collaborator.id),
                 where('area', '==', activeArea),
+                where('status', '==', 'completed'),
                 orderBy('timestamp', 'desc'),
                 limit(1)
             );
@@ -127,10 +135,10 @@ const TrainingApp = () => {
     };
 
     const handleEditEvaluation = () => {
-        if (canEdit) {
+        if (canEdit && lastEvaluationData?.status !== 'completed') {
             setView('form');
         } else {
-            alert("No tienes permisos para editar esta evaluación.");
+            alert("Las evaluaciones completadas y firmadas son históricas. Registra una nueva evaluación para corregirlas.");
         }
     };
 
@@ -197,7 +205,7 @@ const TrainingApp = () => {
                     data={lastEvaluationData}
                     onBackToDashboard={handleBackToDashboard}
                     onEdit={handleEditEvaluation}
-                    canEdit={canEdit}
+                    canEdit={canEdit && lastEvaluationData?.status !== 'completed'}
                 />
             )}
         </div>

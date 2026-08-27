@@ -1,6 +1,6 @@
 // ModalSelectorDePosiciones.jsx
 import React, { useEffect, useState } from 'react';
-import { getFirestore, doc, getDoc, setDoc, collection, getDocs } from '../lib/supabase/firestoreCompat';
+import { getFirestore, doc, getDoc, replaceStaffSkills, collection, getDocs } from '../lib/supabase/firestoreCompat';
 import { X, CheckCircle, Award, ShieldCheck, ShieldAlert } from 'lucide-react';
 
 export default function ModalSelectorDePosiciones({ docId, storeId, onClose }) {
@@ -55,7 +55,7 @@ export default function ModalSelectorDePosiciones({ docId, storeId, onClose }) {
 
     const save = async () => {
         try {
-            await setDoc(doc(db, 'staff_profiles', docId), { skills: selected }, { merge: true });
+            await replaceStaffSkills(docId, selected);
             onClose();
         } catch (e) {
             console.error(e);

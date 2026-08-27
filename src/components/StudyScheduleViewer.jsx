@@ -35,19 +35,20 @@ function StudyScheduleViewer() {
       <h2 className="text-xl font-bold mb-4">Disponibilidad registrada</h2>
       <ul className="space-y-3">
         {days.map(day => {
-          const blocks = studySchedule[day];
-          if (!blocks || blocks.length === 0) return null;
+          const daySchedule = studySchedule[day];
+          const blocks = Array.isArray(daySchedule) ? daySchedule : daySchedule?.blocks ?? [];
+          if (!daySchedule) return null;
 
           return (
             <li key={day} className="border p-4 rounded">
               <h3 className="font-semibold mb-2">{dayLabels[day]}</h3>
-              <ul className="list-disc ml-6 text-sm">
+              {daySchedule?.free ? <p className="text-sm text-gray-600">Sin clases registradas.</p> : <ul className="list-disc ml-6 text-sm">
                 {blocks.map((block, idx) => (
                   <li key={idx}>
                     {block.start} - {block.end}
                   </li>
                 ))}
-              </ul>
+              </ul>}
             </li>
           );
         })}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { parseDurationMinutes, parseExtraHours, parseLateArrivals, parseRoster, parseShiftMap, rowsFromMatrix, type GeoVictoriaStaff } from "./geo-victoria";
+import { isCurrentGeoVictoriaEpisode, isImportableGeoVictoriaState, parseDurationMinutes, parseExtraHours, parseLateArrivals, parseRoster, parseShiftMap, rowsFromMatrix, type GeoVictoriaStaff } from "./geo-victoria";
 
-const staff: GeoVictoriaStaff[] = [{ id: "uuid-1", firestoreId: "old-1", userId: "user-1", dni: "12345678", firstName: "Ana", lastName: "Pérez", position: "Caja", modality: "Full-Time", cessationDate: null }];
+const staff: GeoVictoriaStaff[] = [{ id: "uuid-1", firestoreId: "old-1", userId: "user-1", dni: "12345678", firstName: "Ana", lastName: "Pérez", position: "Caja", modality: "Full-Time", status: "active", cessationDate: null, isTrainee: false, trainingEndDate: null }];
 
 describe("GeoVictoria", () => {
   it("interpreta duraciones y el archivo de turnos", () => {
@@ -30,6 +30,24 @@ describe("GeoVictoria", () => {
   it("detecta altas activas nuevas sin repetir DNI", () => {
     const rows = rowsFromMatrix([["Estado", "Identificador", "Nombre", "Apellidos", "Email", "Fecha inicio contrato"], ["Activo", "87654321", "Luis", "Soto", "LUIS@EXAMPLE.COM", "10/07/2026"], ["Activo", "12345678", "Ana", "Pérez", "", ""]]);
     expect(parseRoster(rows, ["12345678"])).toEqual({ candidates: [{ dni: "87654321", firstName: "Luis", lastName: "Soto", email: "luis@example.com", joinDate: "2026-07-10" }], existing: 1, skipped: 0 });
+  });
+
+  it("considera existentes sólo los episodios laborales vigentes", () => {
+    const reference = new Date("2026-08-26T17:00:00Z");
+    expect(isCurrentGeoVictoriaEpisode({ status: "active", cessationDate: "2026-08-25", isTrainee: false, trainingEndDate: null }, reference)).toBe(false);
+    expect(isCurrentGeoVictoriaEpisode({ status: "active", cessationDate: "2026-08-26", isTrainee: false, trainingEndDate: null }, reference)).toBe(true);
+    expect(isCurrentGeoVictoriaEpisode({ status: "pending", cessationDate: null, isTrainee: true, trainingEndDate: "2026-08-25" }, reference)).toBe(false);
+    expect(isCurrentGeoVictoriaEpisode({ status: "pending", cessationDate: null, isTrainee: true, trainingEndDate: "2026-08-26" }, reference)).toBe(true);
+    expect(isCurrentGeoVictoriaEpisode({ status: "inactive", cessationDate: null, isTrainee: false, trainingEndDate: null }, reference)).toBe(true);
+    expect(isCurrentGeoVictoriaEpisode({ status: "inactive", cessationDate: "2026-08-25", isTrainee: false, trainingEndDate: null }, reference)).toBe(false);
+  });
+
+  it("no confunde estados inactivos del archivo con estados activos", () => {
+    expect(isImportableGeoVictoriaState("Activo")).toBe(true);
+    expect(isImportableGeoVictoriaState("Active")).toBe(true);
+    expect(isImportableGeoVictoriaState("")).toBe(true);
+    expect(isImportableGeoVictoriaState("Inactivo")).toBe(false);
+    expect(isImportableGeoVictoriaState("Desactivado")).toBe(false);
   });
 
   it("excluye tardanzas justificadas y ordena el reporte", () => {

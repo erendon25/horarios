@@ -99,39 +99,39 @@ export default function StudyScheduleForm({ onSuccess }) {
   };
 
   const handleSave = async () => {
-    try {
-      const payload = Object.fromEntries(
-        days.map(day => [
-          day,
-          {
-            free: schedule[day]?.free || false,
-            blocks: schedule[day]?.blocks || []
-          }
-        ])
-      );
-      await setDoc(doc(db, 'study_schedules', currentUser.uid), payload);
-      alert('Horarios guardados correctamente.');
-    } catch (err) {
-      console.error('Error al guardar:', err);
-      alert('Error al guardar horario');
-    }
+    const payload = Object.fromEntries(
+      days.map(day => [
+        day,
+        {
+          free: schedule[day]?.free || false,
+          blocks: schedule[day]?.blocks || []
+        }
+      ])
+    );
+    await setDoc(doc(db, 'study_schedules', currentUser.uid), payload);
   };
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   const handleSaveWithFeedback = async () => {
     setSaving(true);
     setSaved(false);
+    setSaveError('');
     try {
       await handleSave();
       setSaved(true);
+      alert('Horarios guardados correctamente.');
       setTimeout(() => {
         setSaved(false);
         if (onSuccess) onSuccess();
       }, 1500);
     } catch (err) {
       console.error('Error al guardar:', err);
+      const message = err?.message || 'No se pudo guardar el horario de estudio.';
+      setSaveError(message);
+      alert(message);
     } finally {
       setSaving(false);
     }
@@ -230,6 +230,12 @@ export default function StudyScheduleForm({ onSuccess }) {
           </div>
         ))}
       </div>
+
+      {saveError && (
+        <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {saveError}
+        </div>
+      )}
 
       <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
         <button
