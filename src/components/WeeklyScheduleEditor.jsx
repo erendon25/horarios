@@ -66,6 +66,44 @@ const getWeekKey = (s) => {
 const getScheduleDocRef = (db, staffId, weekKey) =>
     doc(db, 'schedules', `${staffId}_${weekKey}`);
 
+const SCHEDULE_DRAFT_VERSION = 2;
+const getScheduleDraftKey = (userId, storeId, weekKey) =>
+    userId && storeId && weekKey
+        ? `schedule_draft_v${SCHEDULE_DRAFT_VERSION}_${userId}_${storeId}_${weekKey}`
+        : '';
+
+const readScheduleDraft = (draftKey, weekKey) => {
+    if (!draftKey || !weekKey) return null;
+    try {
+        const current = localStorage.getItem(draftKey);
+        if (current) {
+            const parsed = JSON.parse(current);
+            if (parsed?.version === SCHEDULE_DRAFT_VERSION && parsed?.schedules && typeof parsed.schedules === 'object') {
+                return parsed;
+            }
+        }
+
+        // Recupera una sola vez los borradores creados por la versión anterior.
+        const legacyKey = `draft_schedule_${weekKey}`;
+        const legacy = localStorage.getItem(legacyKey);
+        if (!legacy) return null;
+        const schedules = JSON.parse(legacy);
+        if (!schedules || typeof schedules !== 'object') return null;
+        const migrated = {
+            version: SCHEDULE_DRAFT_VERSION,
+            schedules,
+            dirtyStaff: Object.keys(schedules),
+            savedAt: new Date().toISOString(),
+        };
+        localStorage.setItem(draftKey, JSON.stringify(migrated));
+        localStorage.removeItem(legacyKey);
+        return migrated;
+    } catch (error) {
+        console.error('No se pudo recuperar el borrador local de horarios:', error);
+        return null;
+    }
+};
+
 const getEffectiveModality = (person, dateStr) => {
     if (!person || !person.modalityChangeDate || !person.nextModality || !dateStr) {
         return person?.modality || '';
@@ -136,6 +174,7 @@ export default function WeeklyScheduleEditor() {
     const [searchTerm, setSearchTerm] = useState('');
     const [dirtyStaff, setDirtyStaff] = useState(new Set());
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+    const [draftReadyKey, setDraftReadyKey] = useState('');
     const [aptitudeFilter, setAptitudeFilter] = useState('Todos'); // 'Todos', 'Certificados', 'En Proceso', 'No Capacitados'
     const [showExportModal, setShowExportModal] = useState(false);
     const [exportOptions, setExportOptions] = useState({
@@ -148,39 +187,56 @@ export default function WeeklyScheduleEditor() {
     const [showStudyConflictsModal, setShowStudyConflictsModal] = useState(false);
     const [weeklyStudyConflicts, setWeeklyStudyConflicts] = useState([]);
     const [highlightedStaffId, setHighlightedStaffId] = useState(null);
+    const { currentUser, userRole } = useAuth();
 
     const wk = getWeekKey(weekStartDate);
     const schedules = wk ? allSchedules[wk] || {} : {};
+    const draftKey = getScheduleDraftKey(currentUser?.uid, storeId, wk);
 
-    // === PERSISTENCIA LOCAL STORAGE (Evitar pérdidas y llamadas innecesarias) ===
+    // El borrador se separa por cuenta, tienda y semana. Así no se mezcla con
+    // otra sede ni con otro administrador que use el mismo navegador.
     useEffect(() => {
-        if (!wk) return;
-        const saved = localStorage.getItem(`draft_schedule_${wk}`);
-        if (saved) {
-            try {
-                const parsed = JSON.parse(saved);
-                setAllSchedules(prev => ({ ...prev, [wk]: parsed }));
-            } catch (e) {
-                console.error("Error cargando borrador local");
-            }
+        if (!draftKey || !wk) return;
+        const draft = readScheduleDraft(draftKey, wk);
+        if (!draft) {
+            setDirtyStaff(new Set());
+            setHasUnsavedChanges(false);
+            setDraftReadyKey(draftKey);
+            return;
         }
-    }, [wk]);
+        const dirtyIds = Array.isArray(draft.dirtyStaff) && draft.dirtyStaff.length > 0
+            ? draft.dirtyStaff
+            : Object.keys(draft.schedules);
+        setAllSchedules(prev => ({
+            ...prev,
+            [wk]: { ...(prev[wk] || {}), ...draft.schedules },
+        }));
+        setDirtyStaff(new Set(dirtyIds));
+        setHasUnsavedChanges(dirtyIds.length > 0);
+        setDraftReadyKey(draftKey);
+    }, [draftKey, wk]);
 
     useEffect(() => {
-        if (!wk || Object.keys(schedules).length === 0) return;
-        // Guardar borrador localmente cada vez que cambie algo
-        const timer = setTimeout(() => {
-            localStorage.setItem(`draft_schedule_${wk}`, JSON.stringify(schedules));
-        }, 1000);
-        return () => clearTimeout(timer);
-    }, [schedules, wk]);
+        if (!draftKey || draftReadyKey !== draftKey || !wk || !hasUnsavedChanges || dirtyStaff.size === 0) return;
+        try {
+            localStorage.setItem(draftKey, JSON.stringify({
+                version: SCHEDULE_DRAFT_VERSION,
+                storeId,
+                weekKey: wk,
+                schedules,
+                dirtyStaff: Array.from(dirtyStaff),
+                savedAt: new Date().toISOString(),
+            }));
+        } catch (error) {
+            console.error('No se pudo guardar el borrador local de horarios:', error);
+        }
+    }, [draftKey, draftReadyKey, dirtyStaff, hasUnsavedChanges, schedules, storeId, wk]);
 
     const tooltipRef = useRef(null);
     const iconRefs = useRef({});
     const staffRowRefs = useRef({});
     const db = getFirestore();
     const navigate = useNavigate();
-    const { currentUser, userRole } = useAuth();
     const getSelectedDateStr = () => {
         if (!weekStartDate || !selectedDay) return null;
         const [y, m, d] = weekStartDate.split('-').map(Number);
@@ -381,7 +437,7 @@ export default function WeeklyScheduleEditor() {
             // Limpieza post-guardado exitoso
             setDirtyStaff(new Set());
             setHasUnsavedChanges(false);
-            localStorage.removeItem(`draft_schedule_${wk}`); // Limpiar borrador local al sincronizar
+            if (draftKey) localStorage.removeItem(draftKey);
 
             setSaveStatus('success');
             setTimeout(() => setSaveStatus('idle'), 3000);
@@ -1101,7 +1157,18 @@ export default function WeeklyScheduleEditor() {
             }
 
             console.log('[Horarios] Total final:', Object.keys(merged).length, 'horarios');
-            setAllSchedules(prev => ({ ...prev, [wk]: merged }));
+            const draft = readScheduleDraft(draftKey, wk);
+            const restoredSchedules = draft?.schedules
+                ? { ...merged, ...draft.schedules }
+                : merged;
+            setAllSchedules(prev => ({ ...prev, [wk]: restoredSchedules }));
+            if (draft?.schedules) {
+                const dirtyIds = Array.isArray(draft.dirtyStaff) && draft.dirtyStaff.length > 0
+                    ? draft.dirtyStaff
+                    : Object.keys(draft.schedules);
+                setDirtyStaff(new Set(dirtyIds));
+                setHasUnsavedChanges(dirtyIds.length > 0);
+            }
 
             // --- Paso 3: Cargar semana anterior si es necesario ---
             const [y, m, d] = weekStartDate.split('-').map(Number);
@@ -1125,7 +1192,7 @@ export default function WeeklyScheduleEditor() {
         };
 
         loadAllSchedules();
-    }, [wk, staff, storeId, db, weekStartDate]);
+    }, [wk, staff, storeId, db, weekStartDate, draftKey]);
 
 
 
