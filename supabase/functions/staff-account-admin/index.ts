@@ -107,6 +107,54 @@ async function registrationAccess(service: ServiceClient, userId: string) {
   return { allowed: episodeEnded, error: episodeEnded ? null : "account_already_linked" as const };
 }
 
+async function recoverExistingStaffLink(service: ServiceClient, userId: string) {
+  const { data: profile, error: profileError } = await service
+    .from("user_profiles")
+    .select("id,role,status,store_id,staff_profile_id,registration_pending")
+    .eq("id", userId)
+    .maybeSingle();
+  if (profileError) return { error: "registration_access_failed" as const, linked: false };
+  if (!profile || !["collaborator", "trainer"].includes(profile.role) || !profile.staff_profile_id) {
+    return { error: null, linked: false };
+  }
+
+  const { data: staff, error: staffError } = await service
+    .from("staff_profiles")
+    .select("id,user_id,store_id,cessation_date,is_trainee,training_end_date")
+    .eq("id", profile.staff_profile_id)
+    .maybeSingle();
+  if (staffError) return { error: "registration_access_failed" as const, linked: false };
+  if (!staff || staff.user_id !== userId || staff.store_id !== profile.store_id) {
+    return { error: null, linked: false };
+  }
+  if (profile.status !== "active") return { error: "inactive_account" as const, linked: true };
+  if (staff.cessation_date && staff.cessation_date < limaToday()) {
+    return { error: "employment_ended" as const, linked: true };
+  }
+  if (staff.is_trainee && staff.training_end_date && staff.training_end_date < limaToday()) {
+    return { error: "training_ended" as const, linked: true };
+  }
+
+  const { data: store, error: storeError } = await service
+    .from("stores")
+    .select("is_active")
+    .eq("id", staff.store_id)
+    .maybeSingle();
+  if (storeError) return { error: "registration_access_failed" as const, linked: true };
+  if (!store?.is_active) return { error: "inactive_store" as const, linked: true };
+
+  if (profile.registration_pending) {
+    const { error: repairError } = await service
+      .from("user_profiles")
+      .update({ registration_pending: false, updated_at: new Date().toISOString() })
+      .eq("id", userId)
+      .eq("staff_profile_id", staff.id)
+      .eq("store_id", staff.store_id);
+    if (repairError) return { error: "link_repair_failed" as const, linked: true };
+  }
+  return { error: null, linked: true };
+}
+
 const eligibleStaffQuery = (service: ServiceClient) => service
   .from("staff_profiles")
   .select("id,store_id,email,first_name,last_name,position,status,cessation_date,is_trainee,training_end_date")
@@ -222,6 +270,17 @@ Deno.serve(async (request) => {
 
   const body = await request.json().catch(() => null);
   if (!body || typeof body.operation !== "string") return json(400, { error: "invalid_payload" });
+
+  if (body.operation === "recover_existing_staff_link") {
+    const limit = await consumeRateLimit(service, authData.user.id, "registration-recovery", 30);
+    if (limit.error) return limit.error;
+    const recovery = await recoverExistingStaffLink(service, authData.user.id);
+    if (recovery.error) {
+      const denied = ["inactive_account", "employment_ended", "training_ended", "inactive_store"].includes(recovery.error);
+      return json(denied ? 409 : 500, { error: recovery.error, linked: recovery.linked });
+    }
+    return json(200, { linked: recovery.linked, recovered: recovery.linked });
+  }
 
   if (["list_registration_stores", "list_registration_staff", "claim_staff_account"].includes(body.operation)) {
     const email = normalizeEmail(authData.user.email);

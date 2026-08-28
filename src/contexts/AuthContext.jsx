@@ -58,6 +58,7 @@ export function AuthProvider({ children }) {
       let trainingEndDate = null;
       let isTrainee = false;
       let staffLinkValid = true;
+      let hasStaffProfile = false;
       let storeIsActive = profile?.role === "superadmin";
       if (!error && profile?.store_id) {
         const store = await supabase
@@ -78,6 +79,7 @@ export function AuthProvider({ children }) {
         cessationDate = staff.data?.cessation_date ?? null;
         trainingEndDate = staff.data?.training_end_date ?? null;
         isTrainee = Boolean(staff.data?.is_trainee);
+        hasStaffProfile = Boolean(staff.data);
         staffLinkValid = Boolean(
           staff.data
           && staff.data.user_id === profile.id
@@ -101,17 +103,49 @@ export function AuthProvider({ children }) {
         return;
       }
 
+      const isCollaborator = Boolean(profile && ["collaborator", "trainer"].includes(profile.role));
+      const hasCompleteStaffLink = Boolean(
+        isCollaborator
+        && profile.staff_profile_id
+        && profile.store_id
+        && hasStaffProfile
+        && staffLinkValid
+      );
+
+      // Una ficha ya vinculada nunca debe volver al selector de DNI. Si solo
+      // quedó una marca pendiente obsoleta, el servidor valida el vínculo
+      // canónico y la corrige antes de habilitar el portal.
+      if (hasCompleteStaffLink
+        && profile.registration_pending
+        && profile.status === "active"
+        && storeIsActive
+        && !(cessationDate && today > cessationDate)
+        && !trainingEnded) {
+        const recovery = await supabase.functions.invoke("staff-account-admin", {
+          body: { operation: "recover_existing_staff_link" },
+        });
+        if (recovery.error || !recovery.data?.recovered) {
+          error = recovery.error ?? new Error("No se pudo reparar el vínculo existente.");
+        } else {
+          profile = { ...profile, registration_pending: false };
+        }
+      }
+
+      if (!active || requestId !== accessRequest) return;
+      if (error) {
+        console.error("No se pudo recuperar el vínculo de colaborador:", error);
+        setAccessError("Tu ficha ya está vinculada, pero no se pudo validar el acceso. Reintenta en unos segundos.");
+        setLoading(false);
+        return;
+      }
+
       const collaboratorNeedsLink = !profile
-        || (["collaborator", "trainer"].includes(profile.role)
+        || (isCollaborator
           && (
-            profile.status !== "active"
-            || profile.registration_pending
-            || !profile.staff_profile_id
+            !profile.staff_profile_id
             || !profile.store_id
-            || !storeIsActive
+            || !hasStaffProfile
             || !staffLinkValid
-            || Boolean(cessationDate && today > cessationDate)
-            || trainingEnded
           ));
       if (collaboratorNeedsLink) {
         setUserRole("registration");
