@@ -33,7 +33,20 @@ const addDays = (date, count) => {
   return result.toISOString().slice(0, 10);
 };
 const weekKey = (start) => `${start}_to_${addDays(start, 6)}`;
-const legacy = (row) => row?.legacy_data && typeof row.legacy_data === "object" ? row.legacy_data : {};
+const LEGACY_ID_KEYS = new Set([
+  "id", "uid", "staffId", "storeId", "userId", "trainerId", "collaboratorId",
+  "staffProfileId", "firestore_path", "firebase_store_id", "merged_firebase_uids",
+]);
+const withoutLegacyIdentifiers = (value) => {
+  if (Array.isArray(value)) return value.map(withoutLegacyIdentifiers);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !LEGACY_ID_KEYS.has(key))
+    .map(([key, item]) => [key, withoutLegacyIdentifiers(item)]));
+};
+const legacy = (row) => row?.legacy_data && typeof row.legacy_data === "object"
+  ? withoutLegacyIdentifiers(row.legacy_data)
+  : {};
 
 const unwrapSpecialValues = (next, previous = {}) => Object.fromEntries(
   Object.entries(next ?? {}).map(([key, value]) => {
@@ -290,7 +303,7 @@ async function fetchRows(ref) {
   }
 
   const items = rows.map((row) => {
-    let id = row.id ?? row.firestore_id;
+    let id = row.id;
     if (root === "schedules") id = `${row.staff_id}_${weekKey(row.week_start)}`;
     else if (root === "study_schedules") id = row.staff?.user_id ?? row.staff_id;
     else if (segments[2] === "config") id = row.config_key;
@@ -313,15 +326,8 @@ export async function getDoc(ref) {
   if (segments[0] === "schedules") {
     const match = id.match(/^(.*?)_(\d{4}-\d{2}-\d{2})_to_\d{4}-\d{2}-\d{2}$/);
     if (match) {
-      // Resolver ids legacy de Firebase (no-UUID) a su UUID real por firestore_id,
-      // para no romper el filtro sobre la columna uuid staff_id.
-      let staffId = match[1];
-      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(staffId)) {
-        const resolved = await supabase.from("staff_profiles").select("id").eq("firestore_id", staffId).maybeSingle();
-        throwIfError(resolved.error);
-        if (!resolved.data) return new DocumentSnapshot(ref, id, undefined);
-        staffId = resolved.data.id;
-      }
+      const staffId = match[1];
+      if (!UUID_RE.test(staffId)) return new DocumentSnapshot(ref, id, undefined);
       const result = await supabase
         .from("schedule_weeks")
         .select("*,staff:staff_profiles(user_id),schedule_shifts(*)")
@@ -333,12 +339,8 @@ export async function getDoc(ref) {
     }
   }
   if (segments[0] === "study_schedules") {
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
-    // Si el id es UUID puede ser el id del perfil o el user_id (auth).
-    // Si NO es UUID, es un id legacy de Firebase → resolver por firestore_id.
-    const staffQuery = isUuid
-      ? supabase.from("staff_profiles").select("id,user_id").or(`id.eq.${id},user_id.eq.${id}`)
-      : supabase.from("staff_profiles").select("id,user_id").eq("firestore_id", id);
+    if (!UUID_RE.test(id)) return new DocumentSnapshot(ref, id, undefined);
+    const staffQuery = supabase.from("staff_profiles").select("id,user_id").or(`id.eq.${id},user_id.eq.${id}`);
     const staff = await staffQuery.maybeSingle();
     throwIfError(staff.error);
     if (!staff.data) return new DocumentSnapshot(ref, id, undefined);
@@ -375,7 +377,7 @@ export async function getDoc(ref) {
   }
   const parent = { kind: "collection", path: segments.slice(0, -1).join("/") };
   const items = await fetchRows(parent);
-  const item = items.find((candidate) => candidate.id === id || String(candidate.row?.firestore_id) === id);
+  const item = items.find((candidate) => candidate.id === id);
   return new DocumentSnapshot(ref, id, item?.data);
 }
 
@@ -404,7 +406,7 @@ function columnsFor(root, data, previous = {}) {
     const column = mapping[key];
     if (column && ["collaborator_signature_path", "trainer_signature_path"].includes(column) && typeof value === "string" && /^https?:/.test(value)) continue;
     if (column) columns[column] = value === "" && ["cessation_date", "join_date", "birth_date", "training_end_date", "modality_change_date", "next_modality", "sanitary_card_expiry", "sanitary_card_unlock", "last_evaluation_date", "last_station_evaluated"].includes(column) ? null : value;
-    else if (key !== "id" && key !== "firestore_path") unhandled[key] = value;
+    else if (!LEGACY_ID_KEYS.has(key)) unhandled[key] = withoutLegacyIdentifiers(value);
   }
   if (Object.keys(unhandled).length) columns.legacy_data = { ...(previous ?? {}), ...unhandled };
   return columns;
@@ -550,17 +552,12 @@ async function persist(ref, data, merge) {
     return savedId;
   }
   if (["extra_hours", "feriados_trabajados", "schedule_requests"].includes(root)) {
-    // staff_id y user_id son columnas uuid con FK. El identificador entrante
-    // (staffId o uid) puede ser: el uuid del perfil, un user_id de auth, o un
-    // id legacy de Firebase (no-uuid). Resolvemos el perfil real para:
-    //   - normalizar staff_id al uuid de staff_profiles (un id legacy como
-    //     staff_id rompe con "invalid input syntax for type uuid"),
-    //   - completar store_id,
-    //   - fijar user_id al auth.users real o null (un id de staff_profiles
-    //     como user_id viola la FK *_user_id_fkey).
+    // Las relaciones aceptan únicamente UUID canónicos de Supabase. A partir
+    // del perfil completamos tienda y cuenta sin depender de alias externos.
     const key = prepared.staffId || prepared.uid;
     if (key) {
-      const conditions = UUID_RE.test(key) ? [`id.eq.${key}`, `user_id.eq.${key}`] : [`firestore_id.eq.${key}`];
+      if (!UUID_RE.test(key)) throw new Error("El colaborador no tiene un UUID válido de Supabase.");
+      const conditions = [`id.eq.${key}`, `user_id.eq.${key}`];
       const owner = await supabase.from("staff_profiles").select("id,store_id,user_id").or(conditions.join(",")).limit(1);
       throwIfError(owner.error);
       const profile = owner.data?.[0];
@@ -617,8 +614,7 @@ async function persist(ref, data, merge) {
       if (/^\d+$/.test(id)) {
         draftResult = await supabase.from(table).update(draftColumns).eq("id", Number(id)).select("id").single();
       } else {
-        draftColumns.firestore_id = id;
-        draftResult = await supabase.from(table).upsert(draftColumns, { onConflict: "firestore_id" }).select("id").single();
+        draftResult = await supabase.from(table).insert(draftColumns).select("id").single();
       }
       throwIfError(draftResult.error);
 
@@ -650,27 +646,19 @@ async function persist(ref, data, merge) {
       return evaluationId;
     }
   }
-  const isUuid = (value) => typeof value === "string"
-    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
   const columns = columnsFor(root, prepared, legacy(previous));
   const entityWithUuid = ["staff_profiles", "stores", "users"].includes(root);
   let result;
   if (entityWithUuid) {
-    // id es uuid con default gen_random_uuid(). Si el id entrante es un uuid
-    // válido lo respetamos; si es un id legacy de Firebase lo tratamos como
-    // firestore_id para no violar el tipo uuid de la columna id.
-    if (isUuid(id)) {
-      columns.id = id;
-      result = await supabase.from(table).upsert(columns).select("id").single();
-    } else {
-      columns.firestore_id = id;
-      result = await supabase.from(table).upsert(columns, { onConflict: "firestore_id" }).select("id").single();
-    }
+    if (!UUID_RE.test(id)) throw new Error(`Identificador Supabase inválido para ${root}.`);
+    columns.id = id;
+    result = await supabase.from(table).upsert(columns).select("id").single();
   } else if (/^\d+$/.test(id)) {
     result = await supabase.from(table).update(columns).eq("id", Number(id)).select("id").single();
+  } else if (root === "ceses") {
+    result = await supabase.from(table).upsert(columns, { onConflict: "staff_id,cessation_date,is_modality_change" }).select("id").single();
   } else {
-    columns.firestore_id = id;
-    result = await supabase.from(table).upsert(columns, { onConflict: "firestore_id" }).select("id").single();
+    result = await supabase.from(table).insert(columns).select("id").single();
   }
   throwIfError(result.error);
   return result.data?.id ?? id;
@@ -730,18 +718,9 @@ export async function importGeoVictoriaStaffProfile(profile = {}, sourceFile = n
 }
 
 export async function saveStaffProfileAndCessation(staffId, profile = {}) {
-  let canonicalStaffId = staffId || null;
+  const canonicalStaffId = staffId || null;
   if (canonicalStaffId && !UUID_RE.test(canonicalStaffId)) {
-    const resolved = await supabase
-      .from("staff_profiles")
-      .select("id")
-      .eq("firestore_id", canonicalStaffId)
-      .maybeSingle();
-    throwIfError(resolved.error);
-    if (!resolved.data?.id) {
-      throw new Error("No se encontró el UUID de Supabase para la ficha migrada.");
-    }
-    canonicalStaffId = resolved.data.id;
+    throw new Error("El colaborador no tiene un UUID válido de Supabase.");
   }
   const result = await supabase.rpc("save_staff_profile_and_cessation", {
     p_staff_id: canonicalStaffId,
@@ -786,11 +765,11 @@ export async function deleteDoc(ref) {
   const table = ROOT_TABLE[root];
   if (!table) throw new Error(`Eliminación no migrada a Supabase: ${ref.path}`);
   const entityWithUuid = ["staff_profiles", "stores", "users"].includes(root);
+  if (entityWithUuid && !UUID_RE.test(id)) throw new Error(`Identificador Supabase inválido para ${root}.`);
+  if (!entityWithUuid && !/^\d+$/.test(id)) throw new Error(`Identificador Supabase inválido para ${root}.`);
   const result = entityWithUuid
     ? await supabase.from(table).delete().eq("id", id)
-    : /^\d+$/.test(id)
-      ? await supabase.from(table).delete().eq("id", Number(id))
-      : await supabase.from(table).delete().eq("firestore_id", id);
+    : await supabase.from(table).delete().eq("id", Number(id));
   throwIfError(result.error);
 }
 

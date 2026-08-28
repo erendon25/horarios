@@ -11,7 +11,7 @@ import { isCurrentGeoVictoriaEpisode, parseExtraHours, parseLateArrivals, parseR
 import type { Json, Tables } from "@/types/database";
 
 type Store = Pick<Tables<"stores">, "id" | "name" | "is_active">;
-type Staff = Pick<Tables<"staff_profiles">, "id" | "firestore_id" | "user_id" | "dni" | "first_name" | "last_name" | "position" | "modality" | "status" | "cessation_date" | "is_trainee" | "training_end_date">;
+type Staff = Pick<Tables<"staff_profiles">, "id" | "user_id" | "dni" | "first_name" | "last_name" | "position" | "modality" | "status" | "cessation_date" | "is_trainee" | "training_end_date">;
 type Context = { stores: Store[]; defaultStoreId: string };
 type ShiftMeta = { fileName: string; count: number; updatedAt: string } | null;
 type ImportResult = GeoVictoriaImportSummary & { fileName: string; created: number; updated: number };
@@ -37,7 +37,7 @@ async function loadContext(forcedStoreId?: string): Promise<Context> {
 async function loadStoreData(storeId: string) {
   const supabase = createClient();
   const [staffResult, configResult] = await Promise.all([
-    supabase.from("staff_profiles").select("id,firestore_id,user_id,dni,first_name,last_name,position,modality,status,cessation_date,is_trainee,training_end_date").eq("store_id", storeId).order("first_name"),
+    supabase.from("staff_profiles").select("id,user_id,dni,first_name,last_name,position,modality,status,cessation_date,is_trainee,training_end_date").eq("store_id", storeId).order("first_name"),
     supabase.from("store_configs").select("value").eq("store_id", storeId).eq("config_key", "geovictoria_turnos").maybeSingle(),
   ]);
   if (staffResult.error) throw staffResult.error;
@@ -71,7 +71,7 @@ async function readMatrix(file: File) {
 }
 
 function asGeoStaff(rows: Staff[]): GeoVictoriaStaff[] {
-  return rows.map((row) => ({ id: row.id, firestoreId: row.firestore_id, userId: row.user_id, dni: row.dni, firstName: row.first_name, lastName: row.last_name, position: row.position, modality: row.modality, status: row.status, cessationDate: row.cessation_date, isTrainee: row.is_trainee, trainingEndDate: row.training_end_date }));
+  return rows.map((row) => ({ id: row.id, userId: row.user_id, dni: row.dni, firstName: row.first_name, lastName: row.last_name, position: row.position, modality: row.modality, status: row.status, cessationDate: row.cessation_date, isTrainee: row.is_trainee, trainingEndDate: row.training_end_date }));
 }
 
 function minutesLabel(minutes: number) {
@@ -126,19 +126,19 @@ export function GeoVictoriaImportPanel({ storeId: forcedStoreId }: { storeId?: s
     mutationFn: async ({ file, summary }: { file: File; summary: GeoVictoriaImportSummary }) => {
       if (summary.records.length === 0) throw new Error("El archivo no contiene subtotales de tiempo extra válidos.");
       const supabase = createClient();
-      const ids = summary.records.map((record) => record.firestore_id);
-      const existing = await supabase.from("extra_hours").select("firestore_id").in("firestore_id", ids);
+      const ids = summary.records.map((record) => record.source_key);
+      const existing = await supabase.from("extra_hours").select("source_key").in("source_key", ids);
       if (existing.error) throw existing.error;
-      const existingIds = new Set((existing.data ?? []).map((row) => row.firestore_id));
+      const existingIds = new Set((existing.data ?? []).map((row) => row.source_key));
       let confirmed = 0;
       for (let index = 0; index < summary.records.length; index += 100) {
         const chunk = summary.records.slice(index, index + 100);
-        const saved = await supabase.from("extra_hours").upsert(chunk, { onConflict: "firestore_id" }).select("id");
+        const saved = await supabase.from("extra_hours").upsert(chunk, { onConflict: "source_key" }).select("id");
         if (saved.error) throw saved.error;
         confirmed += saved.data.length;
       }
       if (confirmed !== summary.records.length) throw new Error(`Supabase confirmó ${confirmed} de ${summary.records.length} registros.`);
-      return { ...summary, fileName: file.name, updated: summary.records.filter((record) => existingIds.has(record.firestore_id)).length, created: summary.records.filter((record) => !existingIds.has(record.firestore_id)).length };
+      return { ...summary, fileName: file.name, updated: summary.records.filter((record) => existingIds.has(record.source_key)).length, created: summary.records.filter((record) => !existingIds.has(record.source_key)).length };
     },
     onSuccess: async (saved) => {
       setResult(saved);

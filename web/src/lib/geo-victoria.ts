@@ -4,7 +4,6 @@ export type SheetCell = string | number | boolean | Date | null | undefined;
 export type SheetRow = Record<string, SheetCell>;
 export type GeoVictoriaStaff = {
   id: string;
-  firestoreId: string | null;
   userId: string | null;
   dni: string | null;
   firstName: string;
@@ -18,7 +17,7 @@ export type GeoVictoriaStaff = {
 };
 
 export type GeoVictoriaExtraRecord = {
-  firestore_id: string;
+  source_key: string;
   staff_id: string;
   user_id: string | null;
   store_id: string;
@@ -280,11 +279,10 @@ export function parseExtraHours(rows: SheetRow[], staff: GeoVictoriaStaff[], sto
   });
 
   const records = [...grouped.values()].map((item) => {
-    const externalStaffId = item.staff.firestoreId || item.staff.id;
     const start = item.periodStart || item.date, end = item.periodEnd || item.date;
     const activityParts = [item.pre > 0 ? `Entrada: ${item.pre} min` : "", item.post > 0 ? `Salida: ${item.post} min` : ""].filter(Boolean).join(" | ");
     return {
-      firestore_id: `gvextra_${externalStaffId}_${start}_${end}`,
+      source_key: `geovictoria:${item.staff.id}:${start}:${end}`,
       staff_id: item.staff.id,
       user_id: item.staff.userId,
       store_id: storeId,

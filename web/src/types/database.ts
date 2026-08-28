@@ -167,6 +167,7 @@ export type Database = {
           segments: Json
           source: string
           source_file: string | null
+          source_key: string | null
           staff_id: string | null
           start_time: string | null
           store_id: string | null
@@ -189,6 +190,7 @@ export type Database = {
           segments?: Json
           source?: string
           source_file?: string | null
+          source_key?: string | null
           staff_id?: string | null
           start_time?: string | null
           store_id?: string | null
@@ -211,6 +213,7 @@ export type Database = {
           segments?: Json
           source?: string
           source_file?: string | null
+          source_key?: string | null
           staff_id?: string | null
           start_time?: string | null
           store_id?: string | null

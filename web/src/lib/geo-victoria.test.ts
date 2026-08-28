@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isCurrentGeoVictoriaEpisode, isImportableGeoVictoriaState, parseDurationMinutes, parseExtraHours, parseLateArrivals, parseRoster, parseShiftMap, rowsFromMatrix, type GeoVictoriaStaff } from "./geo-victoria";
 
-const staff: GeoVictoriaStaff[] = [{ id: "uuid-1", firestoreId: "old-1", userId: "user-1", dni: "12345678", firstName: "Ana", lastName: "Pérez", position: "Caja", modality: "Full-Time", status: "active", cessationDate: null, isTrainee: false, trainingEndDate: null }];
+const staff: GeoVictoriaStaff[] = [{ id: "ee2083a3-5255-51ca-a5bf-3302f6ac0043", userId: "user-1", dni: "12345678", firstName: "Ana", lastName: "Pérez", position: "Caja", modality: "Full-Time", status: "active", cessationDate: null, isTrainee: false, trainingEndDate: null }];
 
 describe("GeoVictoria", () => {
   it("interpreta duraciones y el archivo de turnos", () => {
@@ -18,7 +18,7 @@ describe("GeoVictoria", () => {
     ]);
     const result = parseExtraHours(rows, staff, "store-1", "extras.xlsx", "2026-07-14T12:00:00Z");
     expect(result.records).toHaveLength(1);
-    expect(result.records[0]).toMatchObject({ firestore_id: "gvextra_old-1_2026-07-14_2026-07-14", duration_minutes: 45, pre_shift_minutes: 15, post_shift_minutes: 30 });
+    expect(result.records[0]).toMatchObject({ source_key: "geovictoria:ee2083a3-5255-51ca-a5bf-3302f6ac0043:2026-07-14:2026-07-14", duration_minutes: 45, pre_shift_minutes: 15, post_shift_minutes: 30 });
     expect(result.totalMinutes).toBe(45);
   });
 
