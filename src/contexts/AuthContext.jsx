@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase/client";
 
 const AuthContext = React.createContext();
+const publicAppUrl = (import.meta.env.VITE_APP_URL || "https://lc-scheduler.web.app").replace(/\/$/, "");
 
 export function useAuth() {
   return useContext(AuthContext);
@@ -198,7 +199,9 @@ export function AuthProvider({ children }) {
 
   const resetPassword = async (email) => {
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/update-password`,
+      // La recuperación siempre pertenece al sitio publicado. Así, incluso si
+      // alguien conserva abierto el proyecto local, el correo nunca apunta a localhost.
+      redirectTo: `${publicAppUrl}/update-password`,
     });
     if (error) throw error;
   };
