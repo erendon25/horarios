@@ -1,6 +1,7 @@
 import { supabase } from "./client";
 import { mapSalesHistoryRow, salesConfigurationRpcArgs, salesHistoryDayPayload } from "./salesHistoryCompat";
 import { buildTrainingEvidencePaths, uploadTrainingEvidencePair } from "./trainingEvidenceCompat";
+import { withCanonicalStaffIdentity } from "./staffProfileCompat";
 
 export const db = Object.freeze({ kind: "supabase-database" });
 export const getFirestore = () => db;
@@ -45,7 +46,7 @@ const unwrapSpecialValues = (next, previous = {}) => Object.fromEntries(
   }),
 );
 
-const mapStaff = (row) => ({
+const mapStaff = (row) => withCanonicalStaffIdentity(row, {
   ...legacy(row),
   uid: row.user_id,
   storeId: row.store_id,
@@ -729,8 +730,21 @@ export async function importGeoVictoriaStaffProfile(profile = {}, sourceFile = n
 }
 
 export async function saveStaffProfileAndCessation(staffId, profile = {}) {
+  let canonicalStaffId = staffId || null;
+  if (canonicalStaffId && !UUID_RE.test(canonicalStaffId)) {
+    const resolved = await supabase
+      .from("staff_profiles")
+      .select("id")
+      .eq("firestore_id", canonicalStaffId)
+      .maybeSingle();
+    throwIfError(resolved.error);
+    if (!resolved.data?.id) {
+      throw new Error("No se encontró el UUID de Supabase para la ficha migrada.");
+    }
+    canonicalStaffId = resolved.data.id;
+  }
   const result = await supabase.rpc("save_staff_profile_and_cessation", {
-    p_staff_id: staffId || null,
+    p_staff_id: canonicalStaffId,
     p_store_id: profile.storeId || null,
     p_first_name: profile.name || null,
     p_last_name: profile.lastName || null,
