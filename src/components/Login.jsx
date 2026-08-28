@@ -29,7 +29,6 @@ function Login() {
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [message, setMessage] = useState('');
-    const [submitted, setSubmitted] = useState(false);
     const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
     const { login, currentUser, userRole, resetPassword } = useAuth();
@@ -42,7 +41,6 @@ function Login() {
             setMessage('');
             setLoading(true);
             await login(email, password);
-            setSubmitted(true);
         } catch (err) {
             console.error(err);
             setError(loginErrorMessage(err));
@@ -71,7 +69,7 @@ function Login() {
     };
 
     useEffect(() => {
-        if (submitted && currentUser) {
+        if (currentUser) {
             if (!userRole) return; // Espera a que se cargue el rol
 
             switch (userRole) {
@@ -93,7 +91,7 @@ function Login() {
                     break;
             }
         }
-    }, [submitted, currentUser, userRole, navigate]);
+    }, [currentUser, userRole, navigate]);
 
 
 

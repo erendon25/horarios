@@ -161,7 +161,14 @@ export function AuthProvider({ children }) {
     };
 
     supabase.auth.getSession().then(({ data }) => loadAccess(data.session?.user ?? null));
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      // Supabase puede volver al Site URL cuando /update-password no está en
+      // la lista de redirecciones permitidas. El evento es la fuente fiable
+      // para abrir siempre la pantalla correcta de recuperación.
+      if (event === "PASSWORD_RECOVERY" && window.location.pathname !== "/update-password") {
+        window.location.replace("/update-password");
+        return;
+      }
       // Supabase recomienda diferir operaciones asíncronas iniciadas desde este callback.
       window.setTimeout(() => void loadAccess(session?.user ?? null), 0);
     });
