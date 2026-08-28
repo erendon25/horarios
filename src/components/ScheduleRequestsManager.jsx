@@ -114,12 +114,10 @@ const ScheduleRequestsManager = ({ storeId }) => {
     };
 
     const filteredRequests = requests.filter(r => {
-        if (r.status !== filterStatus) return false;
-        if (filterStatus === 'pending') {
-            if (r.date && r.date < todayIso) return false;
-            if (isStaffInactive(r.staffId)) return false;
-        }
-        return true;
+        // El contador y la bandeja deben usar el mismo criterio. Una solicitud
+        // pendiente vencida o de un colaborador inactivo sigue necesitando una
+        // decisión administrativa, por lo que se muestra con una advertencia.
+        return r.status === filterStatus;
     });
 
     const shiftLabels = {
@@ -179,7 +177,10 @@ const ScheduleRequestsManager = ({ storeId }) => {
                 </div>
             ) : (
                 <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
-                    {filteredRequests.map((req) => (
+                    {filteredRequests.map((req) => {
+                        const isExpired = req.status === 'pending' && req.date && req.date < todayIso;
+                        const belongsToInactiveStaff = req.status === 'pending' && isStaffInactive(req.staffId);
+                        return (
                         <div key={req.id} className="bg-white border-2 border-gray-100 rounded-2xl p-5 hover:border-blue-100 transition-all shadow-sm">
                             <div className="flex justify-between items-start mb-4">
                                 <div className="flex items-center gap-3">
@@ -195,6 +196,16 @@ const ScheduleRequestsManager = ({ storeId }) => {
                                     {req.status === 'pending' ? 'Pendiente' : req.status === 'approved' ? 'Aprobada' : 'Rechazada'}
                                 </div>
                             </div>
+
+                            {(isExpired || belongsToInactiveStaff) && (
+                                <div className="mb-4 px-3 py-2 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-xs font-semibold">
+                                    {isExpired && belongsToInactiveStaff
+                                        ? 'Solicitud vencida de un colaborador inactivo. Revísala para cerrar el pendiente.'
+                                        : isExpired
+                                            ? 'La fecha solicitada ya pasó. Revísala para cerrar el pendiente.'
+                                            : 'El colaborador está inactivo. Revísala para cerrar el pendiente.'}
+                                </div>
+                            )}
 
                             <div className="grid grid-cols-2 gap-4 mb-4">
                                 <div className="bg-gray-50 p-3 rounded-xl border border-gray-100">
@@ -247,7 +258,8 @@ const ScheduleRequestsManager = ({ storeId }) => {
                                 </div>
                             )}
                         </div>
-                    ))}
+                        );
+                    })}
                 </div>
             )}
         </div>
