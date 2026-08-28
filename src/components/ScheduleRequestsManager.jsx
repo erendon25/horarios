@@ -10,7 +10,7 @@ const timestampToMillis = (value) => {
     return Number.isFinite(parsed) ? parsed : 0;
 };
 
-const ScheduleRequestsManager = ({ storeId }) => {
+const ScheduleRequestsManager = ({ storeId, onRequestResolved }) => {
     const { currentUser } = useAuth();
     const [requests, setRequests] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -88,6 +88,15 @@ const ScheduleRequestsManager = ({ storeId }) => {
                 reviewedBy: reviewerId,
                 reviewedAt: serverTimestamp()
             });
+            // Reflejar la escritura confirmada de inmediato. Realtime sigue
+            // sincronizando cambios externos, pero la UI no depende del
+            // WebSocket para retirar una solicitud ya resuelta.
+            setRequests(current => current.map(request => (
+                request.id === requestId
+                    ? { ...request, status, reviewedBy: reviewerId, reviewedAt: new Date().toISOString() }
+                    : request
+            )));
+            onRequestResolved?.(requestId, status);
         } catch (error) {
             console.error(`Error updating request to ${status}:`, error);
             alert(`Error al actualizar la solicitud: ${error?.message || error}`);

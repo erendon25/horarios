@@ -4212,7 +4212,10 @@ function AdminDashboard() {
                             </button>
                         </div>
                         <div className="p-8">
-                            <ScheduleRequestsManager storeId={userData?.storeId} />
+                            <ScheduleRequestsManager
+                                storeId={userData?.storeId}
+                                onRequestResolved={() => setPendingRequestsCount(count => Math.max(0, count - 1))}
+                            />
                         </div>
                     </div>
                 </div>
