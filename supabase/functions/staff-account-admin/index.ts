@@ -127,7 +127,7 @@ async function recoverExistingStaffLink(service: ServiceClient, userId: string) 
   if (!staff || staff.user_id !== userId || staff.store_id !== profile.store_id) {
     return { error: null, linked: false };
   }
-  if (profile.status !== "active") return { error: "inactive_account" as const, linked: true };
+  if (!['active', 'pending'].includes(profile.status)) return { error: "inactive_account" as const, linked: true };
   if (staff.cessation_date && staff.cessation_date < limaToday()) {
     return { error: "employment_ended" as const, linked: true };
   }
@@ -143,10 +143,10 @@ async function recoverExistingStaffLink(service: ServiceClient, userId: string) 
   if (storeError) return { error: "registration_access_failed" as const, linked: true };
   if (!store?.is_active) return { error: "inactive_store" as const, linked: true };
 
-  if (profile.registration_pending) {
+  if (profile.registration_pending || profile.status === "pending") {
     const { error: repairError } = await service
       .from("user_profiles")
-      .update({ registration_pending: false, updated_at: new Date().toISOString() })
+      .update({ status: "active", registration_pending: false, updated_at: new Date().toISOString() })
       .eq("id", userId)
       .eq("staff_profile_id", staff.id)
       .eq("store_id", staff.store_id);

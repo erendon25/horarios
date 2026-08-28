@@ -722,6 +722,19 @@ export async function saveStaffProfileAndCessation(staffId, profile = {}) {
   if (canonicalStaffId && !UUID_RE.test(canonicalStaffId)) {
     throw new Error("El colaborador no tiene un UUID válido de Supabase.");
   }
+  const linkedUserId = profile.userId || profile.uid || null;
+  const today = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Lima",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+  const currentLinkedProfile = Boolean(
+    linkedUserId
+    && UUID_RE.test(linkedUserId)
+    && (!profile.cessationDate || profile.cessationDate >= today)
+    && (!profile.isTrainee || !profile.trainingEndDate || profile.trainingEndDate >= today)
+  );
   const result = await supabase.rpc("save_staff_profile_and_cessation", {
     p_staff_id: canonicalStaffId,
     p_store_id: profile.storeId || null,
@@ -733,7 +746,7 @@ export async function saveStaffProfileAndCessation(staffId, profile = {}) {
     p_birth_date: profile.birthDate || null,
     p_modality: profile.modality || "Full-Time",
     p_position: profile.position || "COLABORADOR",
-    p_status: profile.status || "pending",
+    p_status: currentLinkedProfile ? "active" : profile.status || "pending",
     p_join_date: profile.joinDate || null,
     p_sanitary_card_expiry: profile.sanitaryCardDate || profile.sanitaryCardExpiry || null,
     p_sanitary_card_unlock: Boolean(profile.sanitaryCardUnlock),

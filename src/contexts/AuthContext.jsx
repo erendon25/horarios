@@ -117,7 +117,7 @@ export function AuthProvider({ children }) {
       // canónico y la corrige antes de habilitar el portal.
       if (hasCompleteStaffLink
         && profile.registration_pending
-        && profile.status === "active"
+        && ["active", "pending"].includes(profile.status)
         && storeIsActive
         && !(cessationDate && today > cessationDate)
         && !trainingEnded) {
