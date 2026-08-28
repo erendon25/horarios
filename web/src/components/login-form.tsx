@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
 import { Eye, EyeOff, LockKeyhole, Mail } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
@@ -9,7 +8,6 @@ const rememberedAccountKey = "horarios:remembered-account";
 const rememberedAccount = () => typeof window === "undefined" ? "" : window.localStorage.getItem(rememberedAccountKey) ?? "";
 
 export function LoginForm() {
-  const router = useRouter();
   const [email, setEmail] = useState(rememberedAccount);
   const [password, setPassword] = useState("");
   const [notice, setNotice] = useState("");
@@ -21,22 +19,31 @@ export function LoginForm() {
   async function submit(event: FormEvent) {
     event.preventDefault(); setLoading(true); setError(""); setNotice("");
     const normalizedEmail = email.trim().toLocaleLowerCase("es");
-    const { error: loginError } = await createClient().auth.signInWithPassword({ email: normalizedEmail, password });
+    const supabase = createClient();
+    const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password });
     if (loginError) {
       setError(loginError.status === 429 ? "Demasiados intentos. Espera unos minutos antes de volver a intentar." : "Credenciales incorrectas o contraseña aún no configurada.");
       setLoading(false);
       return;
     }
+    if (!loginData.session) {
+      setError("Supabase aceptó las credenciales, pero no pudo crear una sesión. Recarga la página e inténtalo nuevamente.");
+      setLoading(false);
+      return;
+    }
     if (rememberAccount) window.localStorage.setItem(rememberedAccountKey, normalizedEmail);
     else window.localStorage.removeItem(rememberedAccountKey);
-    router.replace("/portal"); router.refresh();
+    // Una navegación completa evita que Next solicite /portal antes de que
+    // @supabase/ssr termine de exponer las cookies al servidor.
+    window.location.assign("/portal");
   }
 
   async function resetPassword() {
     if (!email.trim()) { setError("Ingresa tu correo primero."); return; }
     setLoading(true); setError("");
+    const normalizedEmail = email.trim().toLocaleLowerCase("es");
     const redirectTo = `${window.location.origin}/auth/callback?next=/update-password`;
-    const { error: resetError } = await createClient().auth.resetPasswordForEmail(email.trim(), { redirectTo });
+    const { error: resetError } = await createClient().auth.resetPasswordForEmail(normalizedEmail, { redirectTo });
     setLoading(false);
     if (resetError) setError(resetError.status === 429 ? "Ya se solicitó un enlace recientemente. Espera antes de pedir otro." : "No se pudo solicitar el restablecimiento.");
     else setNotice("Si el correo está registrado, recibirás un enlace para crear tu contraseña.");
