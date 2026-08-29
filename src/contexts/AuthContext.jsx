@@ -20,11 +20,13 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let active = true;
     let accessRequest = 0;
+    let resolvedUserId = null;
 
     const loadAccess = async (user) => {
       const requestId = ++accessRequest;
       if (!active) return;
       if (!user) {
+        resolvedUserId = null;
         setCurrentUser(null);
         setUserRole(null);
         setUserData(null);
@@ -33,7 +35,10 @@ export function AuthProvider({ children }) {
         return;
       }
 
-      setLoading(true);
+      // Renovar el token o volver a enfocar la pestaña no debe desmontar toda
+      // la aplicación. Solo bloqueamos la interfaz para la primera carga o
+      // cuando realmente cambia la cuenta autenticada.
+      if (resolvedUserId !== user.id) setLoading(true);
       setAccessError(null);
       setCurrentUser(compatibleUser(user));
       const readProfile = () => supabase
@@ -99,6 +104,7 @@ export function AuthProvider({ children }) {
       if (error) {
         console.error("No se pudo validar el perfil de acceso:", error);
         setAccessError("No se pudo validar tu acceso en Supabase. Reintenta sin volver a iniciar sesión.");
+        resolvedUserId = user.id;
         setLoading(false);
         return;
       }
@@ -135,6 +141,7 @@ export function AuthProvider({ children }) {
       if (error) {
         console.error("No se pudo recuperar el vínculo de colaborador:", error);
         setAccessError("Tu ficha ya está vinculada, pero no se pudo validar el acceso. Reintenta en unos segundos.");
+        resolvedUserId = user.id;
         setLoading(false);
         return;
       }
@@ -157,6 +164,7 @@ export function AuthProvider({ children }) {
           registrationPending: true,
         });
         setAccessError(null);
+        resolvedUserId = user.id;
         setLoading(false);
         return;
       }
@@ -173,6 +181,7 @@ export function AuthProvider({ children }) {
         } else if (profile && !storeIsActive) {
           alert("Tu tienda está inactiva. Solicita a un administrador que revise tu asignación.");
         }
+        resolvedUserId = null;
         setLoading(false);
         return;
       }
@@ -192,6 +201,7 @@ export function AuthProvider({ children }) {
       setUserRole(profile.role);
       setUserData(legacyShape);
       setAccessError(null);
+      resolvedUserId = user.id;
       setLoading(false);
     };
 
@@ -202,6 +212,16 @@ export function AuthProvider({ children }) {
       // para abrir siempre la pantalla correcta de recuperación.
       if (event === "PASSWORD_RECOVERY" && window.location.pathname !== "/update-password") {
         window.location.replace("/update-password");
+        return;
+      }
+      // Supabase puede emitir SIGNED_IN otra vez al recuperar el foco y
+      // TOKEN_REFRESHED al renovar el JWT. La cuenta no cambió, por lo que no
+      // repetimos consultas de perfil, tienda, colaboradores ni horarios.
+      if (
+        session?.user?.id
+        && session.user.id === resolvedUserId
+        && (event === "SIGNED_IN" || event === "TOKEN_REFRESHED")
+      ) {
         return;
       }
       // Supabase recomienda diferir operaciones asíncronas iniciadas desde este callback.
