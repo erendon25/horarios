@@ -432,7 +432,11 @@ export default function WeeklyScheduleEditor() {
             // Supabase sincroniza los feriados dentro de save_weekly_schedules,
             // en la misma transacción que reemplaza los turnos de cada semana.
 
-            await batch.commit();
+            const confirmation = await batch.commit();
+            const confirmedStaff = Number(confirmation?.savedStaff ?? confirmation?.saved_staff);
+            if (!Number.isInteger(confirmedStaff) || confirmedStaff !== dirtyArray.length) {
+                throw new Error(`Supabase confirmó ${Number.isFinite(confirmedStaff) ? confirmedStaff : 0} de ${dirtyArray.length} colaboradores.`);
+            }
 
             // Limpieza post-guardado exitoso
             setDirtyStaff(new Set());
@@ -444,6 +448,7 @@ export default function WeeklyScheduleEditor() {
         } catch (err) {
             console.error("Error al guardar:", err);
             setSaveStatus('error');
+            alert(`No se confirmó el guardado en Supabase. El borrador local se conserva.\n\n${err.message || 'Intenta nuevamente.'}`);
             setTimeout(() => setSaveStatus('idle'), 3000);
         }
     };
@@ -1639,6 +1644,7 @@ export default function WeeklyScheduleEditor() {
                         {/* Botones de Acción */}
                         <div className="flex flex-wrap gap-3 items-start">
                             <button
+                                type="button"
                                 onClick={saveSchedules}
                                 disabled={saveStatus === 'saving'}
                                 className={`flex items-center gap-2 px-5 py-2.5 rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium ${saveStatus === 'saving'

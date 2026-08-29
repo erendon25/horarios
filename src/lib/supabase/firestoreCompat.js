@@ -819,7 +819,8 @@ export function writeBatch() {
           p_week_start: payloads[0].start,
           p_changes: payloads.map((payload) => payload.change),
         });
-        return throwIfError(result.error);
+        throwIfError(result.error);
+        return result.data;
       }
 
       const allSalesSets = operations.every((operation) => {
