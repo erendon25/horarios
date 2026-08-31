@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     evaluationResponseKeys,
+    evaluationPointCatalog,
     evaluationScoreForKeys,
     missingEvaluationResponses,
 } from './trainingEvaluationValidation.js';
@@ -20,6 +21,18 @@ test('exige cada criterio general, de estación y de conocimiento', () => {
         'SHEETOUT_2',
         'knowledge_18',
     ]);
+});
+
+test('resuelve las claves técnicas al texto y sección visibles', () => {
+    const catalog = evaluationPointCatalog({
+        generalPoints: [{ id: 'appearance', title: 'Presentación', points: [{ id: 1, text: 'Uniforme correcto' }] }],
+        stationCode: 'SHEETOUT',
+        stationTitle: 'Sheetout',
+        stationPoints: [{ id: 14, text: 'Rotación correcta' }],
+    });
+
+    assert.deepEqual(catalog.get('appearance_1'), { section: 'Presentación', text: 'Uniforme correcto' });
+    assert.deepEqual(catalog.get('SHEETOUT_14'), { section: 'Sheetout', text: 'Rotación correcta' });
 });
 
 test('calcula el puntaje contra el catálogo completo y no sólo las respuestas presentes', () => {

@@ -16,3 +16,22 @@ export function evaluationScoreForKeys(responses, expectedKeys) {
     const passed = expectedKeys.filter(key => responses[key] === true).length;
     return Math.round((passed * 100) / expectedKeys.length);
 }
+
+export function evaluationPointCatalog({ generalPoints, stationCode, stationTitle, stationPoints, knowledgePoints = [] }) {
+    const catalog = new Map();
+    generalPoints.forEach(section => {
+        section.points.forEach(point => catalog.set(`${section.id}_${point.id}`, {
+            section: section.title,
+            text: point.text,
+        }));
+    });
+    stationPoints.forEach(point => catalog.set(`${stationCode}_${point.id}`, {
+        section: stationTitle,
+        text: point.text,
+    }));
+    knowledgePoints.forEach(point => catalog.set(`knowledge_${point.id}`, {
+        section: 'Manejo de situaciones',
+        text: point.text,
+    }));
+    return catalog;
+}

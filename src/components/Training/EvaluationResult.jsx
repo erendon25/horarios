@@ -18,36 +18,21 @@ import {
     PRODUCTION_STATIONS
 } from '../../constants/trainingPoints';
 import { isVerifiedTrainingCompletion } from '../../lib/supabase/trainingEvidenceCompat';
+import { evaluationPointCatalog } from '../../lib/supabase/trainingEvaluationValidation';
 
 const EvaluationResult = ({ data, onBackToDashboard, onEdit, canEdit }) => {
-    // Helper to find point text by ID
-    const getPointText = (id) => {
-        const area = data.area || 'service';
-        const isService = area === 'service';
-        const general = isService ? SERVICE_GENERAL_POINTS : PRODUCTION_GENERAL_POINTS;
-        const stations = isService ? SERVICE_STATIONS : PRODUCTION_STATIONS;
-
-        // Search in general points
-        for (const section of general) {
-            const point = section.points.find(p => p.id === Number(id) || p.id === id);
-            if (point) return point.text;
-        }
-
-        // Search in station points
-        const stationKey = data.station;
-        if (stationKey && stations[stationKey]) {
-            const point = stations[stationKey].points.find(p => p.id === Number(id) || p.id === id);
-            if (point) return point.text;
-        }
-
-        // Search in knowledge points
-        if (isService) {
-            const point = KNOWLEDGE_POINTS.find(p => p.id === Number(id) || p.id === id);
-            if (point) return point.text;
-        }
-
-        return `Punto #${id}`;
-    };
+    const area = data.area || 'service';
+    const isService = area === 'service';
+    const general = isService ? SERVICE_GENERAL_POINTS : PRODUCTION_GENERAL_POINTS;
+    const stations = isService ? SERVICE_STATIONS : PRODUCTION_STATIONS;
+    const station = stations[data.station];
+    const pointCatalog = evaluationPointCatalog({
+        generalPoints: general,
+        stationCode: data.station,
+        stationTitle: station?.title || data.stationName || 'Criterio de estación',
+        stationPoints: station?.points || [],
+        knowledgePoints: isService ? KNOWLEDGE_POINTS : [],
+    });
 
     // Score calculation
     const totalPoints = Object.keys(data.responses || {}).length;
@@ -66,7 +51,8 @@ const EvaluationResult = ({ data, onBackToDashboard, onEdit, canEdit }) => {
     const gaps = Object.entries(data.responses || {})
         .filter(([_, value]) => value === false)
         .map(([id]) => {
-            return { id, text: getPointText(id) };
+            const point = pointCatalog.get(id) || { section: 'Criterio no cumplido', text: 'El criterio ya no forma parte del catálogo vigente.' };
+            return { id, ...point };
         });
 
     return (
@@ -167,7 +153,7 @@ const EvaluationResult = ({ data, onBackToDashboard, onEdit, canEdit }) => {
                                 </div>
                                 <div className="flex-1">
                                     <p className="text-sm text-slate-800 font-bold leading-tight mb-2 uppercase tracking-tight">
-                                        Punto #{gap.id}
+                                        {gap.section}
                                     </p>
                                     <p className="text-sm sm:text-base text-slate-900 font-black leading-snug mb-3 break-words">
                                         {gap.text}
