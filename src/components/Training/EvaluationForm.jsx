@@ -34,6 +34,11 @@ import {
     PRODUCTION_STATIONS
 } from '../../constants/trainingPoints';
 import { isStaffActive } from './staffStatus';
+import {
+    evaluationResponseKeys,
+    evaluationScoreForKeys,
+    missingEvaluationResponses
+} from '../../lib/supabase/trainingEvaluationValidation';
 
 const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null }) => {
     const { userData, currentUser } = useAuth();
@@ -53,6 +58,13 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
     const isService = area === 'service';
     const generalPoints = isService ? SERVICE_GENERAL_POINTS : PRODUCTION_GENERAL_POINTS;
     const stations = isService ? SERVICE_STATIONS : PRODUCTION_STATIONS;
+    const stationPoints = selectedStation ? stations[selectedStation]?.points || [] : [];
+    const expectedResponseKeys = selectedStation ? evaluationResponseKeys({
+        generalPoints,
+        stationCode: selectedStation,
+        stationPoints,
+        knowledgePoints: isService ? KNOWLEDGE_POINTS : []
+    }) : [];
 
     useEffect(() => {
         const fetchStaff = async () => {
@@ -109,9 +121,14 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                 throw new Error('Una evaluación completada y firmada es inmutable. Registra una nueva evaluación.');
             }
             // Calculate score
-            const totalPoints = Object.keys(responses).length;
-            const completedPoints = Object.values(responses).filter(v => v === true).length;
-            const score = totalPoints > 0 ? Math.round((completedPoints / totalPoints) * 100) : 0;
+            const missingResponses = missingEvaluationResponses(responses, expectedResponseKeys);
+            if (missingResponses.length > 0) {
+                const stationMissing = missingResponses.some(key => key.startsWith(`${selectedStation}_`));
+                const knowledgeMissing = missingResponses.some(key => key.startsWith('knowledge_'));
+                setStep(stationMissing ? 3 : knowledgeMissing ? 4 : 2);
+                throw new Error(`Faltan ${missingResponses.length} criterios por responder antes de certificar.`);
+            }
+            const score = evaluationScoreForKeys(responses, expectedResponseKeys);
 
             const selectedCollabData = collaborators.find(c => c.id === selectedCollab);
 
@@ -155,7 +172,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
             await onSave(evalId);
         } catch (error) {
             console.error("Error saving evaluation:", error);
-            alert("Error al guardar la evaluación. Por favor intenta de nuevo.");
+            alert(error instanceof Error ? error.message : "Error al guardar la evaluación. Por favor intenta de nuevo.");
         } finally {
             setSaving(false);
         }
@@ -326,7 +343,13 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                                         return (
                                             <button
                                                 key={key}
-                                                onClick={() => setSelectedStation(key)}
+                                                onClick={() => {
+                                                    if (selectedStation !== key) {
+                                                        setSelectedStation(key);
+                                                        setResponses({});
+                                                        setFeedback({});
+                                                    }
+                                                }}
                                                 className={`p-4 sm:p-6 rounded-2xl sm:rounded-[32px] border-2 flex flex-col items-center gap-3 sm:gap-4 transition-all duration-500 relative overflow-hidden group ${isSelected
                                                     ? 'bg-orange-500 border-orange-500 text-white shadow-2xl shadow-orange-500/30 scale-105'
                                                     : isCertified
@@ -511,6 +534,30 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                     )}
                     <button
                         onClick={() => {
+                            if (step === 2) {
+                                const generalKeys = evaluationResponseKeys({ generalPoints, stationCode: selectedStation, stationPoints: [] });
+                                const missing = missingEvaluationResponses(responses, generalKeys);
+                                if (missing.length) {
+                                    alert(`Responde los ${missing.length} criterios generales pendientes para continuar.`);
+                                    return;
+                                }
+                            }
+                            if (step === 3) {
+                                const stationKeys = stationPoints.map(point => `${selectedStation}_${point.id}`);
+                                const missing = missingEvaluationResponses(responses, stationKeys);
+                                if (missing.length) {
+                                    alert(`Responde los ${missing.length} criterios pendientes de ${stations[selectedStation].title}.`);
+                                    return;
+                                }
+                            }
+                            if (step === 4 && isService) {
+                                const knowledgeKeys = KNOWLEDGE_POINTS.map(point => `knowledge_${point.id}`);
+                                const missing = missingEvaluationResponses(responses, knowledgeKeys);
+                                if (missing.length) {
+                                    alert(`Responde los ${missing.length} criterios de manejo de situaciones para continuar.`);
+                                    return;
+                                }
+                            }
                             if (step < 5) setStep(step + 1);
                             else handleSubmit();
                         }}
