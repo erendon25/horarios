@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from "react";
+import useBodyScrollLock from '../hooks/useBodyScrollLock';
+import { getHolidayBalance } from '../utils/holidayBalance';
 import { useNavigate } from "react-router-dom";
 import { getFirestore, collection, query, where, getDocs, doc, getDoc, updateDoc, onSnapshot } from "../lib/supabase/firestoreCompat";
 import { useAuth } from "../contexts/AuthContext";
@@ -45,6 +47,22 @@ const CollaboratorDashboard = () => {
   const [storeName, setStoreName] = useState("");
   const [loading, setLoading] = useState(true);
   const [modalType, setModalType] = useState(null);
+  useBodyScrollLock(Boolean(modalType));
+  const [holidayMovements, setHolidayMovements] = useState(null);
+  const [holidayError, setHolidayError] = useState('');
+  useEffect(() => {
+    if (!perfil?.id || !perfil?.storeId) return;
+    let cancelled = false;
+    setHolidayError('');
+    const db = getFirestore();
+    getDocs(query(collection(db, 'feriados_trabajados'),
+      where('staffId', '==', perfil.id), where('storeId', '==', perfil.storeId)))
+      .then(snapshot => {
+        if (!cancelled) setHolidayMovements(snapshot.docs.map(item => item.data()));
+      })
+      .catch(() => { if (!cancelled) setHolidayError('No se pudo cargar el saldo de feriados.'); });
+    return () => { cancelled = true; };
+  }, [perfil?.id, perfil?.storeId, modalType]);
   const [dailyQuote, setDailyQuote] = useState("");
   const [isEditingBirthday, setIsEditingBirthday] = useState(false);
   const [tempBirthDate, setTempBirthDate] = useState("");
@@ -540,6 +558,16 @@ const CollaboratorDashboard = () => {
           </div>
         )}
 
+        <section className="bg-purple-50 border border-purple-200 rounded-xl p-5 mb-6" aria-label="Saldo de feriados">
+          <h2 className="font-bold text-purple-900">Feriados acumulados</h2>
+          {holidayError ? <p role="alert" className="text-red-700">{holidayError}</p> : holidayMovements === null ? (
+            <p className="text-purple-700">Cargando saldo...</p>
+          ) : (
+            <p className="text-2xl font-bold text-purple-800">{getHolidayBalance(perfil, holidayMovements)} días disponibles</p>
+          )}
+          <p className="text-sm text-purple-700 mt-1">Saldo inicial y feriados ganados, menos los días compensados.</p>
+        </section>
+
         {/* Botones de acción */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           <button
@@ -700,7 +728,7 @@ const CollaboratorDashboard = () => {
 
         {/* Modal mejorado */}
         {modalType && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex justify-center items-start pt-8 pb-8 overflow-y-auto" onClick={closeModal}>
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex justify-center items-start px-3 pt-8 pb-8 overflow-y-auto overscroll-contain" onClick={closeModal}>
             <div
               className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl mx-4 relative animate-fadeIn"
               onClick={e => e.stopPropagation()}

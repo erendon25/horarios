@@ -235,10 +235,10 @@ export default function WeeklyView({ perfilId, storeId }) {
     const totals = calculateTotalHours();
 
     return (
-        <div className="bg-white rounded-xl shadow-lg p-6 mb-6 border border-gray-100">
+        <div className="min-w-0 w-full bg-white rounded-xl shadow-lg p-3 sm:p-6 mb-6 border border-gray-100">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
                 <div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
                         <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
                             <Calendar className="w-5 h-5 text-blue-600" />
                             Mi Horario Semanal
@@ -254,7 +254,7 @@ export default function WeeklyView({ perfilId, storeId }) {
                     <p className="text-sm text-gray-500 mt-1">Revisa tus turnos y posiciones asignadas</p>
                 </div>
 
-                <div className="flex items-center gap-3 bg-white p-1 rounded-lg shadow-sm border border-gray-200">
+                <div className="flex flex-wrap items-center gap-3 bg-white p-1 rounded-lg shadow-sm border border-gray-200">
                     <button
                         onClick={() => {
                             const [y, m, d] = weekStartDate.split('-').map(Number);
@@ -316,8 +316,8 @@ export default function WeeklyView({ perfilId, storeId }) {
                     <p className="text-xs text-gray-400 mt-1">Asegúrate de estar viendo la semana correcta o consulta con tu gerente.</p>
                 </div>
             ) : (
-                <div className="overflow-hidden rounded-xl border border-gray-200">
-                    <table className="w-full text-sm text-left">
+                <div className="w-full overflow-x-auto overscroll-x-contain rounded-xl border border-gray-200" tabIndex={0} role="region" aria-label="Horario semanal, desplaza horizontalmente para ver todas las columnas">
+                    <table className="w-full min-w-[720px] text-sm text-left">
                         <thead className="bg-gradient-to-r from-gray-50 to-gray-100 text-gray-700 font-semibold uppercase text-xs">
                             <tr>
                                 <th className="px-4 py-3">Día</th>

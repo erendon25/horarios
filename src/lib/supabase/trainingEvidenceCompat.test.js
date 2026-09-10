@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildTrainingEvidencePaths,
+  requireTrainingSignatures,
   isVerifiedTrainingCompletion,
   uploadTrainingEvidencePair,
   verifiedTrainingCompletionFromSnapshot,
@@ -10,6 +11,17 @@ import {
 
 const storeId = "11111111-1111-4111-8111-111111111111";
 const evidenceId = "22222222-2222-4222-8222-222222222222";
+
+test("rechaza firmas ausentes, parciales o rutas antiguas antes de guardar", () => {
+  const png = "data:image/png;base64,aGVsbG8=";
+  for (const value of [undefined, null, "", "data:image/png;base64,", "https://example.com/signature.png", `${storeId}/old.png`]) {
+    assert.throws(() => requireTrainingSignatures({ collabSignature: value, trainerSignature: value }), /colaborador y entrenador/);
+    assert.throws(() => requireTrainingSignatures({ collabSignature: png, trainerSignature: value }), /Falta la firma de: entrenador/);
+    assert.throws(() => requireTrainingSignatures({ collabSignature: value, trainerSignature: png }), /Falta la firma de: colaborador/);
+  }
+  const signatures = { collabSignature: png, trainerSignature: png };
+  assert.equal(requireTrainingSignatures(signatures), signatures);
+});
 
 test("construye el par de evidencia con tienda, evaluación y el mismo UUID", () => {
   assert.deepEqual(buildTrainingEvidencePaths(storeId, 37, evidenceId), {

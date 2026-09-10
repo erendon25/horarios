@@ -1,5 +1,7 @@
 // AdminDashboard.jsx
 import React, { useEffect, useState, useMemo, useRef } from "react";
+import useBodyScrollLock from '../hooks/useBodyScrollLock';
+import { getHolidayBalance } from '../utils/holidayBalance';
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import {
@@ -400,6 +402,7 @@ function AdminDashboard() {
     const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
     const [showRequestsModal, setShowRequestsModal] = useState(false);
     const [showHRPanel, setShowHRPanel] = useState(false);
+    useBodyScrollLock(showHRPanel);
     const geoVictoriaInputRef = useRef(null);
     const hrAnalysisInputRef = useRef(null);
     const geoVictoriaExtraInputRef = useRef(null);
@@ -786,7 +789,7 @@ function AdminDashboard() {
                 return {
                     ...currentProfile,
                     study_schedule: studyMap[profile.uid] || {},
-                    feriados: (currentProfile.feriados || 0) + (currentProfile.pendingHolidays?.length || 0),
+                    feriados: getHolidayBalance(currentProfile) + (holidayBalances[profile.id] || 0),
                 };
             });
 
@@ -2468,8 +2471,8 @@ function AdminDashboard() {
 
                 {showHRPanel && (
                     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
-                        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-6xl max-h-[92vh] overflow-hidden flex flex-col">
-                            <div className="px-6 py-5 bg-gradient-to-r from-emerald-700 to-slate-900 text-white flex items-start justify-between gap-4">
+                        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-6xl max-h-[92dvh] min-h-0 overflow-hidden flex flex-col">
+                            <div className="shrink-0 px-4 sm:px-6 py-5 bg-gradient-to-r from-emerald-700 to-slate-900 text-white flex items-start justify-between gap-4">
                                 <div>
                                     <p className="text-xs font-black uppercase tracking-[0.24em] text-emerald-200">Recursos Humanos</p>
                                     <h2 className="text-2xl font-black mt-1">Panel RRHH</h2>
@@ -2486,7 +2489,7 @@ function AdminDashboard() {
                                 </button>
                             </div>
 
-                            <div className="overflow-y-auto p-6 bg-slate-50 space-y-6">
+                            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 sm:p-6 bg-slate-50 space-y-6">
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                     <button
                                         onClick={() => geoVictoriaInputRef.current?.click()}
@@ -3167,6 +3170,7 @@ function AdminDashboard() {
                                                     >
                                                         {`${colab.name} ${colab.lastName}`}
                                                     </span>
+                                                    <button type="button" onClick={() => handleViewHolidays(colab)} className="text-left text-xs font-semibold text-purple-700 hover:underline">Feriados acumulados: {colab.feriados} días</button>
                                                     {colab.isTrainee && (
                                                         <span className="text-xs font-bold text-orange-700 bg-orange-100 border border-orange-300 px-2 py-0.5 rounded-full w-fit flex items-center gap-1">
                                                             🎓 TRAINEE
@@ -3302,6 +3306,7 @@ function AdminDashboard() {
                                             </td>
                                             <td className="px-6 py-4">
                                                 <div className="flex flex-col gap-2">
+                                                    <button type="button" onClick={() => handleViewHolidays(colab)} className="text-left text-xs font-semibold text-purple-700 hover:underline">Feriados acumulados: {colab.feriados} días</button>
                                                     {colab.isTrainee && (
                                                         <button
                                                             onClick={async () => {

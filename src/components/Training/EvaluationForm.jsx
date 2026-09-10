@@ -34,6 +34,7 @@ import {
     PRODUCTION_STATIONS
 } from '../../constants/trainingPoints';
 import { isStaffActive } from './staffStatus';
+import { requireTrainingSignatures } from '../../lib/supabase/trainingEvidenceCompat';
 import {
     evaluationResponseKeys,
     evaluationScoreForKeys,
@@ -115,6 +116,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
     ];
 
     const handleSubmit = async () => {
+        if (saving) return;
         setSaving(true);
         try {
             if (initialData?.status === 'completed') {
@@ -129,6 +131,13 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                 throw new Error(`Faltan ${missingResponses.length} criterios por responder antes de certificar.`);
             }
             const score = evaluationScoreForKeys(responses, expectedResponseKeys);
+
+            const signatures = requireTrainingSignatures({
+                collabSignature: sigPadCollab.current && !sigPadCollab.current.isEmpty()
+                    ? sigPadCollab.current.toDataURL('image/png') : null,
+                trainerSignature: sigPadTrainer.current && !sigPadTrainer.current.isEmpty()
+                    ? sigPadTrainer.current.toDataURL('image/png') : null,
+            });
 
             const selectedCollabData = collaborators.find(c => c.id === selectedCollab);
 
@@ -149,9 +158,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                 status: 'completed',
                 timestamp: serverTimestamp(),
                 date: initialData?.date || new Date().toISOString().split('T')[0],
-                // Simple representation of signatures
-                collabSignature: sigPadCollab.current?.isEmpty() ? (initialData?.collabSignature || null) : sigPadCollab.current.toDataURL(),
-                trainerSignature: sigPadTrainer.current?.isEmpty() ? (initialData?.trainerSignature || null) : sigPadTrainer.current.toDataURL(),
+                ...signatures,
                 isEdited: !!initialData?.id && initialData?.status === 'completed'
             };
 
@@ -475,6 +482,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                                     <div className="bg-white border-2 border-gray-50 rounded-2xl sm:rounded-[40px] overflow-hidden h-44 sm:h-48 shadow-xl shadow-gray-200/50 relative">
                                         <SignatureCanvas
                                             ref={sigPadCollab}
+                                            clearOnResize={false}
                                             penColor="#0F172A"
                                             canvasProps={{ className: 'w-full h-full' }}
                                         />
@@ -487,6 +495,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                                     <div className="bg-white border-2 border-gray-50 rounded-2xl sm:rounded-[40px] overflow-hidden h-44 sm:h-48 shadow-xl shadow-gray-200/50 relative">
                                         <SignatureCanvas
                                             ref={sigPadTrainer}
+                                            clearOnResize={false}
                                             penColor="#0F172A"
                                             canvasProps={{ className: 'w-full h-full' }}
                                         />
@@ -561,7 +570,7 @@ const EvaluationForm = ({ onCancel, onSave, area = 'service', initialData = null
                             if (step < 5) setStep(step + 1);
                             else handleSubmit();
                         }}
-                        disabled={step === 1 && (!selectedCollab || !selectedStation)}
+                        disabled={saving || (step === 1 && (!selectedCollab || !selectedStation))}
                         className={`${step > 1 && step < 5 ? 'col-span-2' : 'col-span-1'} sm:flex-[2] py-3 sm:py-5 px-3 sm:px-8 bg-slate-900 disabled:opacity-30 disabled:grayscale hover:bg-black text-white rounded-xl sm:rounded-[24px] font-black uppercase tracking-[0.08em] sm:tracking-[0.2em] text-[9px] sm:text-[10px] flex items-center justify-center gap-2 sm:gap-4 transition-all shadow-xl sm:shadow-2xl shadow-slate-900/30 active:scale-95 border-b-4 border-slate-700`}
                     >
                         {step === 5 ? (

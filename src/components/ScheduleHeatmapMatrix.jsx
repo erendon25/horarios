@@ -1,5 +1,7 @@
 // ScheduleHeatmapMatrix.jsx - Matriz operativa de 07:00 a 25:00
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import useBodyScrollLock from '../hooks/useBodyScrollLock';
 import { Maximize2, Minimize2 } from 'lucide-react';
 // === AGREGA ESTO ARRIBA DEL COMPONENTE (justo después de los imports) ===
 const weekdayLabels = {
@@ -33,11 +35,20 @@ export const HOURS = Array.from(
 );
 
 const HEATMAP_TABLE_MIN_WIDTH = 120 + HOURS.length * 24;
+const EMPTY_ASSIGNED = [];
+const EMPTY_REQUIREMENTS = {};
 
-export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {} }) {
+export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requirements = EMPTY_REQUIREMENTS }) {
     const [rows, setRows] = useState([]);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const containerRef = useRef(null);
+    useBodyScrollLock(isFullscreen);
+    useEffect(() => {
+        if (!isFullscreen) return;
+        const onKeyDown = (event) => { if (event.key === 'Escape') setIsFullscreen(false); };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [isFullscreen]);
 
 
     // ==== DRAG DRAG BIDIRECCIONAL CON POINTER EVENTS (funciona perfecto aunque el mouse salga del área) ====
@@ -394,7 +405,7 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                         <Maximize2 size={14} />
                     </button>
                 </div>
-                <div className="flex items-center gap-3 text-xs font-medium text-gray-200">
+                <div className="flex flex-wrap items-center gap-3 text-xs font-medium text-gray-200">
                     <span className="flex items-center gap-1 px-2 py-0.5 bg-yellow-500/20 rounded border border-yellow-400/30">
                         <div className="w-3 h-3 bg-yellow-400 rounded"></div>
                         <span className="text-yellow-200">Faltante</span>
@@ -434,7 +445,7 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
 
                     <thead>
                         <tr className="bg-gradient-to-r from-gray-700 to-gray-800 border-b border-gray-600">
-                            <th className="sticky top-0 left-0 z-20 bg-gradient-to-r from-gray-700 to-gray-800 border-r border-gray-500 px-2 py-1.5 text-left font-bold text-white text-xs shadow-lg">
+                            <th className="sticky top-0 left-0 z-40 bg-gradient-to-r from-gray-700 to-gray-800 border-r border-gray-500 px-2 py-1.5 text-left font-bold text-white text-xs shadow-lg">
                                 Posición
                             </th>
                             {HOURS.map((hour, i) => {
@@ -442,7 +453,7 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                                 return (
                                     <th
                                         key={i}
-                                        className="sticky top-0 bg-gradient-to-r from-gray-700 to-gray-800 border border-gray-500 px-0.5 py-1 text-[10px] font-bold text-white text-center shadow-md"
+                                        className="sticky top-0 z-30 bg-gradient-to-r from-gray-700 to-gray-800 border border-gray-500 px-0.5 py-1 text-[10px] font-bold text-white text-center shadow-md"
                                         title={hour}
                                     >
                                         {display}
@@ -475,7 +486,7 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                                     style={{ minHeight: '20px' }}
                                 >
                                     <td
-                                        className={`sticky left-0 z-30 bg-white px-2 py-1 font-semibold text-xs border-r border-gray-300 whitespace-nowrap shadow-sm ${row.isExcess
+                                        className={`sticky left-0 z-20 bg-white px-2 py-1 font-semibold text-xs border-r border-gray-300 whitespace-nowrap shadow-sm ${row.isExcess
                                             ? 'text-red-600 bg-red-50 font-bold border-red-200'
                                             : 'text-gray-800 hover:bg-blue-50'
                                             }`}
@@ -506,13 +517,14 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
             </div>
 
             {/* Modal maximizado mejorado */}
-            {isFullscreen && (
+            {isFullscreen && createPortal(
                 <div
-                    className="fixed inset-0 bg-black/90 backdrop-blur-sm z-[100] flex items-center justify-center p-4"
+                    className="fixed inset-0 bg-black/90 backdrop-blur-sm z-[10000] flex items-center justify-center p-2 sm:p-4"
                     onClick={() => setIsFullscreen(false)}
                 >
                     <div
-                        className="bg-white rounded-2xl shadow-2xl flex flex-col max-w-[96vw] max-h-[92vh] w-full border-2 border-gray-300"
+                        className="bg-white rounded-2xl shadow-2xl flex flex-col max-w-[96vw] h-[92dvh] min-h-0 overflow-hidden w-full border-2 border-gray-300"
+                        role="dialog" aria-modal="true" aria-label="Heatmap de Cobertura"
                         onClick={e => e.stopPropagation()}
                     >
                         {/* Header compacto */}
@@ -530,7 +542,7 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                                     <Minimize2 size={16} />
                                 </button>
                             </div>
-                            <div className="flex items-center gap-4 text-xs font-medium">
+                            <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
                                 <span className="flex items-center gap-1.5 px-2 py-1 bg-yellow-500/20 rounded border border-yellow-400/30">
                                     <div className="w-3 h-3 bg-yellow-400 rounded"></div>
                                     <span className="text-yellow-200">Faltante</span>
@@ -553,8 +565,8 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                             </div>
                         </div>
                         {/* Contenedor con scroll compacto */}
-                        <div className="flex-1 overflow-auto p-2 bg-gray-50">
-                            <table className="table-fixed border-collapse bg-white shadow-inner rounded overflow-hidden" style={{ minWidth: `${HEATMAP_TABLE_MIN_WIDTH}px` }}>
+                        <div className="flex-1 min-h-0 overflow-auto overscroll-contain bg-gray-50">
+                            <table className="table-fixed border-collapse bg-white shadow-inner" style={{ minWidth: `${HEATMAP_TABLE_MIN_WIDTH}px` }}>
                                 <colgroup>
                                     <col style={{ width: '120px' }} />
                                     {HOURS.map((_, i) => (
@@ -563,7 +575,7 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                                 </colgroup>
                                 <thead>
                                     <tr className="bg-gradient-to-r from-gray-700 to-gray-800 border-b border-gray-600">
-                                        <th className="sticky top-0 left-0 z-20 bg-gradient-to-r from-gray-700 to-gray-800 border-r border-gray-500 px-2 py-1.5 text-left font-bold text-white text-xs shadow-lg">
+                                        <th className="sticky top-0 left-0 z-40 bg-gradient-to-r from-gray-700 to-gray-800 border-r border-gray-500 px-2 py-1.5 text-left font-bold text-white text-xs shadow-lg">
                                             Posición
                                         </th>
                                         {HOURS.map((hour, i) => {
@@ -571,7 +583,7 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                                             return (
                                                 <th
                                                     key={i}
-                                                    className="sticky top-0 bg-gradient-to-r from-gray-700 to-gray-800 border border-gray-500 px-0.5 py-1 text-[10px] font-bold text-white text-center shadow-md"
+                                                    className="sticky top-0 z-30 bg-gradient-to-r from-gray-700 to-gray-800 border border-gray-500 px-0.5 py-1 text-[10px] font-bold text-white text-center shadow-md"
                                                     title={hour}
                                                 >
                                                     {display}
@@ -603,7 +615,7 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                                                 style={{ minHeight: '20px' }}
                                             >
                                                 <td
-                                                    className={`sticky left-0 z-30 bg-white px-2 py-1 font-semibold text-xs border-r border-gray-300 whitespace-nowrap shadow-sm ${row.isExcess
+                                                    className={`sticky left-0 z-20 bg-white px-2 py-1 font-semibold text-xs border-r border-gray-300 whitespace-nowrap shadow-sm ${row.isExcess
                                                         ? 'text-red-600 bg-red-50 font-bold border-red-200'
                                                         : 'text-gray-800 hover:bg-blue-50'
                                                         }`}
@@ -633,7 +645,7 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                             </table>
                         </div>
                     </div>
-                </div>
+                </div>, document.body
             )}
         </div>
     );

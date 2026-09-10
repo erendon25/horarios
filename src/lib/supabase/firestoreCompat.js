@@ -1,6 +1,6 @@
 import { supabase } from "./client";
 import { mapSalesHistoryRow, salesConfigurationRpcArgs, salesHistoryDayPayload } from "./salesHistoryCompat";
-import { buildTrainingEvidencePaths, uploadTrainingEvidencePair } from "./trainingEvidenceCompat";
+import { buildTrainingEvidencePaths, uploadTrainingEvidencePair, requireTrainingSignatures } from "./trainingEvidenceCompat";
 import { withCanonicalStaffIdentity } from "./staffProfileCompat";
 
 export const db = Object.freeze({ kind: "supabase-database" });
@@ -587,6 +587,7 @@ async function persist(ref, data, merge) {
     delete prepared.duracion;
   }
   if (root === "training_evaluations" && prepared.status === "completed") {
+    requireTrainingSignatures(prepared);
     const signatureFields = [
       ["collabSignature", "collaborator"],
       ["trainerSignature", "trainer"],

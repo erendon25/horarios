@@ -5,6 +5,17 @@ const SIGNATURE_FIELDS = [
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+export function requireTrainingSignatures(signatures) {
+  const missing = SIGNATURE_FIELDS.filter(([field]) => {
+    const value = signatures?.[field];
+    return typeof value !== "string" || !/^data:image\/png;base64,.+/.test(value);
+  }).map(([, role]) => role === "collaborator" ? "colaborador" : "entrenador");
+  if (missing.length) {
+    throw new Error(`Falta la firma de: ${missing.join(" y ")}. Completa ambas firmas antes de finalizar la evaluación.`);
+  }
+  return signatures;
+}
+
 export function buildTrainingEvidencePaths(storeId, evaluationId, evidenceId = crypto.randomUUID()) {
   if (!UUID_RE.test(String(storeId ?? ""))) throw new Error("La tienda de la evaluación no es válida.");
   if (!/^\d+$/.test(String(evaluationId ?? ""))) throw new Error("El identificador de la evaluación no es válido.");

@@ -2313,7 +2313,7 @@ export default function WeeklyScheduleEditor() {
                                     );
                                 })()}
                             </div>
-                            <div className="h-[calc(100vh-280px)] overflow-auto">
+                            <div className="min-w-0 h-[calc(100dvh-280px)] min-h-[320px] overflow-hidden">
                                 <ScheduleHeatmapMatrix
                                     key={selectedDay}
                                     assigned={assignedArray}
