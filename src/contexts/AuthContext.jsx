@@ -14,6 +14,8 @@ export function AuthProvider({ children }) {
   const [userRole, setUserRole] = useState(null);
   const [loading, setLoading] = useState(true);
   const [userData, setUserData] = useState(null);
+  const [needsStaffLink, setNeedsStaffLink] = useState(false);
+  const [accessVersion, setAccessVersion] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -24,49 +26,53 @@ export function AuthProvider({ children }) {
         setCurrentUser(null);
         setUserRole(null);
         setUserData(null);
+        setNeedsStaffLink(false);
         setLoading(false);
         return;
       }
 
       setCurrentUser(compatibleUser(user));
-      let { data: profile, error } = await supabase
+      const fetchProfile = () => supabase
         .from("user_profiles")
         .select("id,email,first_name,last_name,role,status,store_id,staff_profile_id,registration_pending,staff_profiles(cessation_date)")
         .eq("id", user.id)
         .maybeSingle();
 
-      if (!profile && user.email) {
-        const link = await supabase.functions.invoke("staff-account-admin", {
-          body: { operation: "register_staff_by_email" },
-        });
-        if (!link.error) {
-          const retry = await supabase
-            .from("user_profiles")
-            .select("id,email,first_name,last_name,role,status,store_id,staff_profile_id,registration_pending,staff_profiles(cessation_date)")
-            .eq("id", user.id)
-            .maybeSingle();
-          profile = retry.data;
-          error = retry.error;
-        }
-      }
-
-      if (!active) return;
-      const cessationDate = profile?.staff_profiles?.cessation_date;
+      let { data: profile, error } = await fetchProfile();
       const today = new Intl.DateTimeFormat("en-CA", {
         timeZone: "America/Lima",
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
       }).format(new Date());
+      if (!active) return;
+      const cessationDate = profile?.staff_profiles?.cessation_date;
 
-      if (error || !profile || profile.status !== "active" || (cessationDate && today > cessationDate)) {
+      if (error) {
         await supabase.auth.signOut();
         setCurrentUser(null);
         setUserRole(null);
         setUserData(null);
-        if (cessationDate && today > cessationDate) {
-          alert("Tu acceso ha sido revocado debido al cese de actividades.");
-        }
+        setNeedsStaffLink(false);
+        setLoading(false);
+        return;
+      }
+
+      const requiresStaffSelection = !profile
+        || profile.status !== "active"
+        || Boolean(cessationDate && today > cessationDate);
+      if (requiresStaffSelection) {
+        // La cuenta Auth permanece iniciada para que un alta nueva o un
+        // reingreso pueda elegir tienda y perfil laboral libre. El servidor
+        // valida disponibilidad y DNI antes de mover cualquier vínculo.
+        setUserRole(null);
+        setUserData({
+          id: user.id,
+          uid: user.id,
+          email: user.email,
+          registrationPending: true,
+        });
+        setNeedsStaffLink(true);
         setLoading(false);
         return;
       }
@@ -85,6 +91,7 @@ export function AuthProvider({ children }) {
       };
       setUserRole(profile.role);
       setUserData(legacyShape);
+      setNeedsStaffLink(false);
       setLoading(false);
     };
 
@@ -97,7 +104,12 @@ export function AuthProvider({ children }) {
       active = false;
       listener.subscription.unsubscribe();
     };
-  }, []);
+  }, [accessVersion]);
+
+  const refreshAccess = async () => {
+    setLoading(true);
+    setAccessVersion((version) => version + 1);
+  };
 
   const login = async (email, password) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
@@ -129,7 +141,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ currentUser, userRole, userData, login, logout, register, resetPassword, updatePassword }}>
+    <AuthContext.Provider value={{ currentUser, userRole, userData, needsStaffLink, refreshAccess, login, logout, register, resetPassword, updatePassword }}>
       {!loading && children}
     </AuthContext.Provider>
   );

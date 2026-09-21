@@ -245,6 +245,7 @@ export type Database = {
           sales_date: string
           source_data: Json
           store_id: string
+          suggestive_products: Json
           transactions: number | null
           updated_at: string
         }
@@ -257,6 +258,7 @@ export type Database = {
           sales_date: string
           source_data?: Json
           store_id: string
+          suggestive_products?: Json
           transactions?: number | null
           updated_at?: string
         }
@@ -269,6 +271,7 @@ export type Database = {
           sales_date?: string
           source_data?: Json
           store_id?: string
+          suggestive_products?: Json
           transactions?: number | null
           updated_at?: string
         }

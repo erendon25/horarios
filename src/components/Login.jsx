@@ -12,7 +12,7 @@ function Login() {
     const [submitted, setSubmitted] = useState(false);
     const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
-    const { login, currentUser, userRole, resetPassword } = useAuth();
+    const { login, currentUser, userRole, needsStaffLink, resetPassword } = useAuth();
 
 
     const handleSubmit = async (e) => {
@@ -51,6 +51,10 @@ function Login() {
 
     useEffect(() => {
         if (submitted && currentUser) {
+            if (needsStaffLink) {
+                navigate('/register');
+                return;
+            }
             if (!userRole) return; // Espera a que se cargue el rol
 
             switch (userRole) {
@@ -69,7 +73,7 @@ function Login() {
                     break;
             }
         }
-    }, [submitted, currentUser, userRole, navigate]);
+    }, [submitted, currentUser, userRole, needsStaffLink, navigate]);
 
 
 
@@ -135,5 +139,4 @@ function Login() {
 }
 
 export default Login;
-
 

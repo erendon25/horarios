@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { getFirestore, collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp, getDocs } from '../lib/supabase/firestoreCompat';
+import { getFirestore, collection, query, where, onSnapshot, getDocs } from '../lib/supabase/firestoreCompat';
 import { useAuth } from '../contexts/AuthContext';
+import { supabase } from '../lib/supabase/client';
 import { Check, X, Clock, Calendar, MessageSquare, User, Filter, AlertCircle } from 'lucide-react';
 
 const timestampToMillis = (value) => {
@@ -9,6 +10,29 @@ const timestampToMillis = (value) => {
     const parsed = new Date(value).getTime();
     return Number.isFinite(parsed) ? parsed : 0;
 };
+
+const formatRequestCreatedAt = (value) => {
+    const millis = timestampToMillis(value);
+    if (!millis) return 'Fecha de envío no disponible';
+    return new Intl.DateTimeFormat('es-PE', {
+        timeZone: 'America/Lima',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+    }).format(new Date(millis));
+};
+
+const ACTION_TIMEOUT_MS = 15_000;
+
+const withTimeout = (promise, timeoutMs, message) => Promise.race([
+    promise,
+    new Promise((_, reject) => {
+        window.setTimeout(() => reject(new Error(message)), timeoutMs);
+    }),
+]);
 
 const ScheduleRequestsManager = ({ storeId }) => {
     const { currentUser } = useAuth();
@@ -79,15 +103,49 @@ const ScheduleRequestsManager = ({ storeId }) => {
     }, [storeId]);
 
     const handleAction = async (requestId, status) => {
-        const db = getFirestore();
         const reviewerId = currentUser?.id ?? currentUser?.uid ?? null;
         setActionBusyId(requestId);
         try {
-            await updateDoc(doc(db, 'schedule_requests', requestId), {
-                status,
-                reviewedBy: reviewerId,
-                reviewedAt: serverTimestamp()
-            });
+            // Las solicitudes tienen un id numérico en Supabase. Actualizarlas de
+            // forma directa evita que la capa de compatibilidad vuelva a guardar
+            // todo el documento (incluidos campos de FK) al aprobar una solicitud.
+            const numericRequestId = Number(requestId);
+            if (!Number.isSafeInteger(numericRequestId)) {
+                throw new Error('La solicitud no tiene un identificador válido. Recarga la página e inténtalo de nuevo.');
+            }
+
+            const update = supabase
+                .from('schedule_requests')
+                .update({
+                    status,
+                    reviewed_by: reviewerId,
+                    reviewed_at: new Date().toISOString(),
+                })
+                // Evita sobreescribir una decisión tomada simultáneamente por otro administrador.
+                .eq('id', numericRequestId)
+                .eq('status', 'pending')
+                .select('id, status')
+                .maybeSingle();
+
+            const { data, error } = await withTimeout(
+                update,
+                ACTION_TIMEOUT_MS,
+                'La aprobación tardó demasiado. Verifica el estado de la solicitud antes de volver a intentarlo.',
+            );
+            if (error) throw error;
+            if (!data) {
+                throw new Error('La solicitud ya fue procesada o no tienes permiso para actualizarla. Recarga la lista para ver su estado actual.');
+            }
+
+            // El listener en tiempo real debería hacer este cambio; lo actualizamos
+            // también en memoria para que la solicitud pase de pestaña de inmediato
+            // aun cuando Realtime esté desconectado.
+            const reviewedAt = new Date().toISOString();
+            setRequests((current) => current.map((request) => (
+                request.id === String(requestId)
+                    ? { ...request, status: data.status, reviewedBy: reviewerId, reviewedAt }
+                    : request
+            )));
         } catch (error) {
             console.error(`Error updating request to ${status}:`, error);
             alert(`Error al actualizar la solicitud: ${error?.message || error}`);
@@ -189,6 +247,10 @@ const ScheduleRequestsManager = ({ storeId }) => {
                                     <div>
                                         <p className="font-bold text-gray-800">{staffMap[req.staffId] || 'Cargando...'}</p>
                                         <p className="text-xs text-gray-400 font-medium uppercase tracking-wider">Solicitud de Horario</p>
+                                        <p className="text-[11px] text-gray-500 font-medium mt-1 flex items-center gap-1">
+                                            <Clock className="w-3 h-3" />
+                                            Enviada: {formatRequestCreatedAt(req.createdAt)}
+                                        </p>
                                     </div>
                                 </div>
                                 <div className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase ${req.status === 'pending' ? 'bg-orange-100 text-orange-600' : req.status === 'approved' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>

@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { getFirestore, collection, addDoc, serverTimestamp } from '../lib/supabase/firestoreCompat';
+import { getFirestore, collection, addDoc } from '../lib/supabase/firestoreCompat';
 import { useAuth } from '../contexts/AuthContext';
 import { Clock, Calendar, MessageSquare, Send, X, AlertCircle } from 'lucide-react';
 
-const ScheduleRequestForm = ({ perfil, onSuccess }) => {
+const ScheduleRequestForm = ({ perfil, onSuccess, locked = false }) => {
     const { currentUser } = useAuth();
     const [loading, setLoading] = useState(false);
     const [formData, setFormData] = useState({
@@ -21,6 +21,11 @@ const ScheduleRequestForm = ({ perfil, onSuccess }) => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (loading) return;
+        if (locked) {
+            alert('La administración bloqueó temporalmente las solicitudes de horario.');
+            return;
+        }
         if (!formData.date || !formData.reason) {
             alert('Por favor completa los campos obligatorios (fecha y motivo).');
             return;
@@ -39,8 +44,7 @@ const ScheduleRequestForm = ({ perfil, onSuccess }) => {
                 startTime: formData.shiftType === 'rango' ? formData.startTime : null,
                 endTime: formData.shiftType === 'rango' ? formData.endTime : null,
                 reason: formData.reason,
-                status: 'pending',
-                createdAt: serverTimestamp()
+                status: 'pending'
             });
 
             alert('Solicitud enviada correctamente.');
@@ -146,7 +150,7 @@ const ScheduleRequestForm = ({ perfil, onSuccess }) => {
 
             <button
                 type="submit"
-                disabled={loading}
+                disabled={loading || locked}
                 className="w-full bg-gradient-to-r from-blue-600 to-blue-700 text-white py-4 rounded-xl font-bold shadow-lg hover:shadow-xl transform hover:scale-[1.02] transition-all duration-200 disabled:opacity-50 disabled:transform-none flex items-center justify-center gap-2"
             >
                 {loading ? (
@@ -154,7 +158,7 @@ const ScheduleRequestForm = ({ perfil, onSuccess }) => {
                 ) : (
                     <>
                         <Send className="w-5 h-5" />
-                        Enviar Solicitud
+                        {locked ? 'Cambios bloqueados' : 'Enviar Solicitud'}
                     </>
                 )}
             </button>

@@ -3,9 +3,13 @@ import React, { useEffect, useState, useRef } from 'react';
 import { getFirestore, writeBatch, doc, getDoc, setDoc, collection, query, where, onSnapshot, getDocs } from '../lib/supabase/firestoreCompat';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useScheduleDraft } from '../hooks/useScheduleDraft';
 import ScheduleHeatmapMatrix from './ScheduleHeatmapMatrix';
+import WeeklyScheduleExcelButton from './WeeklyScheduleExcelButton';
+import { getHeatmapAssignments, getProjectionForDay } from '../services/scheduleExportData';
 import { exportSchedulePDF, exportGroupedPositionsPDF, exportExtraHoursReport } from './PDFExport';
 import { exportGeoVictoriaExcel } from "../services/GeoVictoriaExport";
+import { calculateScheduleTotals, formatScheduleMinutes } from '../services/scheduleHours';
 import { FaInfoCircle, FaExclamationTriangle, FaExclamationCircle } from 'react-icons/fa';
 import {
     Calendar,
@@ -112,7 +116,6 @@ export default function WeeklyScheduleEditor() {
     const [staff, setStaff] = useState([]);
     const [positions, setPositions] = useState([]);
     const [projectionPositions, setProjectionPositions] = useState([]);
-    const [allSchedules, setAllSchedules] = useState({});
     const [requirements, setRequirements] = useState({});
     const [selectedDay, setSelectedDay] = useState('monday');
     const [weekStartDate, setWeekStartDate] = useState('');
@@ -131,11 +134,11 @@ export default function WeeklyScheduleEditor() {
     const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'success' | 'error'
     const [storeId, setStoreId] = useState('');
     const [approvedRequests, setApprovedRequests] = useState([]);
+    const [approvedRequestsError, setApprovedRequestsError] = useState('');
     const [showApprovedRequestsModal, setShowApprovedRequestsModal] = useState(false);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
-    const [dirtyStaff, setDirtyStaff] = useState(new Set());
-    const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+    const [scheduleReload, setScheduleReload] = useState(0);
     const [aptitudeFilter, setAptitudeFilter] = useState('Todos'); // 'Todos', 'Certificados', 'En Proceso', 'No Capacitados'
     const [showExportModal, setShowExportModal] = useState(false);
     const [exportOptions, setExportOptions] = useState({
@@ -150,37 +153,16 @@ export default function WeeklyScheduleEditor() {
     const [highlightedStaffId, setHighlightedStaffId] = useState(null);
 
     const wk = getWeekKey(weekStartDate);
-    const schedules = wk ? allSchedules[wk] || {} : {};
-
-    // === PERSISTENCIA LOCAL STORAGE (Evitar pérdidas y llamadas innecesarias) ===
-    useEffect(() => {
-        if (!wk) return;
-        const saved = localStorage.getItem(`draft_schedule_${wk}`);
-        if (saved) {
-            try {
-                const parsed = JSON.parse(saved);
-                setAllSchedules(prev => ({ ...prev, [wk]: parsed }));
-            } catch (e) {
-                console.error("Error cargando borrador local");
-            }
-        }
-    }, [wk]);
-
-    useEffect(() => {
-        if (!wk || Object.keys(schedules).length === 0) return;
-        // Guardar borrador localmente cada vez que cambie algo
-        const timer = setTimeout(() => {
-            localStorage.setItem(`draft_schedule_${wk}`, JSON.stringify(schedules));
-        }, 1000);
-        return () => clearTimeout(timer);
-    }, [schedules, wk]);
+    const { currentUser, userRole } = useAuth();
+    const draft = useScheduleDraft(currentUser?.uid || '', storeId, wk);
+    const { schedules, dirtyStaff, controller: draftController } = draft;
+    const hasUnsavedChanges = dirtyStaff.size > 0;
 
     const tooltipRef = useRef(null);
     const iconRefs = useRef({});
     const staffRowRefs = useRef({});
     const db = getFirestore();
     const navigate = useNavigate();
-    const { currentUser, userRole } = useAuth();
     const getSelectedDateStr = () => {
         if (!weekStartDate || !selectedDay) return null;
         const [y, m, d] = weekStartDate.split('-').map(Number);
@@ -264,38 +246,21 @@ export default function WeeklyScheduleEditor() {
         setWeekStartDate(`${y}-${m}-${d}`);
     }, []);
 
+    // Volver a la semana en edición, no saltar a la actual tras actualizar.
+    useEffect(() => {
+        if (!currentUser?.uid || !storeId) return;
+        try {
+            const selectedWeek = localStorage.getItem(`schedule_editor_week:${currentUser.uid}:${storeId}`);
+            if (/^\d{4}-\d{2}-\d{2}$/.test(selectedWeek || '') && new Date(`${selectedWeek}T12:00:00`).getDay() === 1) {
+                setWeekStartDate(selectedWeek);
+            }
+        } catch { /* Draft persistence displays storage errors separately. */ }
+    }, [currentUser?.uid, storeId]);
+
     // === VALIDACIÓN TEMPRANA ===
     const isUnauthenticated = !currentUser;
     // Posiciones del día seleccionado (para el selector y el filtro)
-    const getProjectionRequirementsForDay = (day) => {
-        const projectionRequirements = requirements[day] || { positions: [], matrix: [] };
-        const projectionNames = projectionPositions
-            .map(position => (typeof position === 'string' ? position : position?.name))
-            .filter(Boolean);
-        const dayPositions = Array.isArray(projectionRequirements.positions) && projectionRequirements.positions.length > 0
-            ? projectionRequirements.positions
-            : projectionNames;
-        const rawMatrix = projectionRequirements.matrix || [];
-        const normalizedMatrix = (Array.isArray(rawMatrix)
-            ? rawMatrix
-            : Object.keys(rawMatrix)
-                .sort((a, b) => Number(a) - Number(b))
-                .map(k => rawMatrix[k])
-        ).map(row => (
-            Array.isArray(row)
-                ? row
-                : Object.keys(row || {})
-                    .sort((a, b) => Number(a) - Number(b))
-                    .map(k => row[k])
-        ));
-
-        return {
-            positions: dayPositions,
-            matrix: dayPositions.map((_, index) => (
-                Array.isArray(normalizedMatrix[index]) ? normalizedMatrix[index] : Array(21).fill(0)
-            ))
-        };
-    };
+    const getProjectionRequirementsForDay = (day) => getProjectionForDay(requirements, projectionPositions, day);
 
     useEffect(() => {
         setPositions(getProjectionRequirementsForDay(selectedDay).positions);
@@ -326,7 +291,11 @@ export default function WeeklyScheduleEditor() {
 
     // === CARGA SOLICITUDES APROBADAS ===
     useEffect(() => {
-        if (!storeId || !wk) return;
+        if (!storeId || !wk) {
+            setApprovedRequests([]);
+            setApprovedRequestsError('');
+            return;
+        }
 
         const db = getFirestore();
         const startStr = wk.split('_to_')[0];
@@ -340,28 +309,37 @@ export default function WeeklyScheduleEditor() {
             where('date', '<=', endStr)
         );
 
+        setApprovedRequestsError('');
         const unsub = onSnapshot(q, (snap) => {
-            const reqs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            const reqs = snap.docs
+                .map(doc => ({ id: doc.id, ...doc.data() }))
+                .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
             setApprovedRequests(reqs);
+        }, (error) => {
+            console.error('Error cargando solicitudes aprobadas:', error);
+            setApprovedRequests([]);
+            setApprovedRequestsError('No se pudieron cargar las solicitudes aprobadas de esta semana.');
         });
 
         return () => unsub();
     }, [storeId, wk]);
 
     const saveSchedules = async () => {
+        if (saveStatus === 'saving' || !draft.ready) return;
         if (dirtyStaff.size === 0) {
             alert("No hay cambios pendientes para guardar.");
             return;
         }
 
         setSaveStatus('saving');
+        const savedDraft = draftController.beginSave();
         try {
             const batch = writeBatch(db);
-            const dirtyArray = Array.from(dirtyStaff);
+            const dirtyArray = Object.keys(savedDraft.schedules);
 
             // 1. Guardar SOLO Horarios modificados
             for (const staffId of dirtyArray) {
-                const schedule = schedules[staffId];
+                const schedule = savedDraft.schedules[staffId];
                 if (!schedule) continue;
 
                 const ref = doc(db, 'schedules', `${staffId}_${wk}`);
@@ -378,17 +356,13 @@ export default function WeeklyScheduleEditor() {
 
             await batch.commit();
 
-            // Limpieza post-guardado exitoso
-            setDirtyStaff(new Set());
-            setHasUnsavedChanges(false);
-            localStorage.removeItem(`draft_schedule_${wk}`); // Limpiar borrador local al sincronizar
+            // Confirmar solo la versión enviada; conservar ediciones posteriores.
+            draftController.acknowledgeSave(savedDraft);
 
             setSaveStatus('success');
-            setTimeout(() => setSaveStatus('idle'), 3000);
         } catch (err) {
             console.error("Error al guardar:", err);
             setSaveStatus('error');
-            setTimeout(() => setSaveStatus('idle'), 3000);
         }
     };
 
@@ -543,20 +517,11 @@ export default function WeeklyScheduleEditor() {
             updates = { ...current, off: false };
         }
 
-        setDirtyStaff(prev => new Set(prev).add(staffId));
-        setHasUnsavedChanges(true);
-
-        setAllSchedules(prev => ({
+        draftController.edit(prev => ({
             ...prev,
-            [wk]: {
-                ...prev[wk],
-                [staffId]: {
-                    ...prev[wk]?.[staffId],
-                    [selectedDay]: {
-                        ...prev[wk]?.[staffId]?.[selectedDay],
-                        ...updates
-                    }
-                }
+            [staffId]: {
+                ...prev[staffId],
+                [selectedDay]: { ...prev[staffId]?.[selectedDay], ...updates }
             }
         }));
     };
@@ -660,6 +625,32 @@ export default function WeeklyScheduleEditor() {
         ].join('-');
     };
 
+    const getApprovedRequestsForStaffDay = (staffId, day) => {
+        const date = getDateStrForDay(day);
+        if (!staffId || !date) return [];
+        return approvedRequests.filter(request => request.staffId === staffId && request.date === date);
+    };
+
+    const formatApprovedRequestShift = (request) => {
+        const labels = {
+            apertura: 'Apertura',
+            medio: 'Medio',
+            cierre: 'Cierre',
+            rango: 'Rango'
+        };
+        const label = labels[request?.shiftType] || request?.shiftType || 'Horario';
+        if (request?.shiftType !== 'rango') return label;
+        return `${label} ${String(request.startTime || '').slice(0, 5)}–${String(request.endTime || '').slice(0, 5)}`;
+    };
+
+    const rangeRequestConflictsWithShift = (request, shift) => {
+        if (request?.shiftType !== 'rango' || !shift?.start || !shift?.end || shift.off || shift.feriado) {
+            return false;
+        }
+        return String(request.startTime || '').slice(0, 5) !== String(shift.start).slice(0, 5)
+            || String(request.endTime || '').slice(0, 5) !== String(shift.end).slice(0, 5);
+    };
+
     // Función para calcular horas semanales
     const calculateWeeklyHours = (staffId) => {
         // Asegurarnos de tener los datos necesarios
@@ -670,32 +661,13 @@ export default function WeeklyScheduleEditor() {
         const person = staff.find(p => p.id === staffId);
         if (!person) return { total: 0, formatted: '0:00' };
 
-        let totalMinutes = 0;
-
-        weekdays.forEach(day => {
-            const daySchedule = schedules[staffId][day];
-
-            // Si no hay horario o es día libre, saltar
-            if (!daySchedule || daySchedule.off) return;
-            if (!daySchedule.start || !daySchedule.end) return;
-
-            const dateStr = getDateStrForDay(day);
-            const effModality = getEffectiveModality(person, dateStr);
-            const isFullTime = (effModality || '').toLowerCase() === 'full-time';
-
-            let baseMinutes = getShiftBaseMinutes(daySchedule);
-
-            // Descuento Break (Solo Full Time)
-            if (isFullTime && !daySchedule.splitShift) {
-                baseMinutes = Math.max(0, baseMinutes - 45);
-            }
-
-            totalMinutes += baseMinutes;
-        });
+        const totals = calculateScheduleTotals(schedules[staffId], person, wk);
+        // El editor muestra la base sin extras; los feriados acreditados se conservan.
+        const totalMinutes = totals.baseMinutes + totals.holidayMinutes;
 
         return {
             total: totalMinutes,
-            formatted: formatMinutesToHours(totalMinutes)
+            formatted: formatScheduleMinutes(totalMinutes)
         };
     };
 
@@ -871,10 +843,7 @@ export default function WeeklyScheduleEditor() {
             }
         }
 
-        setAllSchedules(prev => ({
-            ...prev,
-            [wk]: newSchedules
-        }));
+        draftController.edit(() => newSchedules);
     }
 
     const handleReplicate = () => {
@@ -915,40 +884,26 @@ export default function WeeklyScheduleEditor() {
             return nextSchedule;
         };
 
-        setAllSchedules(prev => {
-            const currentWeekSchedules = { ...prev[wk] } || {};
-            const newDirty = new Set(dirtyStaff);
+        draftController.edit(prev => {
+            const currentWeekSchedules = { ...prev };
 
             replicateTargetStaff.forEach(staffId => {
                 const prevPersonSchedule = prevWeekSchedules[staffId] || {};
-                let staffChanged = false;
-                
-                if (!currentWeekSchedules[staffId]) {
-                    currentWeekSchedules[staffId] = {};
-                }
+                currentWeekSchedules[staffId] = { ...currentWeekSchedules[staffId] };
 
                 replicateTargetDays.forEach(day => {
                     const sourceDaySchedule = prevPersonSchedule[day];
                     const currentDaySchedule = currentWeekSchedules[staffId][day];
                     if (sourceDaySchedule && !hasScheduleContent(currentDaySchedule)) {
                         currentWeekSchedules[staffId][day] = sanitizeReplicatedSchedule(sourceDaySchedule, day);
-                        staffChanged = true;
                     } else {
                         // Si no hay horario la semana pasada para ese día, podemos optar por no hacer nada o limpiar
                         // Según la petición, "replica el mismo horario", si no hay, no se replica.
                     }
                 });
-                if (staffChanged) newDirty.add(staffId);
             });
-
-            setDirtyStaff(newDirty);
-            return {
-                ...prev,
-                [wk]: currentWeekSchedules
-            };
+            return currentWeekSchedules;
         });
-
-        setHasUnsavedChanges(true);
         setShowReplicateModal(false);
         setReplicateTargetStaff([]);
         setReplicateTargetDays([]);
@@ -1062,6 +1017,8 @@ export default function WeeklyScheduleEditor() {
     // La consulta optimizada se usa solo para complementar los resultados.
     useEffect(() => {
         if (!wk || !storeId || staff.length === 0) return;
+        let cancelled = false;
+        setPrevWeekSchedules({});
 
         const loadAllSchedules = async () => {
             console.log('[Horarios] Iniciando carga → wk:', wk, '| storeId:', storeId, '| staff:', staff.length);
@@ -1070,14 +1027,16 @@ export default function WeeklyScheduleEditor() {
 
             const allStaffIds = staff.map(person => person.id);
             const activeStaffIds = new Set(allStaffIds);
+            let completeLoad = false;
 
             // --- Paso 1: Fetch por ID directo (funciona siempre, sin índice) ---
             try {
                 console.log('[Horarios] Staff IDs en tienda:', allStaffIds.length);
-                await Promise.all(allStaffIds.map(async (sId) => {
+                const results = await Promise.allSettled(allStaffIds.map(async (sId) => {
                     const dSnap = await getDoc(doc(db, 'schedules', `${sId}_${wk}`));
                     if (dSnap.exists()) merged[sId] = dSnap.data();
                 }));
+                completeLoad = results.every(result => result.status === 'fulfilled');
                 console.log('[Horarios] Por ID directo:', Object.keys(merged).length, 'horarios cargados');
             } catch (err) {
                 console.error('[Horarios] Error en carga por ID:', err);
@@ -1096,12 +1055,18 @@ export default function WeeklyScheduleEditor() {
                     const sId = docSnap.id.split('_')[0];
                     if (activeStaffIds.has(sId) && !merged[sId]) merged[sId] = docSnap.data();
                 });
+                completeLoad = true;
             } catch (err) {
                 console.warn('[Horarios] Consulta optimizada omitida (sin índice):', err.message);
             }
 
             console.log('[Horarios] Total final:', Object.keys(merged).length, 'horarios');
-            setAllSchedules(prev => ({ ...prev, [wk]: merged }));
+            if (cancelled) return;
+            if (!completeLoad) {
+                draftController.failLoad();
+                return;
+            }
+            draftController.hydrate(merged, allStaffIds);
 
             // --- Paso 3: Cargar semana anterior si es necesario ---
             const [y, m, d] = weekStartDate.split('-').map(Number);
@@ -1117,7 +1082,7 @@ export default function WeeklyScheduleEditor() {
                         const dSnap = await getDoc(doc(db, 'schedules', `${sId}_${prevWk}`));
                         if (dSnap.exists()) prevMerged[sId] = dSnap.data();
                     }));
-                    setPrevWeekSchedules(prevMerged);
+                    if (!cancelled) setPrevWeekSchedules(prevMerged);
                 } catch (err) {
                     console.error('[Horarios] Error cargando semana anterior:', err);
                 }
@@ -1125,7 +1090,8 @@ export default function WeeklyScheduleEditor() {
         };
 
         loadAllSchedules();
-    }, [wk, staff, storeId, db, weekStartDate]);
+        return () => { cancelled = true; };
+    }, [wk, staff, storeId, db, weekStartDate, draftController, scheduleReload]);
 
 
 
@@ -1266,71 +1232,7 @@ export default function WeeklyScheduleEditor() {
     const getSelectablePosition = (position) =>
         selectablePositionsByNorm.get(normalizePosition(position)) || '';
 
-    const assignedArray = filteredStaff
-        .flatMap(p => {
-            const d = schedules[p.id]?.[selectedDay];
-            // Si no hay datos, o faltan start/end esenciales, retornar vacío se filtrará luego
-            if (!d || !d.start || !d.end) return [];
-            const selectedPosition = getSelectablePosition(d.position);
-            if (!selectedPosition) return [];
-
-            let realStart = d.start;
-            let realEnd = d.end;
-
-            // 1. Extender inicio si hay HE Antes
-            //    Si entra a las 9:00 y tiene 1h HE pre, en el heatmap debe verse desde las 8:00
-            if (d.extraHoursPre && !isNaN(d.extraHoursPre) && Number(d.extraHoursPre) > 0) {
-                const [h, m] = realStart.split(':').map(Number);
-                const extraMins = Number(d.extraHoursPre) * 60;
-                const baseMins = h * 60 + m;
-                let newMins = baseMins - extraMins;
-
-                // Evitar tiempos negativos si se pasa del día anterior (00:00 como tope visual simple)
-                if (newMins < 0) newMins = 0;
-
-                const finalH = Math.floor(newMins / 60);
-                const finalM = newMins % 60;
-                realStart = `${String(finalH).padStart(2, '0')}:${String(finalM).padStart(2, '0')}`;
-            }
-
-            // 2. Extender final si hay HE Después
-            const hePost = d.extraHoursPost || d.extraHours;
-            if (hePost && !isNaN(hePost) && Number(hePost) > 0) {
-                const [h, m] = realEnd.split(':').map(Number);
-                const extraMins = Number(hePost) * 60;
-                const baseMins = h * 60 + m; // Hora de salida normal
-
-                // Casos de turno nocturno: si termina a las 02:00, son 26 horas desde el día anterior para calculo lineal
-                // Pero aquí asumimos simple extensión. Si start > end, ya cruzó medianoche.
-                // Para el heatmap visual simple, solo extendemos la hora final.
-
-                const newMins = baseMins + extraMins;
-                const finalH = Math.floor(newMins / 60) % 24;
-                const finalM = newMins % 60;
-                realEnd = `${String(finalH).padStart(2, '0')}:${String(finalM).padStart(2, '0')}`;
-            }
-
-            const realShift = getShiftWithExtras(d);
-
-            const assignments = [{
-                position: selectedPosition,
-                start: realShift?.start || realStart,
-                end: realShift?.end || realEnd,
-                isTrainer: p.position === 'ENTRENADOR'
-            }];
-
-            if (d.splitShift && d.start2 && d.end2) {
-                assignments.push({
-                    position: selectedPosition,
-                    start: d.start2,
-                    end: d.end2,
-                    isTrainer: p.position === 'ENTRENADOR'
-                });
-            }
-
-            return assignments;
-        })
-        .filter(x => x.position && x.start && x.end);
+    const assignedArray = getHeatmapAssignments(filteredStaff, schedules, selectedDay, safeRequirements.positions, getSelectedDateStr());
 
     if (isUnauthenticated) return <p className="text-center py-8">Inicia sesión</p>;
     const getWeeklyStudyConflicts = () => {
@@ -1422,7 +1324,7 @@ export default function WeeklyScheduleEditor() {
                             </h1>
                             {isValidDate && wk && (
                                 <p className="text-sm text-gray-600 mt-1">
-                                    Semana: {new Date(weekStartDate).toLocaleDateString('es-ES', {
+                                    Semana: {new Date(`${weekStartDate}T12:00:00`).toLocaleDateString('es-ES', {
                                         day: 'numeric',
                                         month: 'long',
                                         year: 'numeric'
@@ -1459,6 +1361,41 @@ export default function WeeklyScheduleEditor() {
 
             <div className="max-w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
 
+                {wk && (
+                    <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-950" role="status">
+                        <p className="font-semibold">
+                            {hasUnsavedChanges
+                                ? draft.persistenceError ? 'Borrador pendiente de proteger' : draft.recovered ? 'Borrador recuperado en este navegador' : 'Borrador protegido en este navegador'
+                                : 'Sin cambios pendientes de sincronizar'}
+                        </p>
+                        <p>Los borradores se conservan por usuario, tienda y semana en este navegador. Pulsa Guardar para sincronizarlos y que los colaboradores vean los horarios.</p>
+                        {hasUnsavedChanges && <p>{dirtyStaff.size} colaborador(es) con cambios pendientes.{draft.updatedAt && !draft.persistenceError ? ` Respaldo local: ${new Date(draft.updatedAt).toLocaleTimeString('es-PE')}.` : ''}</p>}
+                        {!draft.ready && !draft.loadError && <p>Cargando la versión del servidor…</p>}
+                        {draft.persistenceError && <p role="alert" className="mt-2 font-semibold text-red-700">{draft.persistenceError}</p>}
+                        {saveStatus === 'error' && <p role="alert" className="mt-2 font-semibold text-red-700">Error al guardar en el servidor. Tus cambios siguen en borrador; vuelve a pulsar Guardar para reintentar.</p>}
+                        {draft.loadError && (
+                            <p role="alert" className="mt-2 text-red-700">
+                                {draft.loadError}
+                                <button type="button" onClick={() => setScheduleReload(value => value + 1)} className="ml-2 underline font-semibold">Reintentar carga</button>
+                            </p>
+                        )}
+                        {Object.keys(draft.legacyChanges).length > 0 && (
+                            <details className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-950">
+                                <summary className="cursor-pointer font-semibold">Revisar borrador de la versión anterior ({Object.keys(draft.legacyChanges).length} colaboradores)</summary>
+                                <p className="my-2">Se encontró una copia local distinta al servidor. Puede ser antigua: revisa estos turnos antes de recuperarla. Tus nuevas ediciones tienen prioridad.</p>
+                                <ul className="my-2 max-h-64 overflow-auto space-y-1">
+                                    {Object.entries(draft.legacyChanges).flatMap(([id, days]) => Object.entries(days).map(([day, shift]) => (
+                                        <li key={`${id}-${day}`}>
+                                            {staff.find(person => person.id === id)?.name || id} {staff.find(person => person.id === id)?.lastName || ''} — {weekdayLabels[day]}: {shift.off ? 'Libre' : shift.feriado ? 'Feriado' : `${shift.start || '—'} a ${shift.end || '—'} ${shift.position || ''}`}
+                                        </li>
+                                    )))}
+                                </ul>
+                                <button type="button" onClick={() => draftController.restoreLegacy()} className="rounded-lg bg-amber-700 px-3 py-2 text-white font-semibold">Recuperar esta copia como borrador</button>
+                            </details>
+                        )}
+                    </div>
+                )}
+
                 {/* Controles Principales */}
                 <div className="bg-white rounded-xl shadow-md p-6 mb-6">
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -1470,6 +1407,7 @@ export default function WeeklyScheduleEditor() {
                                 <input
                                     type="date"
                                     value={weekStartDate}
+                                    disabled={saveStatus === 'saving'}
                                     onChange={(e) => {
                                         const val = e.target.value;
                                         if (!val) {
@@ -1487,6 +1425,9 @@ export default function WeeklyScheduleEditor() {
                                             String(date.getDate()).padStart(2, '0'),
                                         ].join('-');
                                         setWeekStartDate(monday);
+                                        try {
+                                            localStorage.setItem(`schedule_editor_week:${currentUser.uid}:${storeId}`, monday);
+                                        } catch { /* Do not prevent editing if preferences cannot be stored. */ }
                                     }}
                                     className="border-2 border-gray-300 rounded-lg px-4 py-2 text-base font-medium focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                                 />
@@ -1571,12 +1512,21 @@ export default function WeeklyScheduleEditor() {
 
                         {/* Botones de Acción */}
                         <div className="flex flex-wrap gap-3 items-start">
+                            <WeeklyScheduleExcelButton
+                                canExport={userRole === 'admin' || userRole === 'superadmin'}
+                                staff={activeStaff}
+                                schedules={schedules}
+                                weekStart={weekStartDate}
+                                requirements={requirements}
+                                projectionPositions={projectionPositions}
+                                hasUnsavedChanges={hasUnsavedChanges}
+                            />
                             <button
                                 onClick={saveSchedules}
-                                disabled={saveStatus === 'saving'}
+                                disabled={saveStatus === 'saving' || !draft.ready}
                                 className={`flex items-center gap-2 px-5 py-2.5 rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium ${saveStatus === 'saving'
                                     ? 'bg-gray-400 cursor-not-allowed'
-                                    : saveStatus === 'success'
+                                    : saveStatus === 'success' && !hasUnsavedChanges
                                         ? 'bg-green-500 hover:bg-green-600'
                                         : hasUnsavedChanges
                                             ? 'bg-orange-500 hover:bg-orange-600 animate-pulse'
@@ -1588,7 +1538,7 @@ export default function WeeklyScheduleEditor() {
                                         <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                                         Guardando...
                                     </>
-                                ) : saveStatus === 'success' ? (
+                                ) : saveStatus === 'success' && !hasUnsavedChanges ? (
                                     <>
                                         <CheckCircle className="w-5 h-5" />
                                         Guardado
@@ -1647,7 +1597,7 @@ export default function WeeklyScheduleEditor() {
 
                             <button
                                 onClick={async () => {
-                                    const currentSchedule = allSchedules[wk] || {};
+                                    const currentSchedule = schedules;
                                     await exportExtraHoursReport(activeStaff, currentSchedule, wk);
                                 }}
                                 className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
@@ -1658,6 +1608,7 @@ export default function WeeklyScheduleEditor() {
 
                             <button
                                 onClick={generateIdealSchedule}
+                                disabled={!draft.ready}
                                 className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-indigo-500 to-indigo-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
                                 <Users className="w-5 h-5" />
@@ -1674,6 +1625,7 @@ export default function WeeklyScheduleEditor() {
 
                             <button
                                 onClick={() => setShowReplicateModal(true)}
+                                disabled={!draft.ready}
                                 className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-700 to-indigo-800 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
                                 <Copy className="w-5 h-5" />
@@ -1686,7 +1638,7 @@ export default function WeeklyScheduleEditor() {
                 <div className="flex flex-col lg:flex-row gap-6">
                     <div className="w-full min-w-0 lg:w-3/5">
                         <div className="bg-white rounded-xl shadow-md">
-                            <div className="overflow-x-auto">
+                            <fieldset disabled={!draft.ready} className="min-w-0 overflow-x-auto">
                                 <table className="w-full text-sm">
                                     <thead className="bg-gradient-to-r from-gray-700 to-gray-800 text-white">
                                         <tr>
@@ -1729,6 +1681,7 @@ export default function WeeklyScheduleEditor() {
                                             const effModality = getEffectiveModality(p, currentDateStr);
 
                                             const d = schedules[p.id]?.[selectedDay] || {};
+                                            const selectedDayRequests = getApprovedRequestsForStaffDay(p.id, selectedDay);
                                             const visiblePosition = getSelectablePosition(d.position);
                                             const hasConflict = detectScheduleConflict(p, selectedDay, d);
                                             const horas = calculateWeeklyHours(p.id);
@@ -1879,8 +1832,8 @@ export default function WeeklyScheduleEditor() {
                                                                         size={16}
                                                                         onMouseEnter={(e) => {
                                                                             const rect = e.currentTarget.getBoundingClientRect();
-                                                                            const tooltipHeight = 300;
-                                                                            const tooltipWidth = 360;
+                                                                            const tooltipHeight = 440;
+                                                                            const tooltipWidth = Math.min(520, window.innerWidth - 20);
                                                                             const viewportHeight = window.innerHeight;
                                                                             const viewportWidth = window.innerWidth;
 
@@ -1924,6 +1877,17 @@ export default function WeeklyScheduleEditor() {
                                                             if (isCeased) return null;
 
                                                             const alerts = [];
+
+                                                            selectedDayRequests.forEach(request => {
+                                                                const conflicts = rangeRequestConflictsWithShift(request, d);
+                                                                alerts.push({
+                                                                    type: conflicts ? 'danger' : 'request',
+                                                                    text: conflicts
+                                                                        ? `Solicitud aprobada no aplicada: ${formatApprovedRequestShift(request)}`
+                                                                        : `Solicitud aprobada: ${formatApprovedRequestShift(request)}`,
+                                                                    icon: <ClipboardList className="w-3 h-3" />
+                                                                });
+                                                            });
 
                                                             // 1. Conflictos de habilidades y estudio
                                                             const scheduleConflicts = Array.isArray(hasConflict)
@@ -1978,7 +1942,9 @@ export default function WeeklyScheduleEditor() {
                                                                             key={idx}
                                                                             className={`text-[10px] flex items-center gap-1 px-1.5 py-0.5 rounded border border-opacity-30 ${alert.type === 'danger'
                                                                                 ? 'bg-red-50 text-red-700 border-red-200'
-                                                                                : 'bg-orange-50 text-orange-800 border-orange-200'
+                                                                                : alert.type === 'request'
+                                                                                    ? 'bg-green-50 text-green-800 border-green-200'
+                                                                                    : 'bg-orange-50 text-orange-800 border-orange-200'
                                                                                 } ${alert.animate ? 'animate-pulse' : ''}`}
                                                                         >
                                                                             {alert.icon}
@@ -2165,7 +2131,7 @@ export default function WeeklyScheduleEditor() {
                                         })}
                                     </tbody>
                                 </table>
-                            </div>
+                            </fieldset>
                         </div>
                     </div>
 
@@ -2245,6 +2211,9 @@ export default function WeeklyScheduleEditor() {
                                     key={selectedDay}
                                     assigned={assignedArray}
                                     requirements={safeRequirements}
+                                    date={getSelectedDateStr() || ''}
+                                    dayLabel={weekdayLabels[selectedDay]}
+                                    canExport={userRole === 'admin' || userRole === 'superadmin'}
                                 />
                             </div>
                         </div>
@@ -2258,8 +2227,9 @@ export default function WeeklyScheduleEditor() {
                         className="fixed z-[9999] bg-white border-2 border-blue-200 rounded-lg shadow-xl p-3"
                         style={{
                             pointerEvents: 'auto',
-                            width: '360px',
-                            maxHeight: '300px',
+                            width: '520px',
+                            maxWidth: 'calc(100vw - 20px)',
+                            maxHeight: '440px',
                             overflowY: 'auto',
                             top: `${tooltipPosition.top}px`,
                             left: `${tooltipPosition.left}px`,
@@ -2297,19 +2267,21 @@ export default function WeeklyScheduleEditor() {
                                     </strong>
 
                                     <div className="space-y-0.5 text-[11px]">
-                                        <div className="grid grid-cols-[36px_1fr_1fr] gap-1.5 text-[8px] uppercase tracking-wider font-black text-gray-400 pb-1 border-b border-gray-100">
+                                        <div className="grid grid-cols-[36px_1fr_1fr_1.15fr] gap-1.5 text-[8px] uppercase tracking-wider font-black text-gray-400 pb-1 border-b border-gray-100">
                                             <span>Dia</span>
                                             <span>Estudio</span>
                                             <span className="border-l border-dashed border-blue-300 pl-1.5">Turno</span>
+                                            <span className="border-l border-dashed border-green-300 pl-1.5">Solicitud aprobada</span>
                                         </div>
                                         {weekdays.map(day => {
                                             const daySchedule = person.study_schedule?.[day];
                                             const isFree = daySchedule?.free === true;
                                             const hasBlocks = daySchedule?.blocks && daySchedule.blocks.length > 0;
                                             const assignedShift = formatAssignedShift(day);
+                                            const dayRequests = getApprovedRequestsForStaffDay(person.id, day);
 
                                             return (
-                                                <div key={day} className="grid grid-cols-[36px_1fr_1fr] gap-1.5 items-start py-0.5 border-b border-gray-50 last:border-b-0">
+                                                <div key={day} className={`grid grid-cols-[36px_1fr_1fr_1.15fr] gap-1.5 items-start py-0.5 border-b border-gray-50 last:border-b-0 ${dayRequests.length > 0 ? 'bg-green-50/60 rounded' : ''}`}>
                                                     <span className="font-semibold text-gray-700 text-[11px]">
                                                         {weekdayLabels[day].slice(0, 3)}:
                                                     </span>
@@ -2335,39 +2307,30 @@ export default function WeeklyScheduleEditor() {
                                                             {assignedShift.text}
                                                         </span>
                                                     </div>
+                                                    <div className="min-w-0 border-l border-dashed border-green-300 pl-1.5">
+                                                        {dayRequests.length === 0 ? (
+                                                            <span className="text-gray-400 italic text-[10px]">—</span>
+                                                        ) : (
+                                                            <div className="space-y-1">
+                                                                {dayRequests.map(request => (
+                                                                    <div key={request.id} className={rangeRequestConflictsWithShift(request, personSchedule[day]) ? 'text-red-700' : 'text-green-800'}>
+                                                                        <span className="block font-extrabold text-[10px] leading-tight">
+                                                                            {formatApprovedRequestShift(request)}
+                                                                        </span>
+                                                                        {request.reason && (
+                                                                            <span className="block text-[9px] leading-tight break-words" title={request.reason}>
+                                                                                {request.reason}
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             );
                                         })}
                                     </div>
-
-                                    {/* Solicitudes Aprobadas */}
-                                    {(() => {
-                                        const personRequests = approvedRequests.filter(r => r.staffId === person.id);
-                                        if (personRequests.length === 0) return null;
-
-                                        return (
-                                            <div className="mt-3 pt-2 border-t border-gray-200">
-                                                <strong className="block mb-1.5 text-[10px] font-bold text-orange-600 uppercase tracking-wider flex items-center gap-1">
-                                                    <ClipboardList className="w-3 h-3" />
-                                                    Solicitudes Aprobadas
-                                                </strong>
-                                                <div className="space-y-1.5">
-                                                    {personRequests.map(req => (
-                                                        <div key={req.id} className="bg-orange-50 border border-orange-100 rounded p-1.5 text-[10px]">
-                                                            <div className="flex justify-between items-center mb-0.5">
-                                                                <span className="font-bold text-orange-800">{weekdayLabels[req.date ? weekdays[new Date(req.date + 'T00:00:00').getDay() === 0 ? 6 : new Date(req.date + 'T00:00:00').getDay() - 1] : '']} {req.date?.split('-').reverse().slice(0, 2).join('/')}</span>
-                                                                <span className="bg-orange-200 text-orange-900 px-1 rounded font-extrabold uppercase text-[8px]">{req.shiftType}</span>
-                                                            </div>
-                                                            {req.shiftType === 'rango' && (
-                                                                <p className="text-orange-900 font-bold mb-0.5">{req.startTime} - {req.endTime}</p>
-                                                            )}
-                                                            <p className="text-gray-600 italic">"{req.reason}"</p>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        );
-                                    })()}
 
                                     {/* Resumen compacto */}
                                     <div className="mt-2 pt-1.5 border-t border-gray-200 flex justify-between text-xs font-semibold">
@@ -2534,7 +2497,7 @@ export default function WeeklyScheduleEditor() {
                                         }
 
                                         // Forzar el uso del estado más reciente
-                                        const currentSchedule = allSchedules[wk] || {};
+                                        const currentSchedule = schedules;
                                         await exportGroupedPositionsPDF(activeStaff, currentSchedule, selectedDay, dateText, turnoPDF, positions);
                                         setShowTurnoModal(false);
                                     }}
@@ -2623,7 +2586,12 @@ export default function WeeklyScheduleEditor() {
                                 </button>
                             </div>
                             <div className="p-6 max-h-[70vh] overflow-y-auto">
-                                {approvedRequests.length === 0 ? (
+                                {approvedRequestsError ? (
+                                    <div className="text-center py-10 text-red-600 bg-red-50 border border-red-200 rounded-xl">
+                                        <AlertCircle className="w-10 h-10 mx-auto mb-2 opacity-50" />
+                                        <p className="font-semibold">{approvedRequestsError}</p>
+                                    </div>
+                                ) : approvedRequests.length === 0 ? (
                                     <div className="text-center py-10 text-gray-400">
                                         <AlertCircle className="w-10 h-10 mx-auto mb-2 opacity-20" />
                                         <p>No hay solicitudes aprobadas para esta semana.</p>

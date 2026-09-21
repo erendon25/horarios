@@ -2,6 +2,14 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ===============================================================
+    // MODELO HEREDADO RELEVANTE PARA AUTORIZACIÓN
+    // ===============================================================
+    // users/{uid}: role, storeId y staffProfileId son atributos de acceso.
+    // schedules/{staffProfileId}_{weekKey}: storeId identifica la tienda;
+    // uid/staffId pueden existir en documentos más recientes, pero el ID del
+    // documento es la identidad estable usada por los horarios heredados.
+
     // ========================
     // FUNCIONES DE APOYO
     // ========================
@@ -29,6 +37,37 @@ service cloud.firestore {
       return isAuthenticated() && getUserData().role == "trainer";
     }
 
+    function hasLinkedStaffProfile() {
+      let profileId = getUserData().staffProfileId;
+      return isAuthenticated() &&
+        profileId is string &&
+        profileId.matches('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') &&
+        exists(/databases/$(database)/documents/staff_profiles/$(profileId)) &&
+        get(/databases/$(database)/documents/staff_profiles/$(profileId)).data.uid == request.auth.uid &&
+        get(/databases/$(database)/documents/staff_profiles/$(profileId)).data.storeId == getUserStoreId();
+    }
+
+    function isOwnSchedule(docId) {
+      return hasLinkedStaffProfile() && (
+        docId == getUserData().staffProfileId ||
+        docId.matches('^' + getUserData().staffProfileId + '_.+$')
+      );
+    }
+
+    function canReadStoreSchedules(storeId) {
+      return isSuperAdmin() || (
+        isAuthenticated() &&
+        storeId == getUserStoreId() &&
+        (isAdmin() || isTrainer())
+      );
+    }
+
+    function legacyScheduleChangesAllowed() {
+      let lockPath = /databases/$(database)/documents/stores/$(getUserStoreId())/config/schedule_lock;
+      return !exists(lockPath) ||
+        get(lockPath).data.restrictionsEnabled != true;
+    }
+
     // ========================
     // PERFILES DE PERSONAL
     // ========================
@@ -49,16 +88,26 @@ service cloud.firestore {
       // Solo Admin/SuperAdmin de la misma tienda crean o eliminan.
       allow create: if isSuperAdmin() || (isAdmin() && request.resource.data.storeId == getUserStoreId());
       
-      // Update: Admin cambia todo. Trainer solo cambia skills. Usuario su propio perfil o perfil sin vincular.
+      // Update: Admin conserva la tienda. Trainer solo cambia skills. El
+      // colaborador no puede reclamar perfiles sueltos ni cambiar identidad,
+      // posición o tienda desde el cliente.
       allow update: if isSuperAdmin() || 
-                    (isAdmin() && resource.data.storeId == getUserStoreId()) || 
-                    (isTrainer() && resource.data.storeId == getUserStoreId() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['skills'])) || 
-                    (isAuthenticated() && (
-                      resource.data.uid == request.auth.uid ||
-                      resource.data.uid == null ||
-                      resource.data.uid == "" ||
-                      !('uid' in resource.data)
-                    ));
+                    (isAdmin() &&
+                      resource.data.storeId == getUserStoreId() &&
+                      request.resource.data.storeId == getUserStoreId()) ||
+                    (isTrainer() &&
+                      resource.data.storeId == getUserStoreId() &&
+                      request.resource.data.storeId == getUserStoreId() &&
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['skills'])) ||
+                    (isAuthenticated() &&
+                      hasLinkedStaffProfile() &&
+                      profileId == getUserData().staffProfileId &&
+                      resource.data.uid == request.auth.uid &&
+                      request.resource.data.uid == request.auth.uid &&
+                      request.resource.data.diff(resource.data).affectedKeys()
+                        .hasOnly(['birthDate', 'pendingHolidays', 'updatedAt']) &&
+                      (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['pendingHolidays']) ||
+                        legacyScheduleChangesAllowed()));
       
       allow delete: if isSuperAdmin() || (isAdmin() && resource.data.storeId == getUserStoreId());
     }
@@ -67,8 +116,25 @@ service cloud.firestore {
     // HORARIOS GENERADOS (Schedules)
     // ========================
     match /schedules/{docId} {
-      allow read: if isAuthenticated();
-      allow write: if isSuperAdmin() || isAdmin();
+      // Un colaborador solo ve su propio documento. Los responsables leen
+      // únicamente horarios con el storeId de su tienda. Los documentos
+      // heredados sin storeId quedan deliberadamente cerrados para terceros.
+      allow read: if isSuperAdmin() ||
+        isOwnSchedule(docId) ||
+        (('storeId' in resource.data) &&
+          canReadStoreSchedules(resource.data.storeId));
+
+      allow create: if isSuperAdmin() || (
+        isAdmin() && request.resource.data.storeId == getUserStoreId()
+      );
+      allow update: if isSuperAdmin() || (
+        isAdmin() &&
+        resource.data.storeId == getUserStoreId() &&
+        request.resource.data.storeId == getUserStoreId()
+      );
+      allow delete: if isSuperAdmin() || (
+        isAdmin() && resource.data.storeId == getUserStoreId()
+      );
     }
 
     // ========================
@@ -157,9 +223,26 @@ service cloud.firestore {
     // ========================
     match /users/{userId} {
       allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin() || isSuperAdmin() || isTrainer());
-      allow update: if isSuperAdmin() || (isAdmin() && resource.data.storeId == getUserStoreId()) || (isAuthenticated() && request.auth.uid == userId);
-      // create: el propio usuario puede crear su documento al registrarse (request.auth.uid == userId)
-      allow create: if isSuperAdmin() || (isAuthenticated() && request.auth.uid == userId);
+      // El usuario puede mantener datos de presentación, pero no los atributos
+      // que conceden acceso (role, storeId, staffProfileId o status).
+      allow update: if isSuperAdmin() ||
+                    (isAdmin() &&
+                      resource.data.storeId == getUserStoreId() &&
+                      request.resource.data.storeId == getUserStoreId() &&
+                      request.resource.data.role in ['collaborator', 'trainer', 'admin']) ||
+                    (isAuthenticated() && request.auth.uid == userId &&
+                      request.resource.data.diff(resource.data).affectedKeys()
+                        .hasOnly(['name', 'lastName', 'email', 'updatedAt']));
+      // El autorregistro siempre nace sin privilegios ni vínculo elegido por
+      // el cliente. La vinculación canónica la realiza un responsable.
+      allow create: if isSuperAdmin() || (
+        isAuthenticated() &&
+        request.auth.uid == userId &&
+        request.resource.data.role == "collaborator" &&
+        (!('staffProfileId' in request.resource.data) ||
+          request.resource.data.staffProfileId == null ||
+          request.resource.data.staffProfileId == "")
+      );
       allow delete: if isSuperAdmin();
     }
 

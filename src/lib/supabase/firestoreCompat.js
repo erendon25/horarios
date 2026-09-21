@@ -1,4 +1,5 @@
 import { supabase } from "./client";
+import { mapSalesHistoryRow, salesHistoryDayPayload } from "./salesHistoryCompat";
 
 export const db = Object.freeze({ kind: "supabase-database" });
 export const getFirestore = () => db;
@@ -59,6 +60,7 @@ const mapStaff = (row) => ({
   joinDate: row.join_date,
   cessationDate: row.cessation_date ?? "",
   sanitaryCardExpiry: row.sanitary_card_expiry,
+  sanitaryCardDate: row.sanitary_card_expiry ?? legacy(row).sanitaryCardDate ?? '',
   sanitaryCardUnlock: row.sanitary_card_unlock,
   isTrainee: row.is_trainee,
   trainingEndDate: row.training_end_date,
@@ -254,7 +256,7 @@ async function fetchRows(ref) {
     throwIfError(result.error); rows = result.data ?? []; map = (row) => ({ monthlyData: row.monthly_data ?? {}, dailyHourlyParts: row.daily_hourly_parts ?? {}, realSalesData: row.real_sales_data ?? {}, hourlyParticipation: row.real_sales_data?.hourlyParticipation ?? null });
   } else if (segments[0] === "stores" && segments[2] === "sales_history") {
     const result = await supabase.from("sales_daily_history").select("*").eq("store_id", segments[1]);
-    throwIfError(result.error); rows = result.data ?? []; map = (row) => ({ ...legacy(row), totalSales: row.sales_amount, totalTxs: row.transactions, hourlyData: row.hourly_data ?? {}, date: row.sales_date });
+    throwIfError(result.error); rows = result.data ?? []; map = mapSalesHistoryRow;
   } else {
     const table = ROOT_TABLE[root];
     if (!table) throw new Error(`Colección no migrada a Supabase: ${ref.path}`);
@@ -363,11 +365,59 @@ function columnsFor(root, data, previous = {}) {
     }
     const column = mapping[key];
     if (column && ["collaborator_signature_path", "trainer_signature_path"].includes(column) && typeof value === "string" && /^https?:/.test(value)) continue;
-    if (column) columns[column] = value === "" && ["cessation_date", "join_date", "birth_date", "training_end_date", "modality_change_date", "next_modality", "sanitary_card_expiry", "sanitary_card_unlock", "last_evaluation_date", "last_station_evaluated"].includes(column) ? null : value;
+    if (column) {
+      if (root === "ceses" && ["medical_leave_days", "absences", "night_hours", "extra_hours", "holidays", "discounts"].includes(column)) {
+        const numericValue = value === "" || value === null || value === undefined ? 0 : Number(value);
+        if (!Number.isFinite(numericValue) || numericValue < 0) {
+          throw new Error(`El campo ${key} debe ser un número mayor o igual a cero.`);
+        }
+        columns[column] = numericValue;
+      } else {
+        columns[column] = value === "" && ["cessation_date", "join_date", "birth_date", "training_end_date", "modality_change_date", "next_modality", "sanitary_card_expiry", "sanitary_card_unlock", "last_evaluation_date", "last_station_evaluated"].includes(column) ? null : value;
+      }
+    }
     else if (key !== "id" && key !== "firestore_path") unhandled[key] = value;
   }
   if (Object.keys(unhandled).length) columns.legacy_data = { ...(previous ?? {}), ...unhandled };
   return columns;
+}
+
+async function resolveNativeStaffIdentity(data, { required = false } = {}) {
+  let prepared = { ...data };
+  const key = prepared.staffId || prepared.uid;
+  const needsResolve = !prepared.staffId
+    || !UUID_RE.test(String(prepared.staffId))
+    || !prepared.storeId
+    || (prepared.uid && !UUID_RE.test(String(prepared.uid)));
+
+  if (!needsResolve) return prepared;
+  if (!key) {
+    if (required) throw new Error("No se pudo identificar al colaborador de la solicitud.");
+    return prepared;
+  }
+
+  const query = UUID_RE.test(String(key))
+    ? supabase.from("staff_profiles").select("id,store_id,user_id").or(`id.eq.${key},user_id.eq.${key}`).limit(1)
+    : supabase.from("staff_profiles").select("id,store_id,user_id").eq("firestore_id", key).limit(1);
+  const owner = await query;
+  throwIfError(owner.error);
+  const profile = owner.data?.[0];
+
+  if (!profile) {
+    if (required) throw new Error("No se encontró el perfil vinculado del colaborador.");
+    return prepared;
+  }
+  if (required && !profile.user_id) {
+    throw new Error("El colaborador no tiene una cuenta vinculada para enviar solicitudes.");
+  }
+
+  prepared = {
+    ...prepared,
+    staffId: profile.id,
+    storeId: prepared.storeId || profile.store_id,
+    uid: profile.user_id || null,
+  };
+  return prepared;
 }
 
 const SCHEDULE_NUMERIC_FIELDS = new Set(["extraHours", "extraHoursPre", "extraHoursPost", "extraMinutes", "extraMinutesPre", "extraMinutesPost"]);
@@ -434,8 +484,12 @@ async function persist(ref, data, merge) {
     return throwIfError(result.error);
   }
   if (segments[0] === "stores" && segments[2] === "sales_history") {
-    const result = await supabase.from("sales_daily_history").upsert({ store_id: segments[1], sales_date: id, sales_amount: data.totalSales ?? null, transactions: data.totalTxs ?? null, hourly_data: data.hourlyData ?? {}, source_data: data }, { onConflict: "store_id,sales_date" });
-    return throwIfError(result.error);
+    const result = await supabase.rpc("save_sales_history_batch", {
+      p_store_id: segments[1],
+      p_days: [salesHistoryDayPayload(id, data)],
+    });
+    throwIfError(result.error);
+    return id;
   }
   const table = ROOT_TABLE[root];
   if (!table) throw new Error(`Escritura no migrada a Supabase: ${ref.path}`);
@@ -467,22 +521,7 @@ async function persist(ref, data, merge) {
     //   - completar store_id,
     //   - fijar user_id al auth.users real o null (un id de staff_profiles
     //     como user_id viola la FK *_user_id_fkey).
-    const needsResolve = !prepared.staffId || !UUID_RE.test(prepared.staffId) || !prepared.storeId;
-    const key = prepared.staffId || prepared.uid;
-    if (needsResolve && key) {
-      const conditions = UUID_RE.test(key) ? [`id.eq.${key}`, `user_id.eq.${key}`] : [`firestore_id.eq.${key}`];
-      const owner = await supabase.from("staff_profiles").select("id,store_id,user_id").or(conditions.join(",")).limit(1);
-      throwIfError(owner.error);
-      const profile = owner.data?.[0];
-      if (profile) {
-        prepared = {
-          ...prepared,
-          staffId: profile.id,
-          storeId: prepared.storeId ?? profile.store_id,
-          uid: profile.user_id ?? null,
-        };
-      }
-    }
+    prepared = await resolveNativeStaffIdentity(prepared);
   }
   if (root === "extra_hours") {
     const toMinutes = (start, end) => {
@@ -544,6 +583,18 @@ export async function updateDoc(ref, data) {
   return persist(ref, unwrapSpecialValues(data, current.data()), true);
 }
 export async function addDoc(ref, data) {
+  if (ref.path === "schedule_requests") {
+    // Las solicitudes nuevas usan la identidad nativa de Postgres. La ruta
+    // genérica genera un firestore_id que las reglas de migración ya rechazan.
+    const prepared = await resolveNativeStaffIdentity(data, { required: true });
+    const columns = columnsFor("schedule_requests", prepared);
+    // serverTimestamp() en esta capa se convierte en la hora del dispositivo;
+    // usar el default de la base para registrar la hora real de recepción.
+    delete columns.created_at;
+    const result = await supabase.from("schedule_requests").insert(columns).select("id").single();
+    throwIfError(result.error);
+    return doc(ref, String(result.data.id));
+  }
   const target = doc(ref);
   const persistedId = await persist(target, data, false);
   return doc(ref, String(persistedId));
@@ -573,8 +624,20 @@ export function onSnapshot(ref, onNext, onError) {
     } catch (error) { if (active && onError) onError(error); }
   };
   emit();
-  const root = ref.path.split("/")[0];
-  const table = ROOT_TABLE[root] ?? (root === "schedules" ? "schedule_weeks" : root === "study_schedules" ? "study_schedule_days" : null);
+  const segments = ref.path.split("/");
+  const root = segments[0];
+  // Las colecciones anidadas de una tienda viven en tablas distintas a
+  // `stores`. Suscribirse a `stores` impedía recibir cambios de configuración
+  // como el bloqueo de horarios hasta que el usuario recargara la página.
+  const table = root === "stores" && segments[2] === "config"
+    ? "store_configs"
+    : root === "stores" && segments[2] === "positioning_requirements"
+      ? "store_positioning_requirements"
+      : root === "stores" && segments[2] === "sales_config"
+        ? "sales_month_configs"
+        : root === "stores" && segments[2] === "sales_history"
+          ? "sales_daily_history"
+          : ROOT_TABLE[root] ?? (root === "schedules" ? "schedule_weeks" : root === "study_schedules" ? "study_schedule_days" : null);
   const channel = table ? supabase.channel(`legacy:${ref.path}:${crypto.randomUUID()}`).on("postgres_changes", { event: "*", schema: "public", table }, emit).subscribe() : null;
   return () => { active = false; if (channel) supabase.removeChannel(channel); };
 }
@@ -582,10 +645,36 @@ export function onSnapshot(ref, onNext, onError) {
 export function writeBatch() {
   const operations = [];
   return {
-    set: (ref, data, options) => operations.push(() => setDoc(ref, data, options)),
-    update: (ref, data) => operations.push(() => updateDoc(ref, data)),
-    delete: (ref) => operations.push(() => deleteDoc(ref)),
-    commit: async () => { for (const operation of operations) await operation(); },
+    set: (ref, data, options) => operations.push({ kind: "set", ref, data, options }),
+    update: (ref, data) => operations.push({ kind: "update", ref, data }),
+    delete: (ref) => operations.push({ kind: "delete", ref }),
+    commit: async () => {
+      if (!operations.length) return;
+
+      const allSalesSets = operations.every((operation) => {
+        const parts = operation.ref.path.split("/");
+        return operation.kind === "set" && parts[0] === "stores" && parts[2] === "sales_history";
+      });
+      if (allSalesSets) {
+        const storeIds = new Set(operations.map((operation) => operation.ref.path.split("/")[1]));
+        if (storeIds.size !== 1) throw new Error("Un lote de ventas solo puede contener una tienda.");
+        const result = await supabase.rpc("save_sales_history_batch", {
+          p_store_id: operations[0].ref.path.split("/")[1],
+          p_days: operations.map((operation) => salesHistoryDayPayload(
+            operation.ref.path.split("/")[3],
+            operation.data,
+          )),
+        });
+        throwIfError(result.error);
+        return;
+      }
+
+      for (const operation of operations) {
+        if (operation.kind === "set") await setDoc(operation.ref, operation.data, operation.options);
+        else if (operation.kind === "update") await updateDoc(operation.ref, operation.data);
+        else await deleteDoc(operation.ref);
+      }
+    },
   };
 }
 

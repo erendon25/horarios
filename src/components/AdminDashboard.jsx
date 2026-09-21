@@ -32,7 +32,8 @@ import {
     Unlink,
     Bell,
     ClipboardList,
-    Upload
+    Upload,
+    Target
 } from "lucide-react";
 import {
     doc,
@@ -327,6 +328,20 @@ const getTenureBucket = (totalDays) => {
 };
 
 const hrTenureBuckets = ['1 a 3 meses', '4 a 7 meses', '7 a 10 meses', '10 a mas'];
+
+const normalizeStaffModality = (value) => {
+    const normalized = String(value || '').trim().toLowerCase().replace(/[_\s]+/g, '-');
+    if (['full-time', 'fulltime', 'ft'].includes(normalized)) return 'Full-Time';
+    if (['part-time', 'parttime', 'pt'].includes(normalized)) return 'Part-Time';
+    return String(value || '').trim();
+};
+
+const modalityAbbreviation = (value) => {
+    const modality = normalizeStaffModality(value);
+    if (modality === 'Full-Time') return 'FT';
+    if (modality === 'Part-Time') return 'PT';
+    return modality;
+};
 
 const isHrManagementRole = (...values) => {
     const text = normalizeHeader(values.filter(Boolean).join(' '));
@@ -1818,6 +1833,17 @@ function AdminDashboard() {
             const staffSnap = await getDocs(staffQuery);
             const migraciones = [];
             const staffActual = new Map(staffSnap.docs.map(snapshot => [snapshot.id, snapshot.data()]));
+            lista = lista.map((registro) => {
+                const perfil = staffActual.get(registro.staffId);
+                return {
+                    ...registro,
+                    modality: normalizeStaffModality(registro.modality)
+                        || normalizeStaffModality(perfil?.modality),
+                    name: registro.name || perfil?.name || '',
+                    lastName: registro.lastName || perfil?.lastName || '',
+                    dni: registro.dni || perfil?.dni || '',
+                };
+            });
             const cesesObsoletos = snap.docs.filter(snapshot => {
                 const registro = snapshot.data();
                 if (registro.isCancelled) return true;
@@ -1857,7 +1883,7 @@ function AdminDashboard() {
                             staffId: d.id,
                             name: s.name || '',
                             lastName: s.lastName || '',
-                            modality: s.modality || '',
+                            modality: normalizeStaffModality(s.modality),
                             dni: s.dni || '',
                             gender: s.gender || s.sexo || '',
                             position: s.position || 'TEAM MEMBER',
@@ -1902,7 +1928,7 @@ function AdminDashboard() {
                             staffId: d.id,
                             name: s.name || '',
                             lastName: s.lastName || '',
-                            modality: s.modality || '', // La modalidad QUE DEJA
+                            modality: normalizeStaffModality(s.modality), // La modalidad QUE DEJA
                             dni: s.dni || '',
                             gender: s.gender || s.sexo || '',
                             position: s.position || 'TEAM MEMBER',
@@ -1953,20 +1979,40 @@ function AdminDashboard() {
             motivoCese: registro.motivoCese || 'RENUNCIA VOLUNTARIA',
             motivoReal: registro.motivoReal || 'MEJORA ECONÓMICA',
             comentario: registro.comentario || '',
-            diasDescansoMedico: registro.diasDescansoMedico || '',
-            inasistencias: registro.inasistencias || '',
-            tardanzas: registro.tardanzas || '',
-            horasNocturnas: registro.horasNocturnas || '',
-            horasExtras: registro.horasExtras || '',
-            feriados: registro.feriados || '',
-            descuentos: registro.descuentos || '',
+            diasDescansoMedico: registro.diasDescansoMedico ?? '',
+            inasistencias: registro.inasistencias ?? '',
+            tardanzas: registro.tardanzas ?? '',
+            horasNocturnas: registro.horasNocturnas ?? '',
+            horasExtras: registro.horasExtras ?? '',
+            feriados: registro.feriados ?? '',
+            descuentos: registro.descuentos ?? '',
         });
+    };
+
+    const persistirReporteBaja = async () => {
+        if (!reporteBajaColaborador) throw new Error('No hay un registro de cese seleccionado.');
+        const payload = {
+            ...reporteBajaForm,
+            lastUpdated: new Date().toISOString(),
+        };
+        await updateDoc(doc(db, 'ceses', reporteBajaColaborador.id), payload);
+        setReporteBajaColaborador((current) => current ? { ...current, ...payload } : current);
+        await loadCesosRegistros();
+        return payload;
     };
 
     const exportarReporteBajaExcel = async () => {
         if (!reporteBajaColaborador) return;
         const s = reporteBajaColaborador;
         const f = reporteBajaForm;
+
+        try {
+            await persistirReporteBaja();
+        } catch (err) {
+            console.error('Error guardando datos del cese antes de exportar:', err);
+            alert(`No se descargó el Excel porque los cambios no pudieron guardarse: ${err.message}`);
+            return;
+        }
 
         // Mes del cese para el título
         const fechaCeseObj = s.cessationDate ? new Date(s.cessationDate + 'T00:00:00') : new Date();
@@ -1998,7 +2044,7 @@ function AdminDashboard() {
         const rowData = [
             storeName || s.storeId || '',
             s.position || 'TEAM MEMBER',
-            s.modality === 'Full-Time' ? 'FT' : s.modality === 'Part-Time' ? 'PT' : (s.modality || ''),
+            modalityAbbreviation(s.modality),
             s.dni || '',
             `${s.name || ''} ${s.lastName || ''}`.trim(),
             s.gender || s.sexo || '',
@@ -2065,18 +2111,6 @@ function AdminDashboard() {
 
         const buffer = await workbook.xlsx.writeBuffer();
 
-        // --- GUARDAR EN FIRESTORE ---
-        try {
-            await updateDoc(doc(db, 'ceses', s.id), {
-                ...f,
-                lastUpdated: new Date().toISOString()
-            });
-            // Recargar la lista local para que el reporte mensual tenga la data actualizada
-            await loadCesosRegistros();
-        } catch (err) {
-            console.error("Error guardando datos del cese:", err);
-        }
-
         saveAs(new Blob([buffer]), `Reporte_Baja_${s.name}_${s.lastName}_${mesCapitalized}.xlsx`);
     };
 
@@ -2121,7 +2155,7 @@ function AdminDashboard() {
             worksheet.addRow([
                 storeName || s.storeId || '',
                 s.position || 'TEAM MEMBER',
-                s.modality === 'Full-Time' ? 'FT' : s.modality === 'Part-Time' ? 'PT' : (s.modality || ''),
+                modalityAbbreviation(s.modality),
                 s.dni || '',
                 `${s.name || ''} ${s.lastName || ''}`.trim(),
                 s.gender || s.sexo || '',
@@ -2184,14 +2218,8 @@ function AdminDashboard() {
 
     const handleSaveReporteBaja = async () => {
         if (!reporteBajaColaborador) return;
-        const s = reporteBajaColaborador;
-        const f = reporteBajaForm;
         try {
-            await updateDoc(doc(db, 'ceses', s.id), {
-                ...f,
-                lastUpdated: new Date().toISOString()
-            });
-            await loadCesosRegistros();
+            await persistirReporteBaja();
             alert("Reporte guardado exitosamente en el sistema.");
         } catch (err) {
             console.error("Error guardando datos del cese:", err);
@@ -2327,6 +2355,13 @@ function AdminDashboard() {
                                 >
                                     <BarChart3 className="w-4 h-4" />
                                     <span>ANÁLISIS VENTAS</span>
+                                </button>
+                                <button
+                                    onClick={() => navigate("/admin/venta-sugestiva")}
+                                    className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-white hover:text-orange-600 hover:shadow-sm rounded-xl transition-all text-xs font-bold"
+                                >
+                                    <Target className="w-4 h-4" />
+                                    <span>VENTA SUGESTIVA</span>
                                 </button>
                                 <button
                                     onClick={() => navigate("/admin/generate-schedules")}
@@ -3945,7 +3980,7 @@ function AdminDashboard() {
                                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
                                         <div><span className="text-gray-500 block text-xs">Tienda</span><span className="font-semibold">{storeName || s.storeId || '—'}</span></div>
                                         <div><span className="text-gray-500 block text-xs">Puesto</span><span className="font-semibold">{s.position || 'TEAM MEMBER'}</span></div>
-                                        <div><span className="text-gray-500 block text-xs">Modalidad</span><span className="font-semibold">{s.modality === 'Full-Time' ? 'FT' : s.modality === 'Part-Time' ? 'PT' : (s.modality || '—')}</span></div>
+                                        <div><span className="text-gray-500 block text-xs">Modalidad</span><span className="font-semibold">{modalityAbbreviation(s.modality) || '—'}</span></div>
                                         <div><span className="text-gray-500 block text-xs">DNI</span><span className="font-semibold font-mono">{s.dni || '—'}</span></div>
                                         <div><span className="text-gray-500 block text-xs">Nombre</span><span className="font-semibold">{s.name} {s.lastName}</span></div>
                                         <div><span className="text-gray-500 block text-xs">Sexo</span><span className="font-semibold">{s.gender || s.sexo || '—'}</span></div>
@@ -4240,7 +4275,3 @@ function AdminDashboard() {
 }
 
 export default AdminDashboard;
-
-
-
-

@@ -10,6 +10,7 @@ import WeeklyScheduleEditor from './components/WeeklyScheduleEditor';
 import StudyScheduleViewer from './components/StudyScheduleViewer';
 import SalesConfig from './components/SalesConfig';
 import SalesAnalysis from './components/SalesAnalysis';
+import SuggestiveSalesGoalsPage from './components/SuggestiveSalesGoalsPage';
 import ScheduleProjectionPage from './components/ScheduleProjectionPage';
 
 import RequireAdmin from "./components/RequireAdmin";
@@ -88,6 +89,12 @@ function AppRouter() {
         </PrivateRoute>
       } />
 
+      <Route path="/admin/venta-sugestiva" element={
+        <PrivateRoute role="admin">
+          <SuggestiveSalesGoalsPage />
+        </PrivateRoute>
+      } />
+
       <Route path="/admin/proyeccion" element={
         <PrivateRoute role="admin">
           <ScheduleProjectionPage />
@@ -143,5 +150,4 @@ function App() {
 }
 
 export default App;
-
 

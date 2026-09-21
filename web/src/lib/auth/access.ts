@@ -20,22 +20,24 @@ export const getCurrentAccess = cache(async (): Promise<CurrentAccess | null> =>
   const userId = claimsData?.claims?.sub;
   if (claimsError || !userId) return null;
 
-  const { data: profile, error: profileError } = await supabase
+  const loadProfile = () => supabase
     .from("user_profiles")
     .select("id,email,first_name,last_name,role,status,store_id,staff_profile_id")
     .eq("id", userId)
-    .single();
-  if (profileError || !profile) return null;
-
-  let cessationDate: string | null = null;
-  if (profile.staff_profile_id) {
-    const { data: staff } = await supabase
+    .maybeSingle();
+  const loadCessationDate = async (staffProfileId: string | null) => {
+    if (!staffProfileId) return null;
+    const { data } = await supabase
       .from("staff_profiles")
       .select("cessation_date")
-      .eq("id", profile.staff_profile_id)
+      .eq("id", staffProfileId)
       .maybeSingle();
-    cessationDate = staff?.cessation_date ?? null;
-  }
+    return data?.cessation_date ?? null;
+  };
+
+  const { data: profile, error: profileError } = await loadProfile();
+
+  const cessationDate = await loadCessationDate(profile?.staff_profile_id ?? null);
 
   const today = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Lima",
@@ -43,6 +45,8 @@ export const getCurrentAccess = cache(async (): Promise<CurrentAccess | null> =>
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
+
+  if (profileError || !profile) return null;
 
   return {
     userId,

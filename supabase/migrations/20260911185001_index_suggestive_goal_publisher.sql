@@ -1,0 +1,2 @@
+create index suggestive_sales_goal_assignments_published_by_idx
+  on public.suggestive_sales_goal_assignments (published_by);

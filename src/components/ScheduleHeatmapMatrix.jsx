@@ -1,429 +1,132 @@
 // ScheduleHeatmapMatrix.jsx - Matriz operativa de 07:00 a 25:00
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Maximize2, Minimize2 } from 'lucide-react';
-// === AGREGA ESTO ARRIBA DEL COMPONENTE (justo después de los imports) ===
-const weekdayLabels = {
-    monday: 'Lunes',
-    tuesday: 'Martes',
-    wednesday: 'Miércoles',
-    thursday: 'Jueves',
-    friday: 'Viernes',
-    saturday: 'Sábado',
-    sunday: 'Domingo'
-};
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
+import { Maximize2, Minimize2, FileText, Download } from 'lucide-react';
+import { HEATMAP_LEGEND, downloadHeatmap } from '../services/heatmapExport';
+import { HOURS, buildHeatmapRows } from '../services/heatmapModel';
+export { HOURS } from '../services/heatmapModel';
 
-const HEATMAP_START_MINUTES = 7 * 60;
-const HEATMAP_END_MINUTES = 25 * 60;
-const HEATMAP_INTERVAL_MINUTES = 15;
-const PROJECTION_START_MINUTES = 8 * 60;
-
-export const HOURS = Array.from(
-    { length: ((HEATMAP_END_MINUTES - HEATMAP_START_MINUTES) / HEATMAP_INTERVAL_MINUTES) + 1 },
-    (_, i) => {
-        const totalMinutes = HEATMAP_START_MINUTES + i * HEATMAP_INTERVAL_MINUTES;
-        const totalHours = Math.floor(totalMinutes / 60);
-        const m = totalMinutes % 60;
-
-        // Para horas >= 24, mostramos 24, 25, 26, etc.
-        if (totalHours >= 24) {
-            return `${String(totalHours).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-        }
-        return `${String(totalHours % 24).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-    }
-);
+const EMPTY_ASSIGNED = [];
+const EMPTY_REQUIREMENTS = {};
 
 const HEATMAP_TABLE_MIN_WIDTH = 120 + HOURS.length * 24;
 
-export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {} }) {
-    const [rows, setRows] = useState([]);
+// Una etiqueta por hora. La matriz conserva columnas de 15 minutos, pero el
+// encabezado las agrupa para que textos como "10:15" y "10:30" no se monten.
+const TIME_HEADERS = HOURS.reduce((headers, hour, index) => {
+    const [hours, minutes] = hour.split(':').map(Number);
+    if (minutes !== 0) return headers;
+
+    const remainingColumns = HOURS.length - index;
+    headers.push({
+        hour,
+        label: `${String(hours).padStart(2, '0')}:00`,
+        colSpan: Math.min(4, remainingColumns)
+    });
+    return headers;
+}, []);
+
+export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requirements = EMPTY_REQUIREMENTS, date = '', dayLabel = '', canExport = false }) {
+    const rows = useMemo(() => buildHeatmapRows(assigned, requirements), [assigned, requirements]);
     const [isFullscreen, setIsFullscreen] = useState(false);
-    const containerRef = useRef(null);
-
-
-    // ==== DRAG DRAG BIDIRECCIONAL CON POINTER EVENTS (funciona perfecto aunque el mouse salga del área) ====
-    const dragging = useRef(false);
-    const startX = useRef(0);
-    const startY = useRef(0);
-    const scrollLeftStart = useRef(0);
-    const scrollTopStart = useRef(0);
-
-    const handlePointerDown = useCallback((e) => {
-        // Solo botón izquierdo (mouse) o touch/pen
-        if (e.button !== 0) return;
-
-        e.preventDefault(); // evita selección de texto y drags nativos
-
-        dragging.current = true;
-        startX.current = e.clientX;
-        startY.current = e.clientY;
-        scrollLeftStart.current = containerRef.current.scrollLeft;
-        scrollTopStart.current = containerRef.current.scrollTop;
-
-        containerRef.current.style.cursor = 'grabbing';
-        containerRef.current.style.userSelect = 'none';
-
-        containerRef.current.setPointerCapture(e.pointerId);
-
-        // Añadimos los listeners solo mientras arrastramos
-        containerRef.current.addEventListener('pointermove', handlePointerMove);
-        containerRef.current.addEventListener('pointerup', handlePointerUp);
-        containerRef.current.addEventListener('pointercancel', handlePointerUp);
-    }, []);
-
-    const handlePointerMove = useCallback((e) => {
-        if (!dragging.current) return;
-
-        const walkX = (e.clientX - startX.current) * 2.5; // 2.5 = velocidad perfecta (cambia a 2 o 3 si quieres)
-        const walkY = (e.clientY - startY.current) * 2.5;
-
-        containerRef.current.scrollLeft = scrollLeftStart.current - walkX;
-        containerRef.current.scrollTop = scrollTopStart.current - walkY;
-    }, []);
-
-    const handlePointerUp = useCallback((e) => {
-        if (!dragging.current) return;
-
-        dragging.current = false;
-        containerRef.current.style.cursor = 'grab';
-        containerRef.current.style.userSelect = '';
-
-        containerRef.current.releasePointerCapture(e.pointerId);
-
-        containerRef.current.removeEventListener('pointermove', handlePointerMove);
-        containerRef.current.removeEventListener('pointerup', handlePointerUp);
-        containerRef.current.removeEventListener('pointercancel', handlePointerUp);
-    }, []);
+    const dialogRef = useRef(null);
+    const maximizeRef = useRef(null);
+    const drag = useRef(null);
+    const [exporting, setExporting] = useState('');
+    const [exportError, setExportError] = useState('');
 
     useEffect(() => {
-        const el = containerRef.current;
-        if (!el) return;
-
-        el.addEventListener('pointerdown', handlePointerDown);
-
+        if (!isFullscreen) return;
+        const dialog = dialogRef.current;
+        const previousOverflow = document.body.style.overflow;
+        dialog.showModal();
+        document.body.style.overflow = 'hidden';
         return () => {
-            el.removeEventListener('pointerdown', handlePointerDown);
-            // limpieza extra por si acaso
-            el.removeEventListener('pointermove', handlePointerMove);
-            el.removeEventListener('pointerup', handlePointerUp);
-            el.removeEventListener('pointercancel', handlePointerUp);
+            dialog.close();
+            document.body.style.overflow = previousOverflow;
+            maximizeRef.current?.focus();
         };
-    }, [handlePointerDown, handlePointerMove, handlePointerUp]);
-    useEffect(() => {
-        const need = {};
-        const assignedMap = {};
-        const trainerMap = {}; // norm -> hour -> array of isTrainer flags
-        const displayNames = new Map();
+    }, [isFullscreen]);
 
-        const normalize = (pos) => pos?.trim().replace(/#\d+$/g, '').replace(/\s+/g, ' ').toLowerCase() || '';
-
-        const timeToMin = (t) => {
-            const [h, m] = t.split(':').map(Number);
-            return h * 60 + m;
-        };
-
-        // === MAPA EXTENDIDO: minutos absolutos (0-1679) → hora visible en HOURS ===
-        const ABS_MIN_TO_HOUR = {};
-        HOURS.forEach(h => {
-            let totalMinutes;
-            if (h.includes(':')) {
-                const [hours, minutes] = h.split(':').map(Number);
-                totalMinutes = hours * 60 + minutes;
-            } else {
-                totalMinutes = 0;
-            }
-            ABS_MIN_TO_HOUR[totalMinutes] = h;
-        });
-
-        // === PROYECCION ===
-        const positions = Array.isArray(requirements.positions) ? requirements.positions : [];
-        const compressed = requirements.matrix || {};
-        
-        // Cada llave en compressed es un índice (0...20) basado en la proyección desde las 08:00.
-        // El mapa empieza a las 07:00, por eso anteponemos cuatro intervalos de 15 minutos.
-        const projectionOffsetSlots = Math.max(
-            0,
-            (PROJECTION_START_MINUTES - HEATMAP_START_MINUTES) / HEATMAP_INTERVAL_MINUTES
-        );
-        const expanded = Object.keys(compressed)
-            .sort((a, b) => Number(a) - Number(b))
-            .map(k => {
-                const sourceRow = Array.isArray(compressed[k])
-                    ? compressed[k]
-                    : Object.keys(compressed[k] || {})
-                        .sort((a, b) => Number(a) - Number(b))
-                        .map(col => compressed[k][col]);
-                const fullRow = [];
-                
-                // Alineación de 07:00 a 08:00
-                for (let i = 0; i < projectionOffsetSlots; i++) fullRow.push(0);
-
-                for(let i=0; i<21; i++) {
-                   const qty = sourceRow[i] || 0;
-                   fullRow.push(qty, qty, qty, qty);
-                }
-                return fullRow.slice(0, HOURS.length);
-            });
-
-        positions.forEach((pos, i) => {
-            const norm = normalize(pos);
-            const name = pos.replace(/#\d+$/, '').trim();
-            displayNames.set(norm, name);
-            need[norm] = need[norm] || {};
-
-            const row = expanded[i] || Array(HOURS.length).fill(0);
-            row.forEach((qty, j) => {
-                if (qty > 0) {
-                    need[norm][HOURS[j]] = qty;
-                }
-            });
-        });
-
-        // === DETECCIÓN DE SOLAPAMIENTO ===
-        const overlapDetection = {};
-        const positionOverlapDetection = {};
-        const turnoChanges = {};
-
-        // Pre-computar todos los minutos de inicio por posición para detectar relevos exactos
-        const startMinsByPos = {}; // norm → Set de minutos de inicio
-        assigned.forEach(p => {
-            const norm = normalize(p.position);
-            if (!norm || !p.start) return;
-            startMinsByPos[norm] = startMinsByPos[norm] || new Set();
-            startMinsByPos[norm].add(timeToMin(p.start) % 1440);
-        });
-
-        assigned.forEach(p => {
-            const norm = normalize(p.position);
-            if (!norm || !p.start || !p.end) return;
-
-            let startMin = timeToMin(p.start);
-            let endMin = timeToMin(p.end);
-            const isOvernight = endMin <= startMin;
-
-            if (isOvernight) {
-                endMin += 1440;
-            }
-
-            // Detección GENERAL de solapamiento
-            const firstBlock = Math.floor(startMin / 15) * 15;
-            // Último bloque inclusivo: si termina exactamente en múltiplo de 15, ese bloque lo incluimos
-            // excepto si hay un relevo exacto (otro turno empieza justo donde éste termina)
-            const endBlock = (endMin % 15 === 0) ? endMin : Math.floor(endMin / 15) * 15;
-
-            let currentBlock = firstBlock;
-            while (currentBlock <= endBlock) {
-                const displayMin = isOvernight ? currentBlock : (currentBlock % 1440);
-                const hour = ABS_MIN_TO_HOUR[displayMin];
-
-                if (hour) {
-                    overlapDetection[hour] = (overlapDetection[hour] || 0) + 1;
-                }
-                currentBlock += 15;
-            }
-
-            // Detección ESPECÍFICA por posición
-            positionOverlapDetection[norm] = positionOverlapDetection[norm] || {};
-            currentBlock = firstBlock;
-            while (currentBlock <= endBlock) {
-                const displayMin = isOvernight ? currentBlock : (currentBlock % 1440);
-                const hour = ABS_MIN_TO_HOUR[displayMin];
-
-                if (hour) {
-                    positionOverlapDetection[norm][hour] = (positionOverlapDetection[norm][hour] || 0) + 1;
-                }
-                currentBlock += 15;
-            }
-
-            if (endMin % 15 === 0) {
-                const changeHour = ABS_MIN_TO_HOUR[isOvernight ? endMin : (endMin % 1440)];
-                if (changeHour) {
-                    turnoChanges[changeHour] = true;
-                }
-            }
-        });
-
-        // === PRIMERA PASADA: detectar horarios de INICIO por posición ===
-        const startingTimes = {};
-        assigned.forEach(p => {
-            const norm = normalize(p.position);
-            if (!norm || !p.start) return;
-            let startMin = timeToMin(p.start);
-            startingTimes[norm] = startingTimes[norm] || new Set();
-            startingTimes[norm].add(startMin % 1440);
-        });
-
-        // === ASIGNACIONES DEFINITIVAS CON LÓGICA PRECISA ===
-        assigned.forEach(p => {
-            const norm = normalize(p.position);
-            if (!norm || !p.start || !p.end) return;
-
-            assignedMap[norm] = assignedMap[norm] || {};
-
-            let startMin = timeToMin(p.start);
-            let endMin = timeToMin(p.end);
-
-            // Manejo de cruce de medianoche
-            if (endMin <= startMin) endMin += 1440;
-
-            // Iterar sobre cada bloque visual disponible en HOURS
-            HOURS.forEach(hourStr => {
-                let currentBlockMin;
-                if (hourStr.includes(':')) {
-                    const [h, m] = hourStr.split(':').map(Number);
-                    currentBlockMin = h * 60 + m;
-                } else {
-                    return;
-                }
-
-                // Un bloque "08:00" representa el intervalo [08:00, 08:15)
-                // Un turno 08:00-12:00 CUBRE el bloque 08:00 (empieza en esa hora),
-                // el bloque 11:45 (está dentro) y también INCLUYE el bloque 12:00
-                // (marcando que "está presente en ese punto").
-                //
-                // Para evitar doble conteo en relevos exactos (A: 08-12, B: 12-16):
-                // el bloque 12:00 SOLO se cuenta para el turno que INICIA (B), no para el que termina (A).
-                // Esto se logra usando `<= endMin` para pintar, pero marcando el bloque de fin
-                // solo si NO hay otro turno en esa posición que empieza exactamente ahí.
-
-                const coversBlock = currentBlockMin >= startMin && currentBlockMin <= endMin;
-
-                if (coversBlock) {
-                    // Si es exactamente el bloque de fin (currentBlockMin === endMin)
-                    // Y hay un relevo exacto (otro turno en esta posición empieza en ese mismo minuto),
-                    // NO lo contamos para evitar doble conteo.
-                    const isExactEnd = currentBlockMin === endMin;
-                    const hasRelayAtEnd = isExactEnd && (startMinsByPos[norm]?.has(endMin % 1440));
-
-                    // Excluir el bloque de fin solo si hay relevo, de lo contrario incluirlo
-                    if (!hasRelayAtEnd) {
-                        assignedMap[norm][hourStr] = (assignedMap[norm][hourStr] || 0) + 1;
-
-                        // Rastrear si este slot específico es un trainer
-                        trainerMap[norm] = trainerMap[norm] || {};
-                        trainerMap[norm][hourStr] = trainerMap[norm][hourStr] || [];
-                        trainerMap[norm][hourStr].push(p.isTrainer || false);
-                    }
-                }
-            });
-        });
-
-        // === CONSTRUIR FILAS - CON DUPLICACIÓN DE POSICIONES (SIN NÚMEROS) ===
-        const finalRows = [];
-
-        Object.keys(need)
-            .sort((a, b) => (displayNames.get(a) || a).localeCompare(displayNames.get(b) || b))
-            .forEach(norm => {
-                const name = displayNames.get(norm) || norm;
-                const required = need[norm] || {};
-                const assignedHere = assignedMap[norm] || {};
-
-                // Encontrar el máximo requerimiento para esta posición
-                const maxRequired = Math.max(...Object.values(required), 1);
+    const handlePointerDown = (event) => {
+        // Keep native touch scrolling and scrollbar interactions.
+        const element = event.currentTarget;
+        if (event.pointerType !== 'mouse' || event.button !== 0 || event.target === element) return;
+        event.preventDefault();
+        drag.current = { x: event.clientX, y: event.clientY, left: element.scrollLeft, top: element.scrollTop };
+        element.setPointerCapture(event.pointerId);
+        element.style.cursor = 'grabbing';
+    };
+    const handlePointerMove = (event) => {
+        if (!drag.current) return;
+        event.currentTarget.scrollLeft = drag.current.left - (event.clientX - drag.current.x);
+        event.currentTarget.scrollTop = drag.current.top - (event.clientY - drag.current.y);
+    };
+    const handlePointerUp = (event) => {
+        drag.current = null;
+        event.currentTarget.style.cursor = '';
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    };
+    const handleExport = async (format) => {
+        if (!canExport || exporting || rows.length === 0) return;
+        setExportError('');
+        setExporting(format);
+        try {
+            await downloadHeatmap(format, { rows, hours: HOURS, date, dayLabel });
+        } catch (error) {
+            console.error('Error exportando la matriz:', error);
+            setExportError('No se pudo descargar la matriz. Intenta nuevamente.');
+        } finally {
+            setExporting('');
+        }
+    };
 
 
-
-                // Crear una fila por cada "slot" requerido (TODAS con el mismo nombre)
-                for (let slot = 0; slot < maxRequired; slot++) {
-                    const cells = HOURS.map(hour => {
-                        const req = required[hour] || 0;
-                        const ass = assignedHere[hour] || 0;
-                        const isTrainer = trainerMap[norm]?.[hour]?.[slot] || false;
-
-                        // Para este slot específico
-                        const slotIsRequired = req > slot;
-                        const slotIsAssigned = ass > slot;
-
-                        if (slotIsRequired && slotIsAssigned) {
-                            return { color: isTrainer ? 'bg-orange-500' : 'bg-blue-500', isTrainer, text: '' };
-                        } else if (slotIsRequired && !slotIsAssigned) {
-                            return { color: 'bg-yellow-300', text: '' };
-                        } else if (!slotIsRequired && slotIsAssigned) {
-                            return { color: isTrainer ? 'bg-orange-500' : 'bg-red-500', isTrainer, text: '' };
-                        } else {
-                            return { color: 'bg-white', text: '' };
-                        }
-                    });
-
-                    finalRows.push({
-                        name: name, // MISMO NOMBRE PARA TODAS LAS FILAS
-                        cells,
-                        isExcess: false
-                    });
-                }
-
-                // Agregar filas de exceso si hay más asignaciones que requerimientos
-                const maxAssigned = Math.max(...Object.values(assignedHere), 0);
-                if (maxAssigned > maxRequired) {
-                    for (let extraSlot = maxRequired; extraSlot < maxAssigned; extraSlot++) {
-                        const cells = HOURS.map(hour => {
-                            const ass = assignedHere[hour] || 0;
-                            const isTrainer = trainerMap[norm]?.[hour]?.[extraSlot] || false;
-                            const hasAssignment = ass > extraSlot;
-
-                            return hasAssignment ?
-                                { color: isTrainer ? 'bg-orange-500' : 'bg-red-500', isTrainer, text: '' } :
-                                { color: 'bg-white', text: '' };
-                        });
-
-                        finalRows.push({
-                            name: name, // MISMO NOMBRE TAMBIÉN PARA EXCESOS
-                            cells,
-                            isExcess: true
-                        });
-                    }
-                }
-            });
-
-        setRows(finalRows);
-    }, [assigned, requirements]);
-
-    return (
-        <div className="h-full flex flex-col bg-white rounded-xl shadow-lg overflow-hidden border border-gray-200">
-            {/* Header compacto */}
-            <div className="flex-none bg-gradient-to-r from-gray-800 to-gray-900 border-b border-gray-700 px-3 py-2">
-                <div className="flex justify-between items-center mb-1.5">
-                    <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
-                        <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse"></div>
-                        Mapa de Cobertura
+    const panel = (
+        <div className="h-full min-h-0 min-w-0 flex flex-col isolate bg-white rounded-xl shadow-lg overflow-hidden border border-gray-200">
+            <div className="flex-none bg-gray-800 px-3 py-2 text-white">
+                <div className="flex flex-wrap justify-between items-center gap-2">
+                    <h3 id={isFullscreen ? 'heatmap-dialog-title' : undefined} className="text-sm font-bold">
+                        Mapa de Cobertura{dayLabel || date ? ` - ${dayLabel} ${date}` : ''}
                     </h3>
-                    <button
-                        onClick={() => setIsFullscreen(true)}
-                        className="p-1.5 bg-white/10 hover:bg-white/20 text-white rounded transition-all duration-200 hover:scale-105"
-                        title="Maximizar"
-                    >
-                        <Maximize2 size={14} />
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                        {canExport && <>
+                            <button type="button" disabled={!!exporting || rows.length === 0}
+                                onClick={() => handleExport('pdf')}
+                                className="inline-flex items-center gap-1 rounded bg-white/10 px-2 py-1.5 text-xs hover:bg-white/20 disabled:opacity-50">
+                                <FileText size={14} /> {exporting === 'pdf' ? 'Generando…' : 'PDF'}
+                            </button>
+                            <button type="button" disabled={!!exporting || rows.length === 0}
+                                onClick={() => handleExport('xlsx')}
+                                className="inline-flex items-center gap-1 rounded bg-white/10 px-2 py-1.5 text-xs hover:bg-white/20 disabled:opacity-50">
+                                <Download size={14} /> {exporting === 'xlsx' ? 'Generando…' : 'Excel'}
+                            </button>
+                        </>}
+                        <button type="button" ref={isFullscreen ? undefined : maximizeRef}
+                            onClick={() => { drag.current = null; setIsFullscreen(!isFullscreen); }}
+                            className="rounded bg-white/10 p-1.5 hover:bg-white/20"
+                            title={isFullscreen ? 'Minimizar' : 'Maximizar'}
+                            aria-label={isFullscreen ? 'Minimizar mapa de cobertura' : 'Maximizar mapa de cobertura'}>
+                            {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                        </button>
+                    </div>
                 </div>
-                <div className="flex items-center gap-3 text-xs font-medium text-gray-200">
-                    <span className="flex items-center gap-1 px-2 py-0.5 bg-yellow-500/20 rounded border border-yellow-400/30">
-                        <div className="w-3 h-3 bg-yellow-400 rounded"></div>
-                        <span className="text-yellow-200">Faltante</span>
-                    </span>
-                    <span className="flex items-center gap-1 px-2 py-0.5 bg-blue-500/20 rounded border border-blue-400/30">
-                        <div className="w-3 h-3 bg-blue-500 rounded"></div>
-                        <span className="text-blue-200">Asignado</span>
-                    </span>
-                    <span className="flex items-center gap-1 px-2 py-0.5 bg-red-500/20 rounded border border-red-400/30">
-                        <div className="w-3 h-3 bg-red-500 rounded"></div>
-                        <span className="text-red-200">Exceso</span>
-                    </span>
-                    <span className="flex items-center gap-1 px-2 py-0.5 bg-orange-500/20 rounded border border-orange-400/30">
-                        <div className="w-3 h-3 bg-orange-500 rounded"></div>
-                        <span className="text-orange-200">Entrenador</span>
-                    </span>
+                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                    {HEATMAP_LEGEND.map((item) => (
+                        <span key={item.color} className="inline-flex items-center gap-1">
+                            <span className={`h-3 w-3 rounded border border-white/30 ${item.color}`} />
+                            {item.label}
+                        </span>
+                    ))}
                 </div>
-                <div className="text-center text-[10px] text-gray-400 mt-1.5 italic">
-                    ← Arrastra para navegar →
-                </div>
+                <p className="mt-2 text-[10px] text-gray-300">Arrastra con el mouse o desliza para navegar. En teclado usa las flechas; Esc cierra la vista ampliada.</p>
+                {exportError && <p role="alert" className="mt-2 text-sm text-red-200">{exportError}</p>}
             </div>
-
-            {/* Contenedor con scroll real + drag BIDIRECCIONAL PERFECTO */}
-            <div
-                ref={containerRef}
-                className="flex-1 overflow-auto cursor-grab select-none touch-none bg-gray-50"
-                style={{ scrollBehavior: 'smooth' }}
-            >
-                {/* Tabla compacta */}
+            <div role="region" aria-label="Matriz de cobertura por posición y horario" tabIndex={0}
+                onPointerDown={handlePointerDown} onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onLostPointerCapture={() => { drag.current = null; }}
+                className="relative isolate flex-1 min-h-0 min-w-0 overflow-auto overscroll-contain cursor-grab select-none bg-gray-50 focus-visible:outline-blue-500"
+                style={{ WebkitOverflowScrolling: 'touch' }}>
                 <table className="table-fixed border-collapse bg-white shadow-inner" style={{ minWidth: `${HEATMAP_TABLE_MIN_WIDTH}px` }}>
                     <colgroup>
                         <col style={{ width: '120px' }} />
@@ -434,21 +137,19 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
 
                     <thead>
                         <tr className="bg-gradient-to-r from-gray-700 to-gray-800 border-b border-gray-600">
-                            <th className="sticky top-0 left-0 z-20 bg-gradient-to-r from-gray-700 to-gray-800 border-r border-gray-500 px-2 py-1.5 text-left font-bold text-white text-xs shadow-lg">
+                            <th className="sticky top-0 left-0 z-30 bg-gradient-to-r from-gray-700 to-gray-800 border-r border-gray-500 px-2 py-1.5 text-left font-bold text-white text-xs shadow-lg">
                                 Posición
                             </th>
-                            {HOURS.map((hour, i) => {
-                                const display = hour.replace(/^0/, '');
-                                return (
-                                    <th
-                                        key={i}
-                                        className="sticky top-0 bg-gradient-to-r from-gray-700 to-gray-800 border border-gray-500 px-0.5 py-1 text-[10px] font-bold text-white text-center shadow-md"
-                                        title={hour}
-                                    >
-                                        {display}
-                                    </th>
-                                );
-                            })}
+                            {TIME_HEADERS.map(({ hour, label, colSpan }) => (
+                                <th
+                                    key={hour}
+                                    colSpan={colSpan}
+                                    className="sticky top-0 z-20 overflow-hidden bg-gradient-to-r from-gray-700 to-gray-800 border border-gray-500 px-1 py-1 text-[10px] font-bold text-white text-center shadow-md whitespace-nowrap"
+                                    title={hour}
+                                >
+                                    {label}
+                                </th>
+                            ))}
                         </tr>
                     </thead>
 
@@ -468,33 +169,35 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                                 </td>
                             </tr>
                         ) : (
-                            rows.map((row, i) => (
+                            rows.map((row) => (
                                 <tr
-                                    key={i}
-                                    className="border-b border-gray-200 hover:bg-blue-50/30 transition-colors duration-150"
-                                    style={{ minHeight: '20px' }}
+                                    key={`${row.positionKey}-${row.slot}`}
+                                    className="h-5 border-b border-gray-200 hover:bg-blue-50/30 transition-colors duration-150"
                                 >
-                                    <td
-                                        className={`sticky left-0 z-30 bg-white px-2 py-1 font-semibold text-xs border-r border-gray-300 whitespace-nowrap shadow-sm ${row.isExcess
-                                            ? 'text-red-600 bg-red-50 font-bold border-red-200'
-                                            : 'text-gray-800 hover:bg-blue-50'
-                                            }`}
-                                    >
-                                        <div className="flex items-center gap-1">
-                                            {row.isExcess && (
-                                                <span className="w-1.5 h-1.5 bg-red-500 rounded-full"></span>
-                                            )}
-                                            <span className="truncate max-w-[90px]">{row.name}</span>
-                                            {row.isExcess && (
-                                                <span className="text-[10px] font-normal text-red-500">(exc)</span>
-                                            )}
-                                        </div>
-                                    </td>
+                                    {row.showPositionName && (
+                                        <td
+                                            rowSpan={row.groupSize}
+                                            className="sticky left-0 z-10 align-middle bg-white px-2 py-1 font-semibold text-xs text-gray-800 border-r border-b border-gray-300 shadow-sm"
+                                            title={`${row.name}: ${row.groupSize} carril${row.groupSize === 1 ? '' : 'es'}${row.hasExcess ? ', incluye exceso' : ''}`}
+                                        >
+                                            <div className="flex min-w-0 items-center gap-1">
+                                                {row.hasExcess && (
+                                                    <span className="h-1.5 w-1.5 flex-none rounded-full bg-red-500" aria-label="Incluye exceso"></span>
+                                                )}
+                                                <span className="min-w-0 flex-1 truncate">{row.name}</span>
+                                                {row.groupSize > 1 && (
+                                                    <span className="flex-none rounded bg-gray-100 px-1 text-[9px] font-bold text-gray-500">
+                                                        ×{row.groupSize}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </td>
+                                    )}
                                     {row.cells.map((cell, j) => (
                                         <td
                                             key={j}
                                             className={`border border-gray-200 ${cell.color} hover:opacity-80 transition-opacity duration-150`}
-                                            style={{ height: '20px', width: '24px' }}
+                                            style={{ height: '20px', width: '24px', padding: 0 }}
                                             title={`${HOURS[j]}: ${cell.isTrainer ? 'Entrenador' : cell.color.includes('yellow') ? 'Faltante' : cell.color.includes('blue') ? 'Asignado' : cell.color.includes('red') ? 'Exceso' : 'Sin requerimiento'}`}
                                         />
                                     ))}
@@ -504,137 +207,21 @@ export default function ScheduleHeatmapMatrix({ assigned = [], requirements = {}
                     </tbody>
                 </table>
             </div>
-
-            {/* Modal maximizado mejorado */}
-            {isFullscreen && (
-                <div
-                    className="fixed inset-0 bg-black/90 backdrop-blur-sm z-[100] flex items-center justify-center p-4"
-                    onClick={() => setIsFullscreen(false)}
-                >
-                    <div
-                        className="bg-white rounded-2xl shadow-2xl flex flex-col max-w-[96vw] max-h-[92vh] w-full border-2 border-gray-300"
-                        onClick={e => e.stopPropagation()}
-                    >
-                        {/* Header compacto */}
-                        <div className="flex-none bg-gradient-to-r from-gray-800 to-gray-900 border-b border-gray-700 px-4 py-2.5">
-                            <div className="flex justify-between items-center mb-2">
-                                <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse"></div>
-                                    Heatmap de Cobertura - Vista Completa
-                                </h2>
-                                <button
-                                    onClick={() => setIsFullscreen(false)}
-                                    className="p-2 bg-red-600 hover:bg-red-700 text-white rounded transition-all duration-200 hover:scale-105"
-                                    title="Minimizar"
-                                >
-                                    <Minimize2 size={16} />
-                                </button>
-                            </div>
-                            <div className="flex items-center gap-4 text-xs font-medium">
-                                <span className="flex items-center gap-1.5 px-2 py-1 bg-yellow-500/20 rounded border border-yellow-400/30">
-                                    <div className="w-3 h-3 bg-yellow-400 rounded"></div>
-                                    <span className="text-yellow-200">Faltante</span>
-                                </span>
-                                <span className="flex items-center gap-1.5 px-2 py-1 bg-blue-500/20 rounded border border-blue-400/30">
-                                    <div className="w-3 h-3 bg-blue-500 rounded"></div>
-                                    <span className="text-blue-200">Asignado</span>
-                                </span>
-                                <span className="flex items-center gap-1.5 px-2 py-1 bg-red-500/20 rounded border border-red-400/30">
-                                    <div className="w-3 h-3 bg-red-500 rounded"></div>
-                                    <span className="text-red-200">Exceso</span>
-                                </span>
-                                <span className="flex items-center gap-1.5 px-2 py-1 bg-orange-500/20 rounded border border-orange-400/30">
-                                    <div className="w-3 h-3 bg-orange-500 rounded"></div>
-                                    <span className="text-orange-200">Entrenador</span>
-                                </span>
-                            </div>
-                            <div className="text-center text-[10px] text-gray-400 mt-1.5 italic">
-                                ← Arrastra para navegar →
-                            </div>
-                        </div>
-                        {/* Contenedor con scroll compacto */}
-                        <div className="flex-1 overflow-auto p-2 bg-gray-50">
-                            <table className="table-fixed border-collapse bg-white shadow-inner rounded overflow-hidden" style={{ minWidth: `${HEATMAP_TABLE_MIN_WIDTH}px` }}>
-                                <colgroup>
-                                    <col style={{ width: '120px' }} />
-                                    {HOURS.map((_, i) => (
-                                        <col key={i} style={{ width: '24px' }} />
-                                    ))}
-                                </colgroup>
-                                <thead>
-                                    <tr className="bg-gradient-to-r from-gray-700 to-gray-800 border-b border-gray-600">
-                                        <th className="sticky top-0 left-0 z-20 bg-gradient-to-r from-gray-700 to-gray-800 border-r border-gray-500 px-2 py-1.5 text-left font-bold text-white text-xs shadow-lg">
-                                            Posición
-                                        </th>
-                                        {HOURS.map((hour, i) => {
-                                            const display = hour.replace(/^0/, '');
-                                            return (
-                                                <th
-                                                    key={i}
-                                                    className="sticky top-0 bg-gradient-to-r from-gray-700 to-gray-800 border border-gray-500 px-0.5 py-1 text-[10px] font-bold text-white text-center shadow-md"
-                                                    title={hour}
-                                                >
-                                                    {display}
-                                                </th>
-                                            );
-                                        })}
-                                    </tr>
-                                </thead>
-                                <tbody className="bg-white">
-                                    {rows.length === 0 ? (
-                                        <tr>
-                                            <td colSpan={HOURS.length + 1} className="text-center py-12 text-gray-500">
-                                                <div className="flex flex-col items-center gap-2">
-                                                    <div className="w-12 h-12 bg-gray-200 rounded-full flex items-center justify-center">
-                                                        <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                                                        </svg>
-                                                    </div>
-                                                    <p className="text-sm font-semibold text-gray-600">No hay proyeccion</p>
-                                                    <p className="text-xs text-gray-500">Configura la proyeccion horaria</p>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    ) : (
-                                        rows.map((row, i) => (
-                                            <tr
-                                                key={i}
-                                                className="border-b border-gray-200 hover:bg-blue-50/30 transition-colors duration-150"
-                                                style={{ minHeight: '20px' }}
-                                            >
-                                                <td
-                                                    className={`sticky left-0 z-30 bg-white px-2 py-1 font-semibold text-xs border-r border-gray-300 whitespace-nowrap shadow-sm ${row.isExcess
-                                                        ? 'text-red-600 bg-red-50 font-bold border-red-200'
-                                                        : 'text-gray-800 hover:bg-blue-50'
-                                                        }`}
-                                                >
-                                                    <div className="flex items-center gap-1">
-                                                        {row.isExcess && (
-                                                            <span className="w-1.5 h-1.5 bg-red-500 rounded-full"></span>
-                                                        )}
-                                                        <span className="truncate max-w-[90px]">{row.name}</span>
-                                                        {row.isExcess && (
-                                                            <span className="text-[10px] font-normal text-red-500">(exc)</span>
-                                                        )}
-                                                    </div>
-                                                </td>
-                                                {row.cells.map((cell, j) => (
-                                                    <td
-                                                        key={j}
-                                                        className={`border border-gray-200 ${cell.color} hover:opacity-80 transition-opacity duration-150`}
-                                                        style={{ height: '20px', width: '24px' }}
-                                                        title={`${HOURS[j]}: ${cell.isTrainer ? 'Entrenador' : cell.color.includes('yellow') ? 'Faltante' : cell.color.includes('blue') ? 'Asignado' : cell.color.includes('red') ? 'Exceso' : 'Sin requerimiento'}`}
-                                                    />
-                                                ))}
-                                            </tr>
-                                        ))
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
+    );
+
+    return (
+        <>
+            {!isFullscreen && panel}
+            {isFullscreen && createPortal(
+                <dialog ref={dialogRef} aria-labelledby="heatmap-dialog-title"
+                    onCancel={() => setIsFullscreen(false)}
+                    onClose={() => setIsFullscreen(false)}
+                    className="fixed inset-0 m-0 h-[100dvh] w-screen max-h-none max-w-none border-0 bg-slate-950/90 p-2 sm:p-4 backdrop:bg-black/70">
+                    {panel}
+                </dialog>,
+                document.body
+            )}
+        </>
     );
 }

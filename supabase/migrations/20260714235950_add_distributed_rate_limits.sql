@@ -22,30 +22,30 @@ set search_path = ''
 as $$
 declare
   current_row private.request_rate_limits%rowtype;
-  current_time timestamptz := clock_timestamp();
+  v_now timestamptz := clock_timestamp();
 begin
   if length(trim(p_bucket_key)) < 3 or p_max_requests < 1 or p_window_seconds < 1 then
     raise exception 'invalid_rate_limit_parameters';
   end if;
 
   insert into private.request_rate_limits as limits (bucket_key, window_started_at, request_count, updated_at)
-  values (trim(p_bucket_key), current_time, 1, current_time)
+  values (trim(p_bucket_key), v_now, 1, v_now)
   on conflict (bucket_key) do update
   set window_started_at = case
-        when limits.window_started_at + make_interval(secs => p_window_seconds) <= current_time then current_time
+        when limits.window_started_at + make_interval(secs => p_window_seconds) <= v_now then v_now
         else limits.window_started_at
       end,
       request_count = case
-        when limits.window_started_at + make_interval(secs => p_window_seconds) <= current_time then 1
+        when limits.window_started_at + make_interval(secs => p_window_seconds) <= v_now then 1
         else limits.request_count + 1
       end,
-      updated_at = current_time
+      updated_at = v_now
   returning * into current_row;
 
   allowed := current_row.request_count <= p_max_requests;
   retry_after_seconds := case when allowed then 0 else greatest(
     1,
-    ceil(extract(epoch from current_row.window_started_at + make_interval(secs => p_window_seconds) - current_time))::integer
+    ceil(extract(epoch from current_row.window_started_at + make_interval(secs => p_window_seconds) - v_now))::integer
   ) end;
   return next;
 end;

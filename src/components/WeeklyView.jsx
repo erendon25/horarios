@@ -1,8 +1,10 @@
 
 import React, { useEffect, useState } from 'react';
-import { getFirestore, doc, getDoc, onSnapshot, query, collection, where, getDocs } from '../lib/supabase/firestoreCompat';
+import { getFirestore, doc, onSnapshot, query, collection, where } from '../lib/supabase/firestoreCompat';
+import { supabase } from '../lib/supabase/client';
 import { Calendar, Clock, MapPin, Coffee, AlertCircle, ChevronLeft, ChevronRight, ClipboardList, X, Download } from 'lucide-react';
 import { exportGroupedPositionsPDF } from './PDFExport';
+import { calculateScheduleTotals, formatScheduleMinutes } from '../services/scheduleHours';
 
 const weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const weekdayLabels = {
@@ -22,6 +24,20 @@ const timestampToMillis = (value) => {
     return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const formatRequestCreatedAt = (value) => {
+    const millis = timestampToMillis(value);
+    if (!millis) return 'Fecha de envío no disponible';
+    return new Intl.DateTimeFormat('es-PE', {
+        timeZone: 'America/Lima',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+    }).format(new Date(millis));
+};
+
 const getWeekKey = (s) => {
     if (!s) return '';
     const [Y, M, D] = s.split('-').map(Number);
@@ -38,7 +54,7 @@ const getWeekKey = (s) => {
     return `${format(start)}_to_${format(end)}`;
 };
 
-export default function WeeklyView({ perfilId, storeId }) {
+export default function WeeklyView({ perfilId, staffProfile, storeId, canDownloadSchedulePdf = false }) {
     const [weekStartDate, setWeekStartDate] = useState('');
     const [schedule, setSchedule] = useState({});
     const [approvedRequests, setApprovedRequests] = useState([]);
@@ -124,48 +140,49 @@ export default function WeeklyView({ perfilId, storeId }) {
         };
     }, [perfilId, weekStartDate, db, getFirestore]);
 
-    // Cargar datos de la tienda para exportación (posicionamiento de todo el dia)
+    // Los datos de todo el local solo se solicitan cuando el perfil puede exportar.
+    // Supabase vuelve a validar el permiso y deriva la tienda desde la sesión.
     useEffect(() => {
-        if (!storeId || !weekStartDate) return;
-        const wk = getWeekKey(weekStartDate);
+        if (!canDownloadSchedulePdf || !storeId || !weekStartDate) {
+            setAllStaff([]);
+            setStoreSchedules({});
+            setStorePositions([]);
+            return;
+        }
+
+        let cancelled = false;
         
         const loadStoreData = async () => {
             try {
-                // 1. Cargar staff de la tienda
-                const staffQuery = query(collection(db, 'staff_profiles'), where('storeId', '==', storeId));
-                const staffSnap = await getDocs(staffQuery);
-                const staffList = staffSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-                setAllStaff(staffList);
-
-                // 2. Cargar todos los horarios de la semana para la tienda
-                const schedQuery = query(
-                    collection(db, 'schedules'),
-                    where('weekKey', '==', wk),
-                    where('storeId', '==', storeId)
-                );
-                const schedSnap = await getDocs(schedQuery);
-                const schedMap = {};
-                schedSnap.docs.forEach(d => {
-                    const sId = d.id.split('_')[0];
-                    schedMap[sId] = d.data();
+                const { data, error } = await supabase.rpc('get_schedule_pdf_context', {
+                    p_week_start: weekStartDate,
                 });
-                setStoreSchedules(schedMap);
+                if (error) throw error;
+                if (cancelled) return;
 
-                // 3. Cargar posiciones/requerimientos (para orden)
-                const reqRef = doc(db, 'stores', storeId, 'positioning_requirements', 'monday');
-                const reqSnap = await getDoc(reqRef);
-                if (reqSnap.exists()) {
-                    setStorePositions(reqSnap.data().positions || []);
-                }
+                setAllStaff(Array.isArray(data?.staff) ? data.staff : []);
+                setStoreSchedules(data?.schedules && typeof data.schedules === 'object' ? data.schedules : {});
+                setStorePositions(Array.isArray(data?.positions) ? data.positions : []);
             } catch (error) {
-                console.error("Error cargando datos de tienda para WeeklyView:", error);
+                if (cancelled) return;
+                setAllStaff([]);
+                setStoreSchedules({});
+                setStorePositions([]);
+                console.error("Error cargando datos autorizados para PDF:", error);
             }
         };
 
         loadStoreData();
-    }, [storeId, weekStartDate, db]);
+        return () => {
+            cancelled = true;
+        };
+    }, [canDownloadSchedulePdf, storeId, weekStartDate]);
 
     const handleDownloadDailyPositioning = async (targetDay) => {
+        if (!canDownloadSchedulePdf) {
+            alert('No tienes permiso para descargar el PDF de horarios.');
+            return;
+        }
         if (!allStaff.length || isExporting) {
             if (!allStaff.length) alert("Cargando datos de la tienda...");
             return;
@@ -199,43 +216,10 @@ export default function WeeklyView({ perfilId, storeId }) {
         }
     };
 
-    // Calcular totales
-    // Calcular totales
-    const calculateTotalHours = () => {
-        let totalMinutes = 0;
-        let totalExtra = 0;
-
-        Object.values(schedule).forEach(day => {
-            if (day?.start && day?.end && !day.off && !day.feriado) {
-                // Horas base
-                const [sh, sm] = day.start.split(':').map(Number);
-                const [eh, em] = day.end.split(':').map(Number);
-                let diff = (eh * 60 + em) - (sh * 60 + sm);
-                if (diff < 0) diff += 1440; // Cruza medianoche
-                totalMinutes += diff;
-
-                // Horas extras (Ant, Post y Genéricas)
-                const pre = Number(day.extraHoursPre || 0);
-                const post = Number(day.extraHoursPost || day.extraHours || 0);
-                if (!isNaN(pre)) totalExtra += pre;
-                if (!isNaN(post)) totalExtra += post;
-                
-                                 
-            }
-        });
-
-        const h = Math.floor(totalMinutes / 60);
-        const m = totalMinutes % 60;
-        const totalBaseStr = `${h}:${m.toString().padStart(2, '0')}`;
-        const totalExtraStr = totalExtra.toFixed(1).replace('.0', ''); // Ej: 2 o 2.5
-
-        return { base: totalBaseStr, extra: totalExtraStr };
-    };
-
-    const totals = calculateTotalHours();
+    const totals = calculateScheduleTotals(schedule, staffProfile, weekStartDate);
 
     return (
-        <div className="bg-white rounded-xl shadow-lg p-6 mb-6 border border-gray-100">
+        <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 mb-6 border border-gray-100 min-w-0">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
                 <div>
                     <div className="flex items-center gap-3">
@@ -316,8 +300,18 @@ export default function WeeklyView({ perfilId, storeId }) {
                     <p className="text-xs text-gray-400 mt-1">Asegúrate de estar viendo la semana correcta o consulta con tu gerente.</p>
                 </div>
             ) : (
-                <div className="overflow-hidden rounded-xl border border-gray-200">
-                    <table className="w-full text-sm text-left">
+                <div className="rounded-xl border border-gray-200 overflow-hidden">
+                    <div className="flex items-center justify-between gap-3 bg-indigo-50 px-3 py-2 text-[10px] font-bold text-indigo-700 sm:hidden">
+                        <span>Desliza la tabla hacia los lados para ver Posición, Extras y Estado</span>
+                        <span aria-hidden="true" className="shrink-0 text-base">↔</span>
+                    </div>
+                    <div
+                        className="w-full max-w-full overflow-x-auto overscroll-x-contain touch-pan-x [-webkit-overflow-scrolling:touch]"
+                        role="region"
+                        aria-label="Horario semanal desplazable"
+                        tabIndex="0"
+                    >
+                    <table className="w-full min-w-[760px] text-sm text-left">
                         <thead className="bg-gradient-to-r from-gray-50 to-gray-100 text-gray-700 font-semibold uppercase text-xs">
                             <tr>
                                 <th className="px-4 py-3">Día</th>
@@ -334,7 +328,7 @@ export default function WeeklyView({ perfilId, storeId }) {
                                 const isFeriado = info?.feriado;
                                 const hasShift = info?.start && info?.end;
                                  const extraHrsPre = Number(info?.extraHoursPre || 0);
-                                 const extraHrsPost = Number(info?.extraHoursPost || info?.extraHours || 0);
+                                 const extraHrsPost = Number(info?.extraHoursPost ?? info?.extraHours ?? 0);
                                  const totalExtraDay = extraHrsPre + extraHrsPost;
 
                                  let displayStart = info?.start;
@@ -364,15 +358,18 @@ export default function WeeklyView({ perfilId, storeId }) {
                                         <td className="px-4 py-3 font-medium text-gray-800 capitalize">
                                             <div className="flex items-center justify-between group/row">
                                                 <span>{weekdayLabels[day]}</span>
-                                                <button
-                                                    onClick={() => handleDownloadDailyPositioning(day)}
-                                                    className="opacity-0 group-hover/row:opacity-100 p-1.5 hover:bg-blue-100 text-blue-600 rounded-md transition-all duration-200 flex items-center gap-1 text-[10px]"
-                                                    title={`Descargar posicionamiento de ${weekdayLabels[day]}`}
-                                                    disabled={isExporting}
-                                                >
-                                                    <Download className="w-3 h-3" />
-                                                    {isExporting ? '...' : 'PDF'}
-                                                </button>
+                                                {canDownloadSchedulePdf && (
+                                                    <button
+                                                        onClick={() => handleDownloadDailyPositioning(day)}
+                                                        className="opacity-100 sm:opacity-0 sm:group-hover/row:opacity-100 p-1.5 hover:bg-blue-100 text-blue-600 rounded-md transition-all duration-200 flex items-center gap-1 text-[10px]"
+                                                        title={`Descargar posicionamiento de ${weekdayLabels[day]}`}
+                                                        aria-label={`Descargar posicionamiento de ${weekdayLabels[day]} en PDF`}
+                                                        disabled={isExporting}
+                                                    >
+                                                        <Download className="w-3 h-3" />
+                                                        {isExporting ? '...' : 'PDF'}
+                                                    </button>
+                                                )}
                                             </div>
                                         </td>
                                         <td className="px-4 py-3 text-center">
@@ -445,22 +442,31 @@ export default function WeeklyView({ perfilId, storeId }) {
                                 <td colSpan="5" className="px-4 py-4">
                                     <div className="flex flex-col sm:flex-row justify-end items-center gap-4">
                                         <div className="flex items-center gap-2">
-                                            <span className="text-xs uppercase font-bold text-gray-500">Horas Base:</span>
+                                            <span className="text-xs uppercase font-bold text-gray-500">Base neta:</span>
                                             <span className="bg-white px-3 py-1 rounded border border-gray-200 font-mono font-bold text-gray-800 shadow-sm">
-                                                {totals.base}
+                                                {formatScheduleMinutes(totals.baseMinutes)}
                                             </span>
                                         </div>
                                         <div className="flex items-center gap-2">
                                             <span className="text-xs uppercase font-bold text-red-500">Horas Extras:</span>
                                             <span className="bg-red-50 px-3 py-1 rounded border border-red-200 font-mono font-bold text-red-700 shadow-sm">
-                                                +{totals.extra}
+                                                +{formatScheduleMinutes(totals.extraMinutes)}
                                             </span>
                                         </div>
+                                        {totals.holidayMinutes > 0 && (
+                                            <div className="text-sm text-orange-700">Feriados acreditados: {formatScheduleMinutes(totals.holidayMinutes)}</div>
+                                        )}
+                                        <div className="font-bold text-blue-700">Total: {formatScheduleMinutes(totals.totalMinutes)}</div>
                                     </div>
+                                    <p className="mt-2 text-xs text-gray-500 text-right">
+                                        Horas:minutos. Refrigerio descontado: {formatScheduleMinutes(totals.breakMinutes)}.
+                                        {' '}Full-Time: 45 min solo en turnos base continuos de al menos 8 h 45 min.
+                                    </p>
                                 </td>
                             </tr>
                         </tfoot>
                     </table>
+                    </div>
                 </div>
             )}
 
@@ -522,6 +528,10 @@ export default function WeeklyView({ perfilId, storeId }) {
                                                 <div>
                                                     <p className="font-bold text-gray-800">{weekdayLabels[weekdays[new Date(req.date + 'T00:00:00').getDay() === 0 ? 6 : new Date(req.date + 'T00:00:00').getDay() - 1]]} {req.date.split('-').reverse().join('/')}</p>
                                                     <p className="text-xs text-blue-600 font-bold uppercase">{req.shiftType} {req.shiftType === 'rango' && `(${req.startTime} - ${req.endTime})`}</p>
+                                                    <p className="text-[11px] text-gray-500 mt-1 flex items-center gap-1">
+                                                        <Clock className="w-3 h-3" />
+                                                        Enviada: {formatRequestCreatedAt(req.createdAt)}
+                                                    </p>
                                                 </div>
                                                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${req.status === 'pending' ? 'bg-orange-100 text-orange-600' : req.status === 'approved' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
                                                     {req.status === 'pending' ? 'Pendiente' : req.status === 'approved' ? 'Aprobada' : 'Rechazada'}

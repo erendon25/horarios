@@ -96,3 +96,10 @@ tmp/
 *service-account*.json
 *scrypt*.txt
 *hash-config*.txt
+
+# Estado local generado por la CLI de Supabase
+supabase/.temp/
+.vercel
+
+# Informe de seguridad de trabajo local (no publicar)
+/firestore-security-analysis.local.md

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { getFirestore, doc, getDoc, writeBatch, collection, getDocs, query, orderBy, limit } from '../lib/supabase/firestoreCompat';
+import { getFirestore, doc, getDoc, writeBatch, collection, getDocs, query, where, orderBy, limit } from '../lib/supabase/firestoreCompat';
 import { useAuth } from '../contexts/AuthContext';
 import { ArrowLeft, Upload, AlertCircle, Search, Database } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -8,6 +8,10 @@ import {
     BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList
 } from 'recharts';
 import { startOfISOWeek, endOfISOWeek, format, startOfMonth, endOfMonth, startOfYear, endOfYear, subMonths, subDays } from 'date-fns';
+import {
+    SUGGESTIVE_PRODUCTS,
+    classifySuggestiveProduct,
+} from '../services/suggestiveSalesGoals';
 
 const TURNOS = [
     { key: 'Apertura a 1pm', check: (h) => h >= 6 && h < 13 },
@@ -383,7 +387,6 @@ export default function SalesAnalysis() {
     const [availableRange, setAvailableRange] = useState({ min: null, max: null });
     const [lastUploadInfo, setLastUploadInfo] = useState(null);
     const [activeQuickFilter, setActiveQuickFilter] = useState('week');
-
     useEffect(() => {
         const fetchStore = async () => {
             if (!currentUser) return;
@@ -720,7 +723,7 @@ export default function SalesAnalysis() {
                     header: true, skipEmptyLines: true,
                     complete: async (results) => {
                         try { await processSalesRows(results.data); }
-                        catch (err) { alert("Error al procesar el archivo CSV."); }
+                        catch (err) { alert(err?.message || "Error al procesar el archivo CSV."); }
                         finally {
                             setIsSaving(false);
                             if (fileInputRef.current) fileInputRef.current.value = null;
@@ -780,7 +783,7 @@ export default function SalesAnalysis() {
                 await processSalesRows(allRawData);
             } catch (err) {
                 console.error("Error al procesar Excel:", err);
-                alert("Hubo un error al procesar el archivo.");
+                alert(err?.message || "Hubo un error al procesar el archivo.");
             } finally {
                 setIsSaving(false);
                 if (fileInputRef.current) fileInputRef.current.value = null;
@@ -887,6 +890,7 @@ export default function SalesAnalysis() {
                         canalRaw: findValue(fila, ['canal venta', 'canal vta', 'canal', 'canal de venta', 'tipo pedido', 'origen', 'modalidad']),
                         documento: docStr,
                         itemsSum: 0,
+                        suggestiveItems: new Map(),
                         totalPedido: null,
                         isNC: isNC
                     });
@@ -934,14 +938,23 @@ export default function SalesAnalysis() {
 
             // 3. SUMA DE ÍTEMS INDIVIDUALES (Backup)
             if (currentPedidoId && currentPedidoIsValid && pedidosMap.has(currentPedidoId)) {
+                const pedido = pedidosMap.get(currentPedidoId);
                 let numStr = findValue(fila, ['total', 'monto', 'venta', 'importe', 'neto']);
                 let montoItem = cleanMonto(numStr);
 
                 if (!isNaN(montoItem)) {
-                    if (pedidosMap.get(currentPedidoId).isNC) {
+                    if (pedido.isNC) {
                         montoItem = -Math.abs(montoItem);
                     }
-                    pedidosMap.get(currentPedidoId).itemsSum += montoItem;
+                    pedido.itemsSum += montoItem;
+                }
+
+                const productId = classifySuggestiveProduct(findValue(fila, ['producto', 'descripcion producto', 'articulo', 'item descripcion']));
+                const quantity = cleanMonto(findValue(fila, ['cant', 'cantidad', 'qty', 'unidades']));
+                if (productId && Number.isFinite(quantity) && quantity > 0 && !pedido.isNC) {
+                    const itemNumber = String(findValue(fila, ['itm', 'item', 'item nro', 'linea']) || '').trim();
+                    const itemKey = `${itemNumber || pedido.suggestiveItems.size + 1}:${productId}`;
+                    pedido.suggestiveItems.set(itemKey, { productId, quantity });
                 }
             }
         });
@@ -1019,7 +1032,13 @@ export default function SalesAnalysis() {
             if (!hasDocument && canal !== 'SERV. FILA') continue;
 
             if (!dailyAggregations[fecha]) {
-                dailyAggregations[fecha] = { totalSales: 0, hourlyData: {}, _pedidosGlobal: new Set(), _pedidosHoraCanal: {} };
+                dailyAggregations[fecha] = {
+                    totalSales: 0,
+                    hourlyData: {},
+                    suggestiveProducts: Object.fromEntries(SUGGESTIVE_PRODUCTS.map(({ id }) => [id, {}])),
+                    _pedidosGlobal: new Set(),
+                    _pedidosHoraCanal: {},
+                };
             }
 
             const dayObj = dailyAggregations[fecha];
@@ -1039,6 +1058,14 @@ export default function SalesAnalysis() {
 
             if (!dayObj._pedidosHoraCanal[rawHours][canal]) dayObj._pedidosHoraCanal[rawHours][canal] = new Set();
             dayObj._pedidosHoraCanal[rawHours][canal].add(txId);
+
+            for (const item of dataP.suggestiveItems?.values?.() || []) {
+                if (!dayObj.suggestiveProducts[item.productId][rawHours]) {
+                    dayObj.suggestiveProducts[item.productId][rawHours] = {};
+                }
+                dayObj.suggestiveProducts[item.productId][rawHours][canal] =
+                    (dayObj.suggestiveProducts[item.productId][rawHours][canal] || 0) + item.quantity;
+            }
         }
 
         let batch = writeBatch(db);
@@ -1048,6 +1075,7 @@ export default function SalesAnalysis() {
                 totalSales: dataRaw.totalSales,
                 totalTxs: dataRaw._pedidosGlobal.size,
                 hourlyData: dataRaw.hourlyData,
+                suggestiveProducts: dataRaw.suggestiveProducts,
                 hourlyTxs: {}
             };
             for (const hr in dataRaw._pedidosHoraCanal) {

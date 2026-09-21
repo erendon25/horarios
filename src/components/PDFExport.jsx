@@ -1,6 +1,7 @@
 // PDFExport.jsx - Corregido para evitar errores con nombres indefinidos
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { calculateScheduleTotals, formatScheduleMinutes } from '../services/scheduleHours';
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const DAY_LABELS = {
@@ -11,19 +12,6 @@ const fmt = d => { const x = new Date(d); return isNaN(x) ? '' : x.toISOString()
 const turnoTxt = e => e?.off ? 'DESCANSO' :
     e?.feriado ? 'FERIADO' :
         (e?.start && e?.end) ? `${e.start}-${e.end}` : 'S/A';
-const hrs = (s, e) => {
-    if (!s || !e) return 0;
-    const [sh, sm] = s.split(':').map(Number), [eh, em] = e.split(':').map(Number);
-    let t = (eh + em / 60) - (sh + sm / 60); if (t < 0) t += 24; return Math.round(t * 100) / 100;
-};
-const shiftHours = e => {
-    if (!e?.start || !e?.end) return 0;
-    let total = hrs(e.start, e.end);
-    if (e.splitShift && e.start2 && e.end2) {
-        total += hrs(e.start2, e.end2);
-    }
-    return total;
-};
 const formatShiftText = (e, start, end) => {
     const first = `${start || e?.start}-${end || e?.end}`;
     if (e?.splitShift && e.start2 && e.end2) {
@@ -51,7 +39,7 @@ export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = f
         .toLocaleDateString('es-PE', { day: '2-digit', month: 'short' }));
 
     const pdf = new jsPDF('landscape', 'pt', 'a4');
-    const head = ['Nombre', 'Modalidad', ...DAYS.map((d, i) => `${DAY_LABELS[d]}\n${weekDates[i]}`), 'Total Hrs'];
+    const head = ['Nombre', 'Modalidad', ...DAYS.map((d, i) => `${DAY_LABELS[d]}\n${weekDates[i]}`), 'Total\n(h:mm)'];
 
     const getEffectiveModality = (person, dStr) => {
         if (!person || !person.modalityChangeDate || !person.nextModality || !dStr) {
@@ -86,10 +74,7 @@ export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = f
     const personal = filteredStaff.filter((p) => !isManagerial(p)).sort(sortByModality);
 
     const buildRows = (list) => list.map(p => {
-        let tot = 0;
-        let daysWorkedFT = 0;
         const effModality = getEffectiveModality(p, dateStr);
-        const isFullTime = (effModality || '').toLowerCase() === 'full-time';
         const nombre = p.name ? `${p.name} ${p.lastName || ''}`.toUpperCase() : 'SIN NOMBRE';
         const row = [nombre, effModality || '--'];
         DAYS.forEach(d => {
@@ -100,10 +85,6 @@ export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = f
             if (e?.off) displayTxt = 'DESCANSO';
             else if (e?.feriado) {
                 displayTxt = 'FERIADO';
-                if (e.start && e.end) {
-                    tot += shiftHours(e);
-                    if (isFullTime) daysWorkedFT++;
-                }
             }
             else if (e?.start && e?.end) {
                 let currentStart = e.start;
@@ -136,21 +117,11 @@ export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = f
                     displayTxt += `\n(${e.position})`;
                 }
 
-                // Sumar al total
-                tot += shiftHours(e) + extraPre + extraPost;
-                if (isFullTime) daysWorkedFT++;
             }
 
             row.push(displayTxt);
         });
-        if (isFullTime) {
-            const breakDays = DAYS.filter(d => {
-                const e = schedules[p.id]?.[d];
-                return e?.start && e?.end && !e.off && !e.feriado && !e.splitShift;
-            }).length;
-            tot -= (breakDays * 0.75);
-        }
-        row.push(tot.toFixed(2));
+        row.push(formatScheduleMinutes(calculateScheduleTotals(schedules[p.id], p, dateStr).totalMinutes));
         return row;
     });
 
@@ -644,4 +615,3 @@ export const exportExtraHoursReport = async (staff, schedules, weekKey) => {
 
     pdf.save(`Reporte_Extras_${weekKey}_v${Date.now()}.pdf`);
 };
-

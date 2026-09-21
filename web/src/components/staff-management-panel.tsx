@@ -124,12 +124,14 @@ export function StaffManagementPanel({ storeId }: { storeId: string }) {
         const payload = context ? await context.json().catch(() => null) as { error?: string } | null : null;
         throw new Error(payload?.error ?? "invite_failed");
       }
-      if (!result?.invited) throw new Error(result?.error ?? "invite_failed");
-      return row.email;
+      if (!result?.invited && !result?.reactivated) throw new Error(result?.error ?? "invite_failed");
+      return { email: row.email, reactivated: Boolean(result.reactivated) };
     },
-    onSuccess: async (email) => {
+    onSuccess: async ({ email, reactivated }) => {
       await queryClient.invalidateQueries({ queryKey: ["staff-management"] });
-      setNotice(`Invitación enviada a ${email}.`);
+      setNotice(reactivated
+        ? `Cuenta existente reactivada para ${email}. Ya puede ingresar con su contraseña anterior o restablecerla.`
+        : `Invitación enviada a ${email}.`);
     },
   });
 
@@ -191,7 +193,7 @@ export function StaffManagementPanel({ storeId }: { storeId: string }) {
       <button className="secondary-button" onClick={openNew}><Plus size={17}/> Nuevo colaborador</button>
     </section>
     {notice && <p className="form-alert success">{notice}</p>}
-    {(error || inviteMutation.error || deleteMutation.error) && <p className="form-alert error">{deleteMutation.error ? "No se pudo eliminar. Solo se pueden borrar definitivamente colaboradores inactivos de tu tienda." : inviteMutation.error ? (inviteMutation.error.message === "app_url_not_configured" ? "Las invitaciones se habilitarán al publicar Next.js y configurar su URL pública." : "No se pudo enviar la invitación. Verifica que el correo no esté registrado y que tengas permisos sobre la tienda.") : "No se pudo cargar la lista de colaboradores."}</p>}
+    {(error || inviteMutation.error || deleteMutation.error) && <p className="form-alert error">{deleteMutation.error ? "No se pudo eliminar. Solo se pueden borrar definitivamente colaboradores inactivos de tu tienda." : inviteMutation.error ? (inviteMutation.error.message === "app_url_not_configured" ? "Las invitaciones se habilitarán al publicar Next.js y configurar su URL pública." : ["ambiguous_existing_account", "ambiguous_active_staff"].includes(inviteMutation.error.message) ? "Hay más de un perfil con ese correo. Corrige el duplicado antes de reactivar la cuenta." : "No se pudo vincular la cuenta. Verifica el correo y los permisos sobre la tienda.") : "No se pudo cargar la lista de colaboradores."}</p>}
     <section className="data-card">
       <div className="data-card-heading"><div><strong>{isPending ? "Cargando…" : `${rows.length} colaboradores ${statusFilter === "active" ? "activos" : statusFilter === "inactive" ? "inactivos" : "en total"}`}</strong><span>{rows.filter((row) => row.user_id).length} cuentas vinculadas · {rows.filter((row) => !row.user_id).length} sin cuenta</span></div></div>
       <div className="table-scroll"><table className="hr-table staff-table"><thead><tr><th>Colaborador</th><th>Tienda</th><th>Estado</th><th>Cuenta</th><th>Modalidad</th><th/></tr></thead><tbody>

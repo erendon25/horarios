@@ -14,7 +14,7 @@ const labels = {
   sunday: 'Domingo'
 };
 
-export default function StudyScheduleForm({ onSuccess }) {
+export default function StudyScheduleForm({ onSuccess, locked = false }) {
   const { currentUser } = useAuth();
   const db = getFirestore();
   const [schedule, setSchedule] = useState({});
@@ -99,6 +99,9 @@ export default function StudyScheduleForm({ onSuccess }) {
   };
 
   const handleSave = async () => {
+    if (locked) {
+      throw new Error('La administración bloqueó temporalmente los cambios de horario.');
+    }
     try {
       const payload = Object.fromEntries(
         days.map(day => [
@@ -113,7 +116,8 @@ export default function StudyScheduleForm({ onSuccess }) {
       alert('Horarios guardados correctamente.');
     } catch (err) {
       console.error('Error al guardar:', err);
-      alert('Error al guardar horario');
+      alert(`Error al guardar horario: ${err?.message || 'Inténtalo de nuevo.'}`);
+      throw err;
     }
   };
 
@@ -234,7 +238,7 @@ export default function StudyScheduleForm({ onSuccess }) {
       <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
         <button
           onClick={handleSaveWithFeedback}
-          disabled={saving}
+          disabled={saving || locked}
           className={`flex items-center gap-2 px-6 py-3 rounded-lg font-semibold shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 ${
             saved 
               ? 'bg-green-500 text-white' 
@@ -254,7 +258,7 @@ export default function StudyScheduleForm({ onSuccess }) {
           ) : (
             <>
               <Save className="w-5 h-5" />
-              Guardar Horarios
+              {locked ? 'Cambios bloqueados' : 'Guardar Horarios'}
             </>
           )}
         </button>

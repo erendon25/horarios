@@ -190,9 +190,9 @@ create table public.worked_holidays (
 create table public.extra_hours (
   id bigint generated always as identity primary key,
   firestore_id text unique,
-  staff_id uuid references public.staff_profiles(id) on delete cascade,
+  staff_id uuid not null references public.staff_profiles(id) on delete cascade,
   user_id uuid references auth.users(id) on delete set null,
-  store_id uuid references public.stores(id) on delete cascade,
+  store_id uuid not null references public.stores(id) on delete cascade,
   work_date date not null,
   start_time time,
   end_time time,
@@ -318,6 +318,7 @@ create table public.sales_daily_history (
   transactions integer,
   hourly_data jsonb not null default '{}'::jsonb,
   source_data jsonb not null default '{}'::jsonb,
+  suggestive_products jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (store_id, sales_date)
@@ -608,6 +609,14 @@ create policy schedule_requests_create on public.schedule_requests for insert to
     and reviewed_by is null
     and reviewed_at is null
     and admin_comment is null
+    and not exists (
+      select 1 from public.store_configs sc
+      where sc.store_id = schedule_requests.store_id
+        and sc.config_key = 'schedule_lock'
+        and coalesce((sc.value->>'restrictionsEnabled')::boolean, false)
+        and coalesce(sc.value->>'reenableDate', '') ~ '^\d{4}-\d{2}-\d{2}$'
+        and (now() at time zone 'America/Lima')::date <= (sc.value->>'reenableDate')::date
+    )
     and exists (
       select 1 from public.staff_profiles sp
       where sp.id = schedule_requests.staff_id

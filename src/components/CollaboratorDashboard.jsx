@@ -7,6 +7,8 @@ import HolidayForm from "./HolidayForm";
 import StudyScheduleForm from "./StudyScheduleForm";
 import ScheduleRequestForm from "./ScheduleRequestForm";
 import WeeklyView from "./WeeklyView";
+import CollaboratorSuggestiveGoals from "./CollaboratorSuggestiveGoals";
+import { canDownloadSchedulePdf } from "../services/schedulePdfAuthorization";
 import {
   BookOpen,
   Calendar,
@@ -121,6 +123,9 @@ const CollaboratorDashboard = () => {
   };
 
   const isTrainer = perfil?.position === 'ENTRENADOR';
+  const mayDownloadSchedulePdf = canDownloadSchedulePdf({
+    staffPosition: perfil?.position,
+  });
 
   useEffect(() => {
     const fetchStoreStaff = async () => {
@@ -155,6 +160,11 @@ const CollaboratorDashboard = () => {
     };
     fetchRequirements();
   }, [perfil?.storeId]);
+
+  useEffect(() => {
+    if (!isRestricted()) return;
+    setModalType((current) => ['study', 'feriados', 'request'].includes(current) ? null : current);
+  }, [lockSettings.restrictionsEnabled, lockSettings.reenableDate, perfil?.sanitaryCardDate, perfil?.sanitaryCardUnlock]);
 
   useEffect(() => {
     const randomIndex = Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length);
@@ -826,9 +836,19 @@ const CollaboratorDashboard = () => {
           </div>
         )}
 
+        {/* --- METAS PERSONALES DE VENTA SUGESTIVA --- */}
+        {perfil?.id && perfil?.storeId && (
+          <CollaboratorSuggestiveGoals staffId={perfil.id} storeId={perfil.storeId} />
+        )}
+
         {/* --- SECCIÓN DE HORARIO SEMANAL --- */}
         {perfil?.id && (
-          <WeeklyView perfilId={perfil.id} storeId={perfil.storeId} />
+          <WeeklyView
+            perfilId={perfil.id}
+            staffProfile={perfil}
+            storeId={perfil.storeId}
+            canDownloadSchedulePdf={mayDownloadSchedulePdf}
+          />
         )}
 
         {/* Modal mejorado */}
@@ -860,9 +880,9 @@ const CollaboratorDashboard = () => {
               </div>
 
               <div className="p-6">
-                {modalType === "study" && <StudyScheduleForm onSuccess={closeModal} />}
-                {modalType === "feriados" && <HolidayForm />}
-                {modalType === "request" && <ScheduleRequestForm perfil={perfil} onSuccess={closeModal} />}
+                {modalType === "study" && <StudyScheduleForm onSuccess={closeModal} locked={isRestricted()} />}
+                {modalType === "feriados" && <HolidayForm locked={isRestricted()} />}
+                {modalType === "request" && <ScheduleRequestForm perfil={perfil} onSuccess={closeModal} locked={isRestricted()} />}
                 {modalType === "skills" && (
                   <ModalSelectorDePosiciones
                     docId={perfil.id}

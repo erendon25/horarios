@@ -9,7 +9,7 @@ import {
 } from "../lib/supabase/firestoreCompat";
 import { useAuth } from "../contexts/AuthContext";
 
-function HolidayForm() {
+function HolidayForm({ locked = false }) {
   const { currentUser } = useAuth();
   const db = getFirestore();
   const [selectedDate, setSelectedDate] = useState("");
@@ -34,6 +34,10 @@ function HolidayForm() {
   }, [currentUser, db]);
 
   const handleAddHoliday = async () => {
+    if (locked) {
+      alert('La administración bloqueó temporalmente los cambios de horario.');
+      return;
+    }
     if (!selectedDate || !profileId) return;
 
     const ref = doc(db, "staff_profiles", profileId);
@@ -61,9 +65,9 @@ function HolidayForm() {
       <button
         onClick={handleAddHoliday}
         className="bg-blue-600 text-white px-4 py-2 rounded w-full"
-        disabled={!selectedDate}
+        disabled={!selectedDate || locked}
       >
-        Agregar feriado
+        {locked ? 'Cambios bloqueados' : 'Agregar feriado'}
       </button>
 
       <h3 className="text-lg font-medium mt-6 mb-2">Tus feriados registrados</h3>
@@ -81,4 +85,3 @@ function HolidayForm() {
 }
 
 export default HolidayForm;
-

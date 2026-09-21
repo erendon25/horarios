@@ -1,19 +1,18 @@
 // ✅ StaffModal.jsx
-import { useState } from 'react';
-import {
-  getFirestore, doc, collection, getDoc, updateDoc,
-  getDocs, query, where, writeBatch
-} from '../lib/supabase/firestoreCompat';
+import { useRef, useState } from 'react';
+import { supabase } from '../lib/supabase/client';
+import { saveStaffFromModal } from '../services/staffProfileSave';
 
 function StaffModal({ staff = null, userData, onClose, onSaved }) {
   const [form, setForm] = useState({
     name: staff?.name || '',
     lastName: staff?.lastName || '',
+    email: staff?.email || '',
     modality: staff ? (staff.modality ?? '') : 'Full-Time',
     dni: staff?.dni || '',
     gender: staff?.gender || '',
     joinDate: staff?.joinDate || '',
-    sanitaryCardDate: staff?.sanitaryCardDate || '',
+    sanitaryCardDate: staff?.sanitaryCardExpiry ?? staff?.sanitaryCardDate ?? '',
     cessationDate: staff?.cessationDate || '',
     isTrainee: staff?.isTrainee || false,
     trainingEndDate: staff?.trainingEndDate || '',
@@ -23,7 +22,8 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
     sanitaryCardUnlock: staff?.sanitaryCardUnlock || false,
   });
   const [loading, setLoading] = useState(false);
-  const db = getFirestore();
+  const savedProfileId = useRef(staff?.id ?? null);
+  const saving = useRef(false);
 
   function handleChange(e) {
     const { name, value } = e.target;
@@ -32,108 +32,26 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
 
   async function handleSave(e) {
     e.preventDefault();
+    if (saving.current) return;
     if (!form.name || !form.lastName) return alert('Nombre y apellido son obligatorios');
+    saving.current = true;
     setLoading(true);
 
     try {
-      const profileRef = staff
-        ? doc(db, 'staff_profiles', staff.id)
-        : doc(collection(db, 'staff_profiles'));
-      const profileId = profileRef.id;
-      const profilePayload = staff
-        ? {
-          ...staff,
-          ...form,
-          needsCompletion: staff.needsCompletion
-            ? !(form.modality && form.sanitaryCardDate)
-            : (staff.needsCompletion || false),
-        }
-        : {
-          ...form,
-          storeId: userData?.storeId,
-          status: 'pending',
-          createdAt: new Date().toISOString(),
-        };
-
-      // Mantener RR. HH. sincronizado con la fecha de cese del perfil.
-      // Perfil y cese se escriben juntos para evitar estados inconsistentes.
-      const cesesSnap = await getDocs(query(
-        collection(db, 'ceses'),
-        where('staffId', '==', profileId)
-      ));
-      const cesesNormales = cesesSnap.docs.filter(snapshot => !snapshot.data().isModalityChange);
-      const registroAnterior = cesesNormales.find(snapshot => snapshot.id === `${profileId}_${staff?.cessationDate}`)
-        || cesesNormales[0];
-      const datosAnteriores = registroAnterior?.data() || {};
-      const batch = writeBatch(db);
-      const nuevoCeseId = form.cessationDate ? `${profileId}_${form.cessationDate}` : null;
-
-      batch.set(profileRef, profilePayload);
-      cesesNormales
-        .filter(snapshot => snapshot.id !== nuevoCeseId)
-        .forEach(snapshot => batch.update(snapshot.ref, {
-          isCancelled: true,
-          cancelledAt: new Date().toISOString(),
-          lastUpdated: new Date().toISOString(),
-        }));
-
-      if (form.cessationDate) {
-        batch.set(doc(db, 'ceses', nuevoCeseId), {
-          ...datosAnteriores,
-          staffId: profileId,
-          name: form.name || '',
-          lastName: form.lastName || '',
-          modality: form.modality || '',
-          dni: form.dni || '',
-          gender: form.gender || '',
-          position: form.position || 'TEAM MEMBER',
-          joinDate: form.joinDate || '',
-          cessationDate: form.cessationDate,
-          storeId: userData?.storeId || staff?.storeId || '',
-          motivoCese: datosAnteriores.motivoCese || 'RENUNCIA VOLUNTARIA',
-          motivoReal: datosAnteriores.motivoReal || 'MEJORA ECONÓMICA',
-          registeredAt: datosAnteriores.registeredAt || new Date().toISOString(),
-          migratedFromProfile: true,
-          isCancelled: false,
-          cancelledAt: '',
-          lastUpdated: new Date().toISOString(),
-        });
-      }
-
-      await batch.commit();
-
-      // Sync role as a secondary operation
-      try {
-        const targetUid = form.uid || staff?.uid;
-        if (targetUid) {
-          const userDocRef = doc(db, 'users', targetUid);
-          const userSnap = await getDoc(userDocRef);
-
-          if (userSnap.exists()) {
-            const currentRole = userSnap.data().role;
-            if (currentRole !== 'superadmin') {
-              let newRole = 'collaborator';
-              if (form.position === 'GERENTE') {
-                newRole = 'admin';
-              } else if (form.position === 'ENTRENADOR') {
-                newRole = 'trainer';
-              }
-              if (currentRole !== newRole) {
-                await updateDoc(userDocRef, { role: newRole });
-              }
-            }
-          }
-        }
-      } catch (roleErr) {
-        console.warn('Sincronización de rol omitida o fallida:', roleErr);
-        // No lanzamos error para no confundir al usuario ya que el perfil principal se guardó
-      }
+      await saveStaffFromModal(supabase, {
+        form,
+        staff,
+        storeId: staff?.storeId || userData?.storeId,
+        staffId: savedProfileId.current,
+        onProfileSaved: id => { savedProfileId.current = id; },
+      });
 
       onSaved();
     } catch (err) {
       console.error('Error al guardar perfil:', err);
-      alert('Error crítico al guardar los datos del colaborador.');
+      alert(err?.message || 'No se pudo guardar el colaborador. Inténtalo de nuevo.');
     } finally {
+      saving.current = false;
       setLoading(false);
     }
   }
@@ -165,6 +83,21 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
               <label className={labelCls}>Apellido *</label>
               <input type="text" name="lastName" value={form.lastName} onChange={handleChange} className={inputCls} placeholder="Ej: Cari Sanchez" />
             </div>
+          </div>
+
+          <div>
+            <label className={labelCls}>Correo de acceso</label>
+            <input
+              type="email"
+              name="email"
+              value={form.email}
+              onChange={handleChange}
+              className={inputCls}
+              placeholder="nombre@empresa.com"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Opcional. Si queda vacío, el colaborador elegirá su tienda y su nombre al registrarse; el DNI confirmará su identidad.
+            </p>
           </div>
 
           {/* DNI + Sexo */}

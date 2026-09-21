@@ -8,10 +8,30 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_store_id uuid;
+  v_lock jsonb;
+  v_today date := (now() at time zone 'America/Lima')::date;
 begin
   if (p_position_abilities is not null and jsonb_typeof(p_position_abilities) <> 'array')
      or (p_pending_holidays is not null and jsonb_typeof(p_pending_holidays) <> 'array') then
     raise exception 'Los datos del perfil deben ser listas';
+  end if;
+
+  select store_id into v_store_id
+  from public.staff_profiles
+  where user_id = (select auth.uid()) and status = 'active';
+
+  if p_pending_holidays is not null and v_store_id is not null then
+    select value into v_lock
+    from public.store_configs
+    where store_id = v_store_id and config_key = 'schedule_lock';
+
+    if coalesce((v_lock->>'restrictionsEnabled')::boolean, false)
+       and coalesce(v_lock->>'reenableDate', '') ~ '^\d{4}-\d{2}-\d{2}$'
+       and v_today <= (v_lock->>'reenableDate')::date then
+      raise exception 'Cambios temporalmente bloqueados';
+    end if;
   end if;
 
   update public.staff_profiles
