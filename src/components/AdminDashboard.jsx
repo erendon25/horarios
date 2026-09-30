@@ -2,6 +2,10 @@
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
+import { supabase } from '../lib/supabase/client';
+import { readHolidayLedger, summarizeHolidayLedger } from '../services/holidayBalance';
+import HolidayBalancePanel from './HolidayBalancePanel';
+import HolidayPaymentSettings from './HolidayPaymentSettings';
 import {
     getWorkedHolidaysByUid,
     getNightHoursByUid,
@@ -374,7 +378,7 @@ function AdminDashboard() {
     const [storeName, setStoreName] = useState("");
     const [showScheduleEditor, setShowScheduleEditor] = useState(false);
     const [selectedStaff, setSelectedStaff] = useState(null);
-    const [selectedHolidays, setSelectedHolidays] = useState([]);
+    const [holidayRefresh, setHolidayRefresh] = useState(0);
     const [showHolidayModal, setShowHolidayModal] = useState(false);
     const [positionList, setPositionList] = useState([]);
     const [positionModalOpen, setPositionModalOpen] = useState(false);
@@ -691,39 +695,9 @@ function AdminDashboard() {
             setStoreName("Error al cargar tienda");
         }
     };
-    const handleViewHolidays = async (colab) => {
-        let feriados = [];
-        try {
-            // Buscar en la colección de feriados filtrando por staffId Y storeId (obligatorio por reglas)
-            const q = query(
-                collection(db, 'feriados_trabajados'),
-                where('staffId', '==', colab.id),
-                where('storeId', '==', userData.storeId)
-            );
-            const snap = await getDocs(q);
-            feriados = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
-            // Agregar feriados pendientes del perfil si los hay
-            const pending = colab.pendingHolidays || [];
-            const mappedPending = pending.map(p => {
-                if (typeof p === 'string') {
-                    return { date: p, type: 'ganado', isPending: true, name: 'Feriado Pendiente' };
-                }
-                return { ...p, type: 'ganado', isPending: true, name: p.name || 'Feriado Pendiente' };
-            });
-
-            feriados = [...feriados, ...mappedPending].sort((a, b) => {
-                const dateA = new Date(a.date || 0);
-                const dateB = new Date(b.date || 0);
-                return dateB - dateA;
-            });
-
-            setSelectedHolidays(feriados);
-            setSelectedStaff(colab);
-            setShowHolidayModal(true);
-        } catch (error) {
-            console.error("Error obteniendo feriados:", error);
-        }
+    const handleViewHolidays = (colab) => {
+        setSelectedStaff(colab);
+        setShowHolidayModal(true);
     };
 
     const fetchAllStaffProfiles = async () => {
@@ -741,7 +715,7 @@ function AdminDashboard() {
             // 1. Cargar todos los perfiles de la tienda
             const profilesQuery = query(collection(db, 'staff_profiles'), where('storeId', '==', userData.storeId));
             const profilesSnap = await getDocs(profilesQuery);
-            const profiles = profilesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            const profiles = profilesSnap.docs.map(doc => ({ ...doc.data(), id: doc.id }));
 
             // 2. Cargar study_schedules solo para los perfiles encontrados (evita listado masivo)
             const studyMap = {};
@@ -760,13 +734,11 @@ function AdminDashboard() {
             }
 
             // 3. Cargar balance de feriados de la tienda
-            const holidaysQuery = query(collection(db, 'feriados_trabajados'), where('storeId', '==', userData.storeId));
-            const hSnap = await getDocs(holidaysQuery);
-            const holidayBalances = {};
-            hSnap.forEach(hDoc => {
-                const hData = hDoc.data();
-                if (!holidayBalances[hData.staffId]) holidayBalances[hData.staffId] = 0;
-                holidayBalances[hData.staffId] += (hData.type === 'compensado' ? -1 : 1);
+            const holidayRows = await readHolidayLedger(supabase, { storeId: userData.storeId });
+            const holidayRowsByStaff = new Map();
+            holidayRows.forEach(row => {
+                if (!holidayRowsByStaff.has(row.staff_id)) holidayRowsByStaff.set(row.staff_id, []);
+                holidayRowsByStaff.get(row.staff_id).push(row);
             });
 
             // 4. Enriquecer perfiles y procesar cambios de modalidad programados que ya se cumplieron
@@ -803,7 +775,7 @@ function AdminDashboard() {
                 return {
                     ...currentProfile,
                     study_schedule: studyMap[profile.uid] || {},
-                    feriados: (currentProfile.feriados || 0) + (currentProfile.pendingHolidays?.length || 0),
+                    feriados: summarizeHolidayLedger(holidayRowsByStaff.get(profile.id) || []).balance,
                 };
             });
 
@@ -1683,49 +1655,6 @@ function AdminDashboard() {
         );
     };
 
-    const handleDeleteHoliday = async (holiday) => {
-        if (!window.confirm("¿Seguro que deseas eliminar este registro de feriado? Esto afectará el balance actual del colaborador.")) return;
-
-        try {
-            // 1. Eliminar el registro físico
-            if (holiday.isPending) {
-                // Es un registro en staff_profiles.pendingHolidays
-                const ref = doc(db, "staff_profiles", selectedStaff.id);
-                const updatedPending = (selectedStaff.pendingHolidays || []).filter(p => {
-                    const date = typeof p === 'string' ? p : p.date;
-                    return date !== holiday.date;
-                });
-                await updateDoc(ref, { pendingHolidays: updatedPending });
-            } else {
-                // Es un documento en feriados_trabajados
-                await deleteDoc(doc(db, 'feriados_trabajados', holiday.id));
-            }
-
-            // 2. Ajustar el balance en el perfil
-            const impact = holiday.type === 'ganado' ? -1 : 1;
-            const newBalance = (selectedStaff.feriados || 0) + impact;
-            await updateDoc(doc(db, "staff_profiles", selectedStaff.id), {
-                feriados: newBalance
-            });
-
-            // 3. Actualizar estados locales
-            setSelectedHolidays(prev => prev.filter(h => {
-                if (holiday.isPending) return h.date !== holiday.date;
-                return h.id !== holiday.id;
-            }));
-
-            const updatedStaff = { ...selectedStaff, feriados: newBalance };
-            setSelectedStaff(updatedStaff);
-
-            // Actualizar la lista principal de staff
-            setStaff(prev => prev.map(s => s.id === selectedStaff.id ? { ...s, feriados: newBalance } : s));
-
-        } catch (error) {
-            console.error("Error al eliminar feriado:", error);
-            alert("No se pudo eliminar el registro: " + error.message);
-        }
-    };
-
     const handleEditSave = async () => {
         try {
             if (!editModal.name || !editModal.lastName) {
@@ -2333,6 +2262,7 @@ function AdminDashboard() {
                             )}
                         </div>
                         <div className="flex flex-wrap items-center gap-3">
+                            <button onClick={() => navigate("/concurso")} className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-xl text-xs font-bold"><Award className="w-4 h-4" />CONCURSO</button>
                             {/* Grupo: Operaciones */}
                             <div className="flex items-center bg-gray-50 p-1 rounded-2xl border border-gray-100">
                                 <button
@@ -2510,6 +2440,12 @@ function AdminDashboard() {
 
             {/* Main Content */}
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                {userData?.storeId && ['admin', 'superadmin'].includes(userRole) && (
+                    <HolidayPaymentSettings storeId={userData.storeId} onSaved={() => {
+                        setHolidayRefresh(value => value + 1);
+                        fetchAllStaffProfiles();
+                    }} />
+                )}
                 {/* Error Message */}
                 {error && (
                     <div className="mb-6 p-4 bg-red-50 border-l-4 border-red-500 rounded-r-lg shadow-md flex items-start gap-3">
@@ -3468,71 +3404,6 @@ function AdminDashboard() {
                     />
                 )}
 
-                {showHolidayModal && selectedStaff && (
-                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                        <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col overflow-hidden">
-                            {/* Header */}
-                            <div className="px-6 py-4 bg-gradient-to-r from-blue-600 to-indigo-600 flex justify-between items-center text-white">
-                                <h3 className="text-xl font-bold">Historial de Feriados: {selectedStaff.name}</h3>
-                                <button onClick={() => setShowHolidayModal(false)} className="text-2xl hover:text-gray-200">&times;</button>
-                            </div>
-                            {/* Body */}
-                            <div className="p-6 overflow-y-auto flex-1">
-                                <div className="mb-6 p-4 bg-blue-50 border border-blue-100 rounded-xl flex justify-between items-center">
-                                    <div>
-                                        <p className="text-blue-600 text-sm font-medium">Balance Actual</p>
-                                        <p className="text-3xl font-bold text-blue-900">{selectedStaff.feriados} días</p>
-                                    </div>
-                                    <Calendar className="w-12 h-12 text-blue-200" />
-                                </div>
-                                <div className="space-y-3">
-                                    <h4 className="text-sm font-bold text-gray-500 uppercase tracking-wider">Movimientos</h4>
-                                    {selectedHolidays.length === 0 ? (
-                                        <p className="text-center py-8 text-gray-400">No hay movimientos registrados</p>
-                                    ) : (
-                                        <div className="bg-white border rounded-xl overflow-hidden">
-                                            <table className="w-full text-sm text-left">
-                                                <thead className="bg-gray-50 text-gray-500 font-medium border-b">
-                                                    <tr>
-                                                        <th className="px-4 py-3">Fecha</th>
-                                                        <th className="px-4 py-3">Concepto</th>
-                                                        <th className="px-4 py-3 text-right">Efecto</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody className="divide-y divide-gray-100">
-                                                    {selectedHolidays.map((h, i) => (
-                                                        <tr key={i} className="hover:bg-gray-50 transition-colors">
-                                                            <td className="px-4 py-3 font-medium text-gray-900">
-                                                                {h.date ? new Date(h.date + 'T00:00:00').toLocaleDateString('es-ES') : '—'}
-                                                            </td>
-                                                            <td className="px-4 py-3 text-gray-600">
-                                                                {h.name}
-                                                                {h.isPending && <span className="ml-2 px-1.5 py-0.5 bg-yellow-100 text-yellow-700 text-[10px] font-bold rounded uppercase">Migrado</span>}
-                                                            </td>
-                                                            <td className={`px-4 py-3 text-right font-bold ${h.type === 'compensado' ? 'text-red-500' : 'text-green-500'}`}>
-                                                                {h.type === 'compensado' ? '-1 día' : '+1 día'}
-                                                            </td>
-                                                        </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                            {/* Footer */}
-                            <div className="p-4 border-t bg-gray-50 flex justify-end">
-                                <button
-                                    onClick={() => setShowHolidayModal(false)}
-                                    className="px-6 py-2 bg-white border border-gray-300 rounded-lg text-gray-700 font-semibold hover:bg-gray-50 transition-colors"
-                                >
-                                    Cerrar
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
                 {/* Modal Consultar Ceses */}
                 {showCesadosModal && (() => {
                     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -3836,117 +3707,14 @@ function AdminDashboard() {
                     );
                 })()}
 
-                {/* ===== MODAL HISTORIAL DE FERIADOS ===== */}
                 {showHolidayModal && selectedStaff && (
-                    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
-                        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
-                            {/* Header */}
-                            <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-blue-600 to-indigo-700 flex-shrink-0">
-                                <div>
-                                    <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                                        <Calendar className="w-5 h-5" />
-                                        Balance de Feriados
-                                    </h2>
-                                    <p className="text-blue-100 text-sm mt-0.5">{selectedStaff.name} {selectedStaff.lastName}</p>
-                                </div>
-                                <button
-                                    onClick={() => {
-                                        setShowHolidayModal(false);
-                                        setSelectedHolidays([]);
-                                    }}
-                                    className="text-white hover:bg-white/20 p-2 rounded-lg transition-colors"
-                                >
-                                    <X className="w-6 h-6" />
-                                </button>
+                    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 px-4" role="dialog" aria-modal="true" aria-label="Feriados del colaborador">
+                        <div className="w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-2xl bg-white p-5">
+                            <div className="mb-4 flex items-center justify-between gap-3">
+                                <h2 className="text-xl font-bold">{selectedStaff.name} {selectedStaff.lastName}</h2>
+                                <button type="button" onClick={() => setShowHolidayModal(false)} className="rounded-lg border px-3 py-2">Cerrar</button>
                             </div>
-
-                            {/* Resumen del Balance */}
-                            <div className="px-6 py-4 bg-blue-50 border-b border-blue-100 flex items-center justify-between">
-                                <span className="text-blue-800 font-medium">Balance Actual:</span>
-                                <div className="flex items-center gap-2">
-                                    <span className={`text-2xl font-bold ${selectedStaff.feriados > 0 ? 'text-green-600' : selectedStaff.feriados < 0 ? 'text-red-600' : 'text-gray-600'}`}>
-                                        {selectedStaff.feriados > 0 ? `+${selectedStaff.feriados}` : selectedStaff.feriados}
-                                    </span>
-                                    <span className="text-sm text-blue-600 font-medium">días disponibles</span>
-                                </div>
-                            </div>
-
-                            {/* Tabla de Movimientos */}
-                            <div className="overflow-y-auto flex-1 p-6">
-                                {selectedHolidays.length === 0 ? (
-                                    <div className="text-center py-12">
-                                        <Calendar className="w-12 h-12 text-gray-200 mx-auto mb-3" />
-                                        <p className="text-gray-500">No hay movimientos registrados para este colaborador.</p>
-                                    </div>
-                                ) : (
-                                    <div className="space-y-3">
-                                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Historial de Movimientos</p>
-                                        <div className="border border-gray-100 rounded-xl overflow-hidden">
-                                            <table className="w-full text-sm">
-                                                <thead className="bg-gray-50 text-gray-600 text-xs uppercase">
-                                                    <tr>
-                                                        <th className="px-4 py-3 text-left">Fecha</th>
-                                                        <th className="px-4 py-3 text-left">Concepto</th>
-                                                        <th className="px-4 py-3 text-center">Tipo</th>
-                                                        <th className="px-4 py-3 text-center">Impacto</th>
-                                                        <th className="px-4 py-3 text-center">Acción</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody className="divide-y divide-gray-100">
-                                                    {selectedHolidays.map((h, i) => {
-                                                        const isGanado = h.type === 'ganado';
-                                                        return (
-                                                            <tr key={i} className="hover:bg-gray-50 transition-colors">
-                                                                <td className="px-4 py-3 font-medium text-gray-700">
-                                                                    {(() => {
-                                                                        if (!h.date) return 'Sin fecha';
-                                                                        const d = new Date(h.date + 'T00:00:00');
-                                                                        return isNaN(d.getTime()) ? 'Fecha inválida' : d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
-                                                                    })()}
-                                                                </td>
-                                                                <td className="px-4 py-3 text-gray-600">
-                                                                    {h.name || 'Feriado de Ley'}
-                                                                    {h.isPending && <span className="ml-2 bg-yellow-100 text-yellow-700 text-[10px] px-1.5 py-0.5 rounded font-bold">PENDIENTE</span>}
-                                                                </td>
-                                                                <td className="px-4 py-3 text-center">
-                                                                    <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${isGanado ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                                                        {isGanado ? 'Trabajado' : 'Compensado'}
-                                                                    </span>
-                                                                </td>
-                                                                <td className={`px-4 py-3 text-center font-bold ${isGanado ? 'text-green-600' : 'text-red-600'}`}>
-                                                                    {isGanado ? '+1' : '-1'}
-                                                                </td>
-                                                                <td className="px-4 py-3 text-center">
-                                                                    <button
-                                                                        onClick={() => handleDeleteHoliday(h)}
-                                                                        className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                                                                        title="Eliminar este registro"
-                                                                    >
-                                                                        <FaTrash className="w-4 h-4" />
-                                                                    </button>
-                                                                </td>
-                                                            </tr>
-                                                        );
-                                                    })}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* Footer */}
-                            <div className="px-6 py-4 border-t border-gray-100 flex justify-end">
-                                <button
-                                    onClick={() => {
-                                        setShowHolidayModal(false);
-                                        setSelectedHolidays([]);
-                                    }}
-                                    className="px-6 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-lg transition-all"
-                                >
-                                    Cerrar
-                                </button>
-                            </div>
+                            <HolidayBalancePanel staffId={selectedStaff.id} previousBalance={selectedStaff.holidayBalance} refreshKey={holidayRefresh} canDelete={['admin', 'superadmin'].includes(userRole)} onChanged={fetchAllStaffProfiles} />
                         </div>
                     </div>
                 )}

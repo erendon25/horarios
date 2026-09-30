@@ -74,3 +74,7 @@ La Edge Function `staff-account-admin` requiere el secreto `APP_URL` con la URL 
 8. auditoría y validación final
 
 Referencia oficial: Supabase permite exportar colecciones de Firestore a JSON y transformarlas mediante hooks antes de importarlas en tablas PostgreSQL. Para este proyecto se necesitarán hooks porque varias colecciones contienen estructuras anidadas.
+
+## Concurso de velocidad y calidad
+
+Las migraciones `20260927053023_speed_quality_competition.sql` y `20260927053329_competition_foreign_key_indexes.sql` añaden el dominio de concursos, funciones transaccionales, RLS y vistas de ranking. Reutilizan `staff_profiles`, `stores`, la autorización privada existente y `audit_log`. Consulte `docs/CONCURSO.md` para configuración, pruebas, decisiones de cronometraje y despliegue.

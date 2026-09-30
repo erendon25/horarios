@@ -1,0 +1,346 @@
+.competition {
+  --orange: #c74808;
+  color: #171717;
+  min-height: 100vh;
+  background: #f7f6f3;
+  font-family: inherit;
+  padding: 24px;
+}
+.competition * {
+  box-sizing: border-box;
+}
+.competition .shell {
+  max-width: 1280px;
+  margin: auto;
+}
+.competition .hero {
+  border-radius: 24px;
+  padding: 28px;
+  background: #191919;
+  color: white;
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  align-items: center;
+}
+.competition .eyebrow {
+  color: #ffac76;
+  font-size: 12px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  font-weight: 800;
+}
+.competition h1 {
+  font-size: clamp(23px, 3vw, 36px);
+  line-height: 1.15;
+  font-weight: 900;
+  margin: 8px 0;
+}
+.competition h2 {
+  font-size: 22px;
+  font-weight: 800;
+  margin: 0 0 16px;
+}
+.competition h3 {
+  font-size: 17px;
+  font-weight: 800;
+  margin: 0 0 12px;
+}
+.competition p {
+  margin: 8px 0;
+}
+.competition .muted {
+  color: #666;
+  font-size: 14px;
+}
+.competition button,
+.competition input,
+.competition select,
+.competition textarea {
+  font: inherit;
+}
+.competition button {
+  cursor: pointer;
+  min-height: 44px;
+  border-radius: 10px;
+  padding: 10px 16px;
+  border: 1px solid #d8d4cf;
+  background: #fff;
+  color: #222;
+  font-weight: 700;
+}
+.competition button:hover {
+  background: #fff4eb;
+  border-color: #d2672c;
+}
+.competition button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.competition button.primary {
+  background: var(--orange);
+  border-color: var(--orange);
+  color: white;
+}
+.competition button.danger {
+  background: #b42318;
+  color: white;
+  border-color: #b42318;
+}
+.competition button.ghost {
+  background: transparent;
+  color: inherit;
+}
+.competition :focus-visible {
+  outline: 3px solid #f29a54;
+  outline-offset: 3px;
+}
+.competition label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 650;
+}
+.competition input:not([type="checkbox"]),
+.competition select,
+.competition textarea {
+  border: 1px solid #d2cfc9;
+  border-radius: 8px;
+  padding: 11px;
+  background: #fff;
+  width: 100%;
+  min-width: 0;
+  color: #222;
+}
+.competition label.check {
+  flex-direction: row;
+  align-items: center;
+  min-height: 44px;
+}
+.competition input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--orange);
+}
+.competition .toolbar,
+.competition .actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 16px 0;
+}
+.competition .toolbar label {
+  min-width: 200px;
+  flex: 1;
+}
+.competition nav {
+  display: flex;
+  gap: 6px;
+  overflow: auto;
+  padding: 8px 0 20px;
+}
+.competition nav button {
+  white-space: nowrap;
+  background: transparent;
+  border-color: transparent;
+}
+.competition nav button.active {
+  background: #fff0e5;
+  color: #a23606;
+  border-color: #ffc79e;
+}
+.competition .card {
+  background: white;
+  border: 1px solid #e4e0da;
+  border-radius: 16px;
+  padding: 22px;
+  margin-bottom: 16px;
+}
+.competition .grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+.competition .grid .card {
+  margin: 0;
+}
+.competition .form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
+}
+.competition .stat {
+  font-size: 32px;
+  font-weight: 850;
+}
+.competition .badge {
+  display: inline-block;
+  padding: 4px 9px;
+  border-radius: 6px;
+  background: #f1f0ed;
+  font-size: 12px;
+  font-weight: 800;
+}
+.competition .success {
+  color: #14633c;
+  background: #e9f8ef;
+}
+.competition .failure {
+  color: #9d2420;
+  background: #fff0ed;
+}
+.competition .gold {
+  color: #785708;
+  background: #fff2c2;
+}
+.competition .notice {
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: #fff1d9;
+  border: 1px solid #edce9a;
+  margin: 14px 0;
+}
+.competition .error {
+  background: #fff0ed;
+  border-color: #f0b5ad;
+  color: #922219;
+}
+.competition .table-wrap {
+  overflow-x: auto;
+}
+.competition table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 14px;
+}
+.competition th,
+.competition td {
+  text-align: left;
+  padding: 12px 10px;
+  border-bottom: 1px solid #eee;
+  vertical-align: top;
+}
+.competition th {
+  color: #666;
+  font-size: 12px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.competition .timer-panel {
+  background: #171717;
+  color: white;
+  border-radius: 18px;
+  padding: 26px;
+  text-align: center;
+  margin: 20px 0;
+}
+.competition .timer {
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(48px, 10vw, 92px);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1.35;
+}
+.competition .timer-panel .actions {
+  justify-content: center;
+}
+.competition .timer-panel button {
+  min-height: 58px;
+  padding: 15px 28px;
+  font-size: 17px;
+}
+.competition .fixture {
+  display: flex;
+  gap: 14px;
+  overflow-x: auto;
+  padding-bottom: 12px;
+}
+.competition .phase {
+  min-width: 250px;
+  flex: 1;
+}
+.competition .phase .card {
+  padding: 16px;
+}
+.competition .overlay {
+  position: fixed;
+  inset: 0;
+  background: #0009;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+.competition .modal {
+  width: 100%;
+  max-width: 600px;
+  max-height: 90vh;
+  overflow: auto;
+  background: white;
+  border-radius: 18px;
+  padding: 24px;
+}
+.competition .score-row {
+  display: grid;
+  grid-template-columns: 1fr 100px;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0;
+}
+.competition .summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.competition .summary dt {
+  font-size: 12px;
+  color: #666;
+}
+.competition .summary dd {
+  font-weight: 750;
+  margin: 0;
+}
+.competition .template-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-items: center;
+  margin: 10px 0;
+}
+@media (max-width: 600px) {
+  .competition {
+    padding: 12px;
+  }
+  .competition .hero {
+    padding: 22px;
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .competition .card {
+    padding: 16px;
+  }
+  .competition .template-row {
+    grid-template-columns: 1fr;
+  }
+  .competition .timer-panel {
+    padding: 16px 10px;
+  }
+  .competition .summary {
+    grid-template-columns: 1fr;
+  }
+}
+
+.competition fieldset {
+  min-width: 0;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+.competition .notice.success {
+  background: #e9f8ef;
+  border-color: #acdabf;
+  color: #14633c;
+}

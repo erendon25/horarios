@@ -1,3 +1,5 @@
+import './services/competitionNavigationGuard';
+import { lazy, Suspense } from 'react';
 // App.jsx
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -24,6 +26,8 @@ import TrainingApp from './components/Training/TrainingApp';
 
 <ToastContainer />
 
+const CompetitionApp = lazy(() => import('./components/Competition/CompetitionApp'));
+
 function AppRouter() {
   const { userRole } = useAuth();
   return (
@@ -37,6 +41,7 @@ function AppRouter() {
               : '/staff'
         } />
       } />
+      <Route path="/concurso" element={<PrivateRoute role="collaborator"><Suspense fallback={<p className="p-6">Cargando concurso…</p>}><CompetitionApp /></Suspense></PrivateRoute>} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/unauthorized" element={<h1>Acceso no autorizado</h1>} />
