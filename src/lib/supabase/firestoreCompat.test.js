@@ -35,6 +35,106 @@ const request = {
   startTime: null, endTime: null, reason: 'Prueba aislada', status: 'pending',
 };
 
+const extraHours = {
+  ...request, uid: null, fecha: '2026-09-20',
+  periodStart: '2026-09-14', periodEnd: '2026-09-20',
+  durationMinutes: 150, duracion: '2h 30m', isPeriodTotal: true,
+  dailyDetails: [{ fecha: '2026-09-14', totalExtraMinutes: 150 }],
+};
+
+function extraHoursClient(rows, { insertError, race = false } = {}) {
+  let raced = false;
+  return { from(table) {
+    assert.equal(table, 'extra_hours');
+    const saved = (columns, id) => {
+      assert.equal(Object.hasOwn(columns, 'firestore_id'), false);
+      const row = { ...JSON.parse(JSON.stringify(columns)), id };
+      const index = rows.findIndex((item) => item.id === id);
+      if (index < 0) rows.push(row);
+      else rows[index] = { ...rows[index], ...row };
+      return { data: { id }, error: null };
+    };
+    return {
+      select: () => {
+        let filtered = rows;
+        const query = {
+          eq(key, value) { filtered = filtered.filter((row) => row[key] === value); return query; },
+          is(key, value) { filtered = filtered.filter((row) => (row[key] ?? null) === value); return query; },
+          maybeSingle: async () => ({ data: filtered[0] || null, error: null }),
+          then(resolve) { return Promise.resolve({ data: filtered, error: null }).then(resolve); },
+        };
+        return query;
+      },
+      insert: (columns) => ({ select: () => ({ single: async () => {
+        if (insertError) return { data: null, error: insertError };
+        if (race && !raced) {
+          raced = true;
+          saved(columns, 91);
+          return { data: null, error: { code: '23505', message: 'duplicate key' } };
+        }
+        return saved(columns, 90);
+      } }) }),
+      update: (columns) => ({ eq: (key, id) => {
+        assert.equal(key, 'id');
+        return { select: () => ({ single: async () => saved(columns, id) }) };
+      } }),
+    };
+  } };
+}
+
+test('importa horas extras sin ID externo y reimporta el periodo sin duplicarlo', async () => {
+  const rows = [];
+  const compat = await loadCompat(extraHoursClient(rows));
+  assert.equal((await compat.saveGeoVictoriaExtraHours(extraHours)).created, true);
+  assert.equal(rows[0].source_key, `geovictoria:${request.staffId}:2026-09-14:2026-09-20`);
+  assert.equal(rows[0].user_id, null);
+  assert.equal(rows[0].duration_minutes, 150);
+  assert.equal(rows[0].work_date, '2026-09-14');
+  assert.deepEqual(rows[0].daily_details, extraHours.dailyDetails);
+  assert.equal((await compat.saveGeoVictoriaExtraHours({ ...extraHours, durationMinutes: 180 })).created, false);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].duration_minutes, 180);
+});
+
+test('actualiza registros migrados por ID nativo sin reescribir el ID de Firebase', async () => {
+  const rows = [{ id: 27, firestore_id: 'gvextra_legacy',
+    source_key: `geovictoria:${request.staffId}:2026-09-14:2026-09-20` }];
+  const compat = await loadCompat(extraHoursClient(rows));
+  const result = await compat.saveGeoVictoriaExtraHours(extraHours);
+  assert.equal(result.id, '27');
+  assert.equal(result.created, false);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].firestore_id, 'gvextra_legacy');
+});
+
+test('reintenta por ID nativo si otra importación crea el mismo periodo', async () => {
+  const rows = [];
+  const compat = await loadCompat(extraHoursClient(rows, { race: true }));
+  const result = await compat.saveGeoVictoriaExtraHours(extraHours);
+  assert.equal(result.id, '91');
+  assert.equal(result.created, false);
+  assert.equal(rows.length, 1);
+});
+
+test('reutiliza el periodo histórico sin clave de origen', async () => {
+  const rows = [{ id: 28, staff_id: request.staffId, store_id: request.storeId,
+    source: 'geovictoria_extra_hours', work_date: extraHours.periodStart,
+    legacy_data: { periodEnd: extraHours.periodEnd } }];
+  const compat = await loadCompat(extraHoursClient(rows));
+  const result = await compat.saveGeoVictoriaExtraHours(extraHours);
+  assert.equal(result.id, '28');
+  assert.equal(result.created, false);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].source_key, `geovictoria:${request.staffId}:2026-09-14:2026-09-20`);
+});
+
+test('propaga el rechazo de la base al importar horas extras', async () => {
+  const compat = await loadCompat(extraHoursClient([], {
+    insertError: { code: '42501', message: 'Importación no autorizada' },
+  }));
+  await assert.rejects(compat.saveGeoVictoriaExtraHours(extraHours), /Importación no autorizada/);
+});
+
 test('crea solicitudes sin identificador externo ni fecha del dispositivo y devuelve el ID nativo', async () => {
   let inserted;
   const compat = await loadCompat({

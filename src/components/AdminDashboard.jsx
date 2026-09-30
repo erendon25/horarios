@@ -46,6 +46,7 @@ import {
     where,
     getDoc,
     setDoc,
+    saveGeoVictoriaExtraHours,
     onSnapshot
 } from "../lib/supabase/firestoreCompat";
 import { db } from "../supabase";
@@ -999,7 +1000,7 @@ function AdminDashboard() {
         const recordDni = normalizeDni(record?.dni);
         return staff.find((person) =>
             person.id === record?.staffId
-            || person.uid === record?.uid
+            || (record?.uid && person.uid === record.uid)
             || (recordDni && normalizeDni(person.dni) === recordDni)
         ) || {};
     };
@@ -1398,8 +1399,6 @@ function AdminDashboard() {
 
             for (const item of grouped.values()) {
                 const person = item.person;
-                const ref = doc(db, 'extra_hours', `gvextra_${person.id}_${item.periodStart || item.fecha}_${item.periodEnd || item.fecha}`);
-                const existed = await getDoc(ref);
                 const totalExtraMinutes = item.totalExtraMinutes;
                 const extraMinutesPre = item.extraMinutesPre;
                 const extraMinutesPost = item.extraMinutesPost;
@@ -1456,9 +1455,9 @@ function AdminDashboard() {
                     dailyDetails: item.dailyDetails || [],
                 };
 
-                await setDoc(ref, payload, { merge: true });
-                if (existed.exists()) updated += 1;
-                else created += 1;
+                const saved = await saveGeoVictoriaExtraHours(payload);
+                if (saved.created) created += 1;
+                else updated += 1;
 
                 const staffKey = person.id;
                 const current = totalByStaff.get(staffKey) || {

@@ -3,6 +3,7 @@ const HEATMAP_START_MINUTES = 7 * 60;
 const HEATMAP_END_MINUTES = 25 * 60;
 const HEATMAP_INTERVAL_MINUTES = 15;
 const PROJECTION_START_MINUTES = 8 * 60;
+const isOnBreak = (person, minute) => minute >= person.breakStartMinutes && minute < person.breakEndMinutes;
 
 export const HOURS = Array.from(
     { length: ((HEATMAP_END_MINUTES - HEATMAP_START_MINUTES) / HEATMAP_INTERVAL_MINUTES) + 1 },
@@ -127,7 +128,7 @@ export function buildHeatmapRows(assigned = [], requirements = {}) {
             const displayMin = isOvernight ? currentBlock : (currentBlock % 1440);
             const hour = ABS_MIN_TO_HOUR[displayMin];
 
-            if (hour) {
+            if (hour && !isOnBreak(p, currentBlock)) {
                 overlapDetection[hour] = (overlapDetection[hour] || 0) + 1;
             }
             currentBlock += 15;
@@ -140,7 +141,7 @@ export function buildHeatmapRows(assigned = [], requirements = {}) {
             const displayMin = isOvernight ? currentBlock : (currentBlock % 1440);
             const hour = ABS_MIN_TO_HOUR[displayMin];
 
-            if (hour) {
+            if (hour && !isOnBreak(p, currentBlock)) {
                 positionOverlapDetection[norm][hour] = (positionOverlapDetection[norm][hour] || 0) + 1;
             }
             currentBlock += 15;
@@ -197,9 +198,9 @@ export function buildHeatmapRows(assigned = [], requirements = {}) {
             // Esto se logra usando `<= endMin` para pintar, pero marcando el bloque de fin
             // solo si NO hay otro turno en esa posición que empieza exactamente ahí.
 
-            const coversBlock = currentBlockMin >= startMin && currentBlockMin <= endMin;
+            const coversBlock = currentBlockMin >= startMin && (p.endExclusive ? currentBlockMin < endMin : currentBlockMin <= endMin);
 
-            if (coversBlock) {
+            if (coversBlock && !isOnBreak(p, currentBlockMin)) {
                 // Si es exactamente el bloque de fin (currentBlockMin === endMin)
                 // Y hay un relevo exacto (otro turno en esta posición empieza en ese mismo minuto),
                 // NO lo contamos para evitar doble conteo.

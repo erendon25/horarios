@@ -1,0 +1,90 @@
+{
+  "project_info": {
+    "project_number": "1054512970764",
+    "project_id": "lc-scheduler",
+    "storage_bucket": "lc-scheduler.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1054512970764:android:06f00a656f22097463c229",
+        "android_client_info": {
+          "package_name": "com.horarios.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1054512970764-k2g34ff2uhko71cgq02tfco0bfugveg7.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.horarios.app",
+            "certificate_hash": "c62ce800d4d03f5abbfb46b0da43fbccec183c09"
+          }
+        },
+        {
+          "client_id": "1054512970764-hk0bce6rce19ic1181pvaa0o4ao5g7gj.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBDwIho0sEZYrgTO70LhipW7_gn-qohKIU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1054512970764-hk0bce6rce19ic1181pvaa0o4ao5g7gj.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "1054512970764-325qklq3h3on72sib0ils483k56qqjfi.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.lcscheduler.app"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1054512970764:android:6cd0851628968f6663c229",
+        "android_client_info": {
+          "package_name": "com.lcscheduler.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1054512970764-hk0bce6rce19ic1181pvaa0o4ao5g7gj.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBDwIho0sEZYrgTO70LhipW7_gn-qohKIU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1054512970764-hk0bce6rce19ic1181pvaa0o4ao5g7gj.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "1054512970764-325qklq3h3on72sib0ils483k56qqjfi.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.lcscheduler.app"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

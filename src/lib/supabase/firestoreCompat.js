@@ -382,7 +382,7 @@ function columnsFor(root, data, previous = {}) {
   return columns;
 }
 
-async function resolveNativeStaffIdentity(data, { required = false } = {}) {
+async function resolveNativeStaffIdentity(data, { required = false, requireAccount = required } = {}) {
   let prepared = { ...data };
   const key = prepared.staffId || prepared.uid;
   const needsResolve = !prepared.staffId
@@ -407,7 +407,7 @@ async function resolveNativeStaffIdentity(data, { required = false } = {}) {
     if (required) throw new Error("No se encontró el perfil vinculado del colaborador.");
     return prepared;
   }
-  if (required && !profile.user_id) {
+  if (requireAccount && !profile.user_id) {
     throw new Error("El colaborador no tiene una cuenta vinculada para enviar solicitudes.");
   }
 
@@ -577,6 +577,66 @@ async function persist(ref, data, merge) {
 }
 
 export const setDoc = (ref, data, options = {}) => persist(ref, data, Boolean(options.merge));
+
+// GeoVictoria identifica un periodo, no un documento de Firebase. La clave
+// coincide con los registros migrados y su índice único evita duplicados.
+export async function saveGeoVictoriaExtraHours(data) {
+  const prepared = await resolveNativeStaffIdentity(data, { required: true, requireAccount: false });
+  const start = prepared.periodStart || prepared.fecha;
+  const end = prepared.periodEnd || prepared.fecha;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start || '') || !/^\d{4}-\d{2}-\d{2}$/.test(end || '') || end < start) {
+    throw new Error('El periodo de horas extras no es válido.');
+  }
+  const sourceKey = `geovictoria:${prepared.staffId}:${start}:${end}`;
+  const columns = columnsFor('extra_hours', {
+    ...prepared,
+    periodStart: start,
+    periodEnd: end,
+    source: 'geovictoria_extra_hours',
+  });
+  // duracion es una etiqueta ("2h 30m"); en Postgres se guardan minutos.
+  columns.duration_minutes = Number(prepared.durationMinutes ?? prepared.totalExtraMinutes);
+  if (!Number.isFinite(columns.duration_minutes) || columns.duration_minutes < 0) {
+    throw new Error('La duración de horas extras no es válida.');
+  }
+  columns.source_key = sourceKey;
+  const findExisting = async () => {
+    const result = await supabase.from('extra_hours').select('id').eq('source_key', sourceKey).maybeSingle();
+    throwIfError(result.error);
+    return result.data;
+  };
+  const updateExisting = async (existing) => {
+    const result = await supabase.from('extra_hours').update(columns).eq('id', existing.id).select('id').single();
+    throwIfError(result.error);
+    return { id: String(result.data.id), created: false };
+  };
+  const existing = await findExisting();
+  if (existing) return updateExisting(existing);
+
+  // Algunas importaciones anteriores tienen ID nativo pero no source_key.
+  const historical = await supabase.from('extra_hours').select('id,work_date,legacy_data,segments')
+    .eq('staff_id', prepared.staffId).eq('store_id', prepared.storeId)
+    .eq('source', 'geovictoria_extra_hours').is('source_key', null);
+  throwIfError(historical.error);
+  const matches = (historical.data ?? []).filter((row) => {
+    const oldStart = legacy(row).periodStart || row.segments?.[0]?.periodStart || row.work_date;
+    const oldEnd = legacy(row).periodEnd || row.segments?.[0]?.periodEnd || row.work_date;
+    return oldStart === start && oldEnd === end;
+  });
+  if (matches.length > 1) throw new Error('Hay varios registros para el mismo colaborador y periodo. Revisa el historial antes de importar.');
+  if (matches.length === 1) return updateExisting(matches[0]);
+
+  const result = await supabase.from('extra_hours').insert(columns).select('id').single();
+  // El índice de source_key es parcial: no admite el onConflict genérico.
+  // Si otra importación ganó la carrera, actualizar su registro por ID nativo.
+  if (result.error?.code === '23505') {
+    const concurrent = await findExisting();
+    if (concurrent) return updateExisting(concurrent);
+  }
+  throwIfError(result.error);
+  return { id: String(result.data.id), created: true };
+}
+
 export async function updateDoc(ref, data) {
   const current = await getDoc(ref);
   if (!current.exists()) throw new Error(`Documento no encontrado: ${ref.path}`);

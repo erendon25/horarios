@@ -4,29 +4,17 @@ import { createPortal } from 'react-dom';
 import { Maximize2, Minimize2, FileText, Download } from 'lucide-react';
 import { HEATMAP_LEGEND, downloadHeatmap } from '../services/heatmapExport';
 import { HOURS, buildHeatmapRows } from '../services/heatmapModel';
+import HeatmapTransferForm from './HeatmapTransferForm';
+import { heatmapMinutes } from '../services/heatmapTransfers';
 export { HOURS } from '../services/heatmapModel';
 
 const EMPTY_ASSIGNED = [];
 const EMPTY_REQUIREMENTS = {};
 
-const HEATMAP_TABLE_MIN_WIDTH = 120 + HOURS.length * 24;
+const HEATMAP_SLOT_WIDTH = 44;
+const HEATMAP_TABLE_MIN_WIDTH = 120 + HOURS.length * HEATMAP_SLOT_WIDTH;
 
-// Una etiqueta por hora. La matriz conserva columnas de 15 minutos, pero el
-// encabezado las agrupa para que textos como "10:15" y "10:30" no se monten.
-const TIME_HEADERS = HOURS.reduce((headers, hour, index) => {
-    const [hours, minutes] = hour.split(':').map(Number);
-    if (minutes !== 0) return headers;
-
-    const remainingColumns = HOURS.length - index;
-    headers.push({
-        hour,
-        label: `${String(hours).padStart(2, '0')}:00`,
-        colSpan: Math.min(4, remainingColumns)
-    });
-    return headers;
-}, []);
-
-export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requirements = EMPTY_REQUIREMENTS, date = '', dayLabel = '', canExport = false }) {
+export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requirements = EMPTY_REQUIREMENTS, date = '', dayLabel = '', canExport = false, onTransfer }) {
     const rows = useMemo(() => buildHeatmapRows(assigned, requirements), [assigned, requirements]);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const dialogRef = useRef(null);
@@ -34,6 +22,10 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
     const drag = useRef(null);
     const [exporting, setExporting] = useState('');
     const [exportError, setExportError] = useState('');
+    const [transferSelection, setTransferSelection] = useState(null);
+    const [selectMode, setSelectMode] = useState(true);
+    const [rangePreview, setRangePreview] = useState(null);
+    const rangeDrag = useRef(null);
 
     useEffect(() => {
         if (!isFullscreen) return;
@@ -51,18 +43,49 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
     const handlePointerDown = (event) => {
         // Keep native touch scrolling and scrollbar interactions.
         const element = event.currentTarget;
-        if (event.pointerType !== 'mouse' || event.button !== 0 || event.target === element) return;
+        const cell = event.target.closest('[data-range-hour]');
+        if (onTransfer && selectMode && cell && cell.dataset.excess === 'true' && event.button === 0) {
+            event.preventDefault();
+            const anchor = Number(cell.dataset.rangeHour);
+            const range = { source: cell.dataset.position, row: cell.dataset.rangeRow, anchor, from: anchor, to: anchor };
+            rangeDrag.current = range;
+            setRangePreview(range);
+            setTransferSelection(null);
+            element.setPointerCapture(event.pointerId);
+            return;
+        }
+        if (onTransfer && selectMode) return;
+        if (event.pointerType !== 'mouse' || event.button !== 0 || event.target === element || event.target.closest('button')) return;
         event.preventDefault();
         drag.current = { x: event.clientX, y: event.clientY, left: element.scrollLeft, top: element.scrollTop };
         element.setPointerCapture(event.pointerId);
         element.style.cursor = 'grabbing';
     };
     const handlePointerMove = (event) => {
+        if (rangeDrag.current) {
+            const element = event.currentTarget;
+            const bounds = element.getBoundingClientRect();
+            if (event.clientX > bounds.right - 24) element.scrollLeft += 20;
+            if (event.clientX < bounds.left + 140) element.scrollLeft -= 20;
+            const table = element.querySelector('table').getBoundingClientRect();
+            const index = Math.max(0, Math.min(HOURS.length - 1, Math.floor((event.clientX - table.left - 120) / HEATMAP_SLOT_WIDTH)));
+            const next = { ...rangeDrag.current, from: Math.min(rangeDrag.current.anchor, index), to: Math.max(rangeDrag.current.anchor, index) };
+            if (next.from === rangeDrag.current.from && next.to === rangeDrag.current.to) return;
+            rangeDrag.current = next;
+            setRangePreview(next);
+            return;
+        }
         if (!drag.current) return;
         event.currentTarget.scrollLeft = drag.current.left - (event.clientX - drag.current.x);
         event.currentTarget.scrollTop = drag.current.top - (event.clientY - drag.current.y);
     };
     const handlePointerUp = (event) => {
+        if (rangeDrag.current) {
+            const range = rangeDrag.current;
+            rangeDrag.current = null;
+            if (event.type !== 'pointercancel') setTransferSelection({ source: range.source, start: heatmapMinutes(HOURS[range.from]), end: heatmapMinutes(HOURS[range.to]) + 15 });
+            else setRangePreview(null);
+        }
         drag.current = null;
         event.currentTarget.style.cursor = '';
         if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
@@ -119,19 +142,40 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                         </span>
                     ))}
                 </div>
-                <p className="mt-2 text-[10px] text-gray-300">Arrastra con el mouse o desliza para navegar. En teclado usa las flechas; Esc cierra la vista ampliada.</p>
+                {onTransfer ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                        <button type="button" aria-pressed={selectMode} onClick={() => { setSelectMode(true); }} className={`rounded px-2 py-1 ${selectMode ? 'bg-blue-600 text-white' : 'bg-white/10'}`}>Seleccionar tramo</button>
+                        <button type="button" aria-pressed={!selectMode} onClick={() => { setSelectMode(false); rangeDrag.current = null; }} className={`rounded px-2 py-1 ${!selectMode ? 'bg-blue-600 text-white' : 'bg-white/10'}`}>Desplazar mapa</button>
+                        <span className="text-gray-300">{selectMode ? 'Arrastra sobre una fila roja para marcar el intervalo.' : 'Arrastra o desliza para navegar.'}</span>
+                    </div>
+                ) : <p className="mt-2 text-[10px] text-gray-300">Arrastra con el mouse o desliza para navegar. En teclado usa las flechas; Esc cierra la vista ampliada.</p>}
                 {exportError && <p role="alert" className="mt-2 text-sm text-red-200">{exportError}</p>}
+                {onTransfer && transferSelection && <HeatmapTransferForm
+                    key={`${transferSelection.source}-${transferSelection.start}-${transferSelection.end || ''}`}
+                    selection={transferSelection} assigned={assigned} requirements={requirements}
+                    onApply={onTransfer} onCancel={() => { setTransferSelection(null); setRangePreview(null); }}
+                />}
+                {assigned.some(person => person.breakLabel) && (
+                    <details className="mt-2 text-xs text-amber-200">
+                        <summary className="cursor-pointer">Breaks asignados (no suman cobertura)</summary>
+                        <ul className="mt-1 space-y-1">
+                            {[...new Map(assigned.filter(person => person.breakLabel).map(person => [person.staffId || person.breakLabel, person])).values()].map((person, index) => (
+                                <li key={`${person.breakLabel}-${index}`}>{person.breakLabel}</li>
+                            ))}
+                        </ul>
+                    </details>
+                )}
             </div>
             <div role="region" aria-label="Matriz de cobertura por posición y horario" tabIndex={0}
                 onPointerDown={handlePointerDown} onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onLostPointerCapture={() => { drag.current = null; }}
-                className="relative isolate flex-1 min-h-0 min-w-0 overflow-auto overscroll-contain cursor-grab select-none bg-gray-50 focus-visible:outline-blue-500"
-                style={{ WebkitOverflowScrolling: 'touch' }}>
+                onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onLostPointerCapture={() => { drag.current = null; rangeDrag.current = null; }}
+                className={`relative isolate flex-1 min-h-0 min-w-0 overflow-auto overscroll-contain ${onTransfer && selectMode ? 'cursor-crosshair' : 'cursor-grab'} select-none bg-gray-50 focus-visible:outline-blue-500`}
+                style={{ WebkitOverflowScrolling: 'touch', touchAction: onTransfer && selectMode ? 'none' : 'auto' }}>
                 <table className="table-fixed border-collapse bg-white shadow-inner" style={{ minWidth: `${HEATMAP_TABLE_MIN_WIDTH}px` }}>
                     <colgroup>
                         <col style={{ width: '120px' }} />
                         {HOURS.map((_, i) => (
-                            <col key={i} style={{ width: '24px' }} />
+                            <col key={i} style={{ width: `${HEATMAP_SLOT_WIDTH}px` }} />
                         ))}
                     </colgroup>
 
@@ -140,14 +184,13 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                             <th className="sticky top-0 left-0 z-30 bg-gradient-to-r from-gray-700 to-gray-800 border-r border-gray-500 px-2 py-1.5 text-left font-bold text-white text-xs shadow-lg">
                                 Posición
                             </th>
-                            {TIME_HEADERS.map(({ hour, label, colSpan }) => (
+                            {HOURS.map(hour => (
                                 <th
                                     key={hour}
-                                    colSpan={colSpan}
                                     className="sticky top-0 z-20 overflow-hidden bg-gradient-to-r from-gray-700 to-gray-800 border border-gray-500 px-1 py-1 text-[10px] font-bold text-white text-center shadow-md whitespace-nowrap"
                                     title={hour}
                                 >
-                                    {label}
+                                    {hour}
                                 </th>
                             ))}
                         </tr>
@@ -197,7 +240,20 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                                         <td
                                             key={j}
                                             className={`border border-gray-200 ${cell.color} hover:opacity-80 transition-opacity duration-150`}
-                                            style={{ height: '20px', width: '24px', padding: 0 }}
+                                            style={{ height: '20px', width: `${HEATMAP_SLOT_WIDTH}px`, padding: 0,
+                                                boxShadow: rangePreview?.row === `${row.positionKey}-${row.slot}` && j >= rangePreview.from && j <= rangePreview.to ? 'inset 0 3px #1d4ed8, inset 0 -3px #1d4ed8' : undefined,
+                                                filter: rangePreview?.row === `${row.positionKey}-${row.slot}` && j >= rangePreview.from && j <= rangePreview.to ? 'brightness(0.8)' : undefined }}
+                                            data-range-hour={j} data-range-row={`${row.positionKey}-${row.slot}`} data-position={row.name} data-excess={cell.color.includes('red')}
+                                            tabIndex={onTransfer && cell.color.includes('red') ? 0 : undefined}
+                                            aria-label={onTransfer && cell.color.includes('red') ? `Seleccionar tramo de ${row.name} desde ${HOURS[j]}` : undefined}
+                                            onKeyDown={event => {
+                                                if (!onTransfer || !cell.color.includes('red')) return;
+                                                if (event.key === 'Enter' || event.key === ' ') {
+                                                    event.preventDefault();
+                                                    setTransferSelection({ source: row.name, start: heatmapMinutes(HOURS[j]), end: heatmapMinutes(HOURS[j]) + 15 });
+                                                    setRangePreview({ row: `${row.positionKey}-${row.slot}`, from: j, to: j });
+                                                }
+                                            }}
                                             title={`${HOURS[j]}: ${cell.isTrainer ? 'Entrenador' : cell.color.includes('yellow') ? 'Faltante' : cell.color.includes('blue') ? 'Asignado' : cell.color.includes('red') ? 'Exceso' : 'Sin requerimiento'}`}
                                         />
                                     ))}

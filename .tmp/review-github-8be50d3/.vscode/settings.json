@@ -1,0 +1,12 @@
+{
+    "css.validate": false,
+    "tailwindCSS.includeLanguages": {
+      "javascript": "javascript",
+      "javascriptreact": "javascriptreact"
+    },
+    "editor.quickSuggestions": {
+      "strings": true
+    },
+    "IDX.aI.enableInlineCompletion": true,
+    "IDX.aI.enableCodebaseIndexing": true
+  }

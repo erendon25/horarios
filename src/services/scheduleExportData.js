@@ -1,3 +1,5 @@
+import { getScheduleBreak } from './scheduleHours.js';
+
 export const SCHEDULE_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 export const SCHEDULE_DAY_LABELS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
@@ -58,13 +60,54 @@ export function getHeatmapAssignments(staff, schedules, day, positions, date) {
   return ordered.flatMap(person => {
     if (date && !isActiveOnDate(person, date)) return [];
     const shift = schedules[person.id]?.[day];
-    const position = names.get(normalizeSchedulePosition(shift?.position));
-    if (!position) return [];
-    return getExportShiftSegments(shift).map(segment => ({
-      position, start: clockFromMinutes(segment.start), end: clockFromMinutes(segment.end),
+    const rest = getScheduleBreak(shift, effectiveModality(person, date));
+    return getPositionSegments(shift).filter(segment => names.has(normalizeSchedulePosition(segment.position))).map(segment => ({
+      position: names.get(normalizeSchedulePosition(segment.position)), start: clockFromMinutes(segment.start), end: clockFromMinutes(segment.end),
+      endExclusive: segment.endExclusive,
+      staffId: person.id, staffName: `${person.name || ''} ${person.lastName || ''}`.trim(),
       isTrainer: person.position === 'ENTRENADOR',
+      ...(rest ? { breakStartMinutes: rest.startMinutes, breakEndMinutes: rest.endMinutes,
+        breakLabel: `${person.name || ''} ${person.lastName || ''}: ${rest.start}-${rest.end}`.trim() } : {}),
     }));
   });
+}
+
+// Absolute minutes preserve assignments after midnight. The base position
+// resumes automatically outside each temporary assignment.
+export function getPositionSegments(shift) {
+  const segments = getExportShiftSegments(shift);
+  const rotations = (Array.isArray(shift?.positionAssignments) ? shift.positionAssignments : [])
+    .filter(item => Number.isInteger(item.start) && Number.isInteger(item.end) && item.start < item.end
+      && item.start % 15 === 0 && item.end % 15 === 0 && typeof item.position === 'string' && item.position.trim()
+      && segments.some(segment => item.start >= segment.start && item.end <= segment.end));
+  return segments.flatMap(segment => {
+    const cuts = [...new Set([segment.start, segment.end, ...rotations.flatMap(item =>
+      item.start >= segment.start && item.end <= segment.end ? [item.start, item.end] : [])])].sort((a, b) => a - b);
+    return cuts.slice(0, -1).map((start, index) => ({
+      start, end: cuts[index + 1], endExclusive: cuts[index + 1] < segment.end,
+      position: rotations.findLast(item => start >= item.start && start < item.end)?.position || shift.position,
+    }));
+  });
+}
+
+export function getPositionTimeline(shift, modality) {
+  const rest = getScheduleBreak(shift, modality);
+  const timeline = getPositionSegments(shift).flatMap(segment => {
+    if (!rest || rest.endMinutes <= segment.start || rest.startMinutes >= segment.end) return [segment];
+    return [
+      { ...segment, end: rest.startMinutes },
+      { ...segment, start: rest.endMinutes },
+    ].filter(item => item.start < item.end);
+  });
+  const grouped = [];
+  for (const segment of timeline) {
+    const previous = grouped.at(-1);
+    if (previous && previous.end === segment.start && normalizeSchedulePosition(previous.position) === normalizeSchedulePosition(segment.position)) {
+      previous.end = segment.end;
+      previous.endExclusive = segment.endExclusive;
+    } else grouped.push({ ...segment });
+  }
+  return grouped.map(segment => ({ ...segment, label: `${clockFromMinutes(segment.start)}-${clockFromMinutes(segment.end)} · ${segment.position || 'Sin asignar'}` }));
 }
 
 export function getProjectionForDay(requirements, projectionPositions, day) {

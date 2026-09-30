@@ -6,10 +6,13 @@ import { useAuth } from '../contexts/AuthContext';
 import { useScheduleDraft } from '../hooks/useScheduleDraft';
 import ScheduleHeatmapMatrix from './ScheduleHeatmapMatrix';
 import WeeklyScheduleExcelButton from './WeeklyScheduleExcelButton';
-import { getHeatmapAssignments, getProjectionForDay } from '../services/scheduleExportData';
+import { getHeatmapAssignments, getProjectionForDay, getExportShiftSegments } from '../services/scheduleExportData';
+import SchedulePositionControl from './SchedulePositionControl';
+import { validateHeatmapTransfer, replacePositionInterval } from '../services/heatmapTransfers';
 import { exportSchedulePDF, exportGroupedPositionsPDF, exportExtraHoursReport } from './PDFExport';
 import { exportGeoVictoriaExcel } from "../services/GeoVictoriaExport";
-import { calculateScheduleTotals, formatScheduleMinutes } from '../services/scheduleHours';
+import { calculateScheduleTotals, formatScheduleMinutes, getScheduleBreak, requiresScheduleBreak } from '../services/scheduleHours';
+import ScheduleBreakControl from './ScheduleBreakControl';
 import { FaInfoCircle, FaExclamationTriangle, FaExclamationCircle } from 'react-icons/fa';
 import {
     Calendar,
@@ -515,6 +518,14 @@ export default function WeeklyScheduleEditor() {
         // Si se desmarca off → limpiar solo off
         if (field === 'off' && value === false) {
             updates = { ...current, off: false };
+        }
+
+        const nextShift = { ...current, ...updates };
+        if (!getScheduleBreak(nextShift, getEffectiveModality(person, dateStr))) updates.breakStart = '';
+        if (Array.isArray(nextShift.positionAssignments)) {
+            const segments = getExportShiftSegments(nextShift);
+            updates.positionAssignments = nextShift.positionAssignments.filter(item =>
+                segments.some(segment => item.start >= segment.start && item.end <= segment.end));
         }
 
         draftController.edit(prev => ({
@@ -1233,6 +1244,19 @@ export default function WeeklyScheduleEditor() {
         selectablePositionsByNorm.get(normalizePosition(position)) || '';
 
     const assignedArray = getHeatmapAssignments(filteredStaff, schedules, selectedDay, safeRequirements.positions, getSelectedDateStr());
+    const handleHeatmapTransfer = transfer => {
+        if (!draft.ready) throw new Error('Espera a que termine de cargar el horario.');
+        draftController.edit(previous => {
+            // Validate against the whole store even when the editor has filters.
+            const currentAssignments = getHeatmapAssignments(activeStaff, previous, selectedDay, safeRequirements.positions, getSelectedDateStr());
+            const error = validateHeatmapTransfer(currentAssignments, safeRequirements, transfer);
+            if (error) throw new Error(error);
+            const shift = previous[transfer.staffId]?.[selectedDay];
+            return { ...previous, [transfer.staffId]: { ...previous[transfer.staffId],
+                [selectedDay]: { ...shift, positionAssignments: replacePositionInterval(shift, transfer) },
+            } };
+        });
+    };
 
     if (isUnauthenticated) return <p className="text-center py-8">Inicia sesión</p>;
     const getWeeklyStudyConflicts = () => {
@@ -1977,9 +2001,9 @@ export default function WeeklyScheduleEditor() {
                                                             );
                                                         })()}
                                                     </td>
-                                                    <td className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center">
+                                                    <td className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-6 text-center">
                                                         {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
-                                                            <div className="flex flex-col gap-1.5">
+                                                            <div className="relative flex flex-col gap-1.5">
                                                                 <input
                                                                     type="time"
                                                                     value={d.start || ''}
@@ -1991,6 +2015,13 @@ export default function WeeklyScheduleEditor() {
                                                                         } disabled:bg-gray-100 disabled:cursor-not-allowed`}
                                                                     title="Entrada 1"
                                                                 />
+                                                                {requiresScheduleBreak(d, getEffectiveModality(p, getSelectedDateStr())) && (
+                                                                    <div className="absolute inset-x-0 top-full mt-0.5 flex justify-center">
+                                                                        <ScheduleBreakControl shift={d} modality={getEffectiveModality(p, getSelectedDateStr())}
+                                                                            name={`${p.name} ${p.lastName || ''}`.trim()}
+                                                                            onChange={value => handleChange(p.id, 'breakStart', value)} />
+                                                                    </div>
+                                                                )}
                                                                 {d.splitShift && (
                                                                     <input
                                                                         type="time"
@@ -2004,7 +2035,7 @@ export default function WeeklyScheduleEditor() {
                                                             </div>
                                                         )}
                                                     </td>
-                                                    <td className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center">
+                                                    <td className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-6 text-center">
                                                         {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
                                                             <div className="flex flex-col gap-1.5">
                                                                 <input
@@ -2100,6 +2131,11 @@ export default function WeeklyScheduleEditor() {
                                                                     <option key={pos} value={pos}>{pos}</option>
                                                                 ))}
                                                             </select>
+                                                        )}
+                                                        {!isCeased && d.positionAssignments?.length > 0 && (
+                                                            <SchedulePositionControl shift={d} modality={getEffectiveModality(p, getSelectedDateStr())}
+                                                                name={`${p.name} ${p.lastName || ''}`.trim()}
+                                                                onChange={value => handleChange(p.id, 'positionAssignments', value)} />
                                                         )}
                                                     </td>
                                                     <td className="w-[50px] min-w-[50px] max-w-[50px] px-1 py-4 text-center font-bold text-orange-600 text-xs">
@@ -2208,12 +2244,13 @@ export default function WeeklyScheduleEditor() {
                             </div>
                             <div className="h-[calc(100vh-280px)] overflow-auto">
                                 <ScheduleHeatmapMatrix
-                                    key={selectedDay}
+                                    key={`${wk}-${selectedDay}`}
                                     assigned={assignedArray}
                                     requirements={safeRequirements}
                                     date={getSelectedDateStr() || ''}
                                     dayLabel={weekdayLabels[selectedDay]}
                                     canExport={userRole === 'admin' || userRole === 'superadmin'}
+                                    onTransfer={draft.ready ? handleHeatmapTransfer : undefined}
                                 />
                             </div>
                         </div>

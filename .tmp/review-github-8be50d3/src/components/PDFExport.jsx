@@ -1,0 +1,617 @@
+// PDFExport.jsx - Corregido para evitar errores con nombres indefinidos
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import { calculateScheduleTotals, formatScheduleMinutes } from '../services/scheduleHours';
+
+const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+const DAY_LABELS = {
+    monday: 'Lunes', tuesday: 'Martes', wednesday: 'Miércoles',
+    thursday: 'Jueves', friday: 'Viernes', saturday: 'Sábado', sunday: 'Domingo'
+};
+const fmt = d => { const x = new Date(d); return isNaN(x) ? '' : x.toISOString().split('T')[0]; };
+const turnoTxt = e => e?.off ? 'DESCANSO' :
+    e?.feriado ? 'FERIADO' :
+        (e?.start && e?.end) ? `${e.start}-${e.end}` : 'S/A';
+const formatShiftText = (e, start, end) => {
+    const first = `${start || e?.start}-${end || e?.end}`;
+    if (e?.splitShift && e.start2 && e.end2) {
+        return `${first}\n${e.start2}-${e.end2}`;
+    }
+    return first;
+};
+
+export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = false, showPositions = false) => {
+    // Extraer la fecha de inicio del weekKey (formato: "2024-01-15_to_2024-01-21")
+    const dateStr = weekKey.split('_to_')[0];
+
+    if (!dateStr) {
+        alert('Formato de semana inválido');
+        return;
+    }
+
+    const start = new Date(`${dateStr}T00:00:00`);
+    if (isNaN(start)) {
+        alert('Fecha inválida');
+        return;
+    }
+
+    const weekDates = DAYS.map((_, i) => new Date(start.getTime() + i * 864e5)
+        .toLocaleDateString('es-PE', { day: '2-digit', month: 'short' }));
+
+    const pdf = new jsPDF('landscape', 'pt', 'a4');
+    const head = ['Nombre', 'Modalidad', ...DAYS.map((d, i) => `${DAY_LABELS[d]}\n${weekDates[i]}`), 'Total\n(h:mm)'];
+
+    const getEffectiveModality = (person, dStr) => {
+        if (!person || !person.modalityChangeDate || !person.nextModality || !dStr) {
+            return person?.modality || '';
+        }
+        if (dStr >= person.modalityChangeDate) return person.nextModality;
+        return person.modality;
+    };
+
+    // Filtrar personal de entrenamiento si se solicita
+    let filteredStaff = [...staff];
+    if (excludeTrainees) {
+        filteredStaff = filteredStaff.filter(p => !p.isTrainee);
+    }
+
+    const MANAGERIAL_POSITIONS = ['GERENTE', 'ASISTENTE', 'LIDER'];
+    const normalizePos = (value) => String(value || '')
+        .normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toUpperCase();
+    const isManagerial = (person) => MANAGERIAL_POSITIONS.includes(normalizePos(person.position));
+
+    const sortByModality = (a, b) => {
+        const modA = getEffectiveModality(a, dateStr);
+        const modB = getEffectiveModality(b, dateStr);
+        if (modA === 'Full-Time' && modB !== 'Full-Time') return -1;
+        if (modA !== 'Full-Time' && modB === 'Full-Time') return 1;
+        if (modA === 'Part-Time' && modB !== 'Part-Time') return -1;
+        if (modA !== 'Part-Time' && modB === 'Part-Time') return 1;
+        return 0;
+    };
+
+    const gerencial = filteredStaff.filter(isManagerial).sort(sortByModality);
+    const personal = filteredStaff.filter((p) => !isManagerial(p)).sort(sortByModality);
+
+    const buildRows = (list) => list.map(p => {
+        const effModality = getEffectiveModality(p, dateStr);
+        const nombre = p.name ? `${p.name} ${p.lastName || ''}`.toUpperCase() : 'SIN NOMBRE';
+        const row = [nombre, effModality || '--'];
+        DAYS.forEach(d => {
+            const e = schedules[p.id]?.[d];
+
+            // Lógica para mostrar horario extendido si hay horas extras
+            let displayTxt = 'S/A';
+            if (e?.off) displayTxt = 'DESCANSO';
+            else if (e?.feriado) {
+                displayTxt = 'FERIADO';
+            }
+            else if (e?.start && e?.end) {
+                let currentStart = e.start;
+                let currentEnd = e.end;
+
+                let extraPre = Number(e.extraHoursPre ?? 0);
+                let extraPost = Number(e.extraHoursPost ?? e.extraHours ?? 0);
+
+                if (extraPre > 0) {
+                    const [sh, sm] = e.start.split(':').map(Number);
+                    const totalMins = sh * 60 + sm - (extraPre * 60);
+                    const finalMins = Math.max(0, totalMins);
+                    const newH = Math.floor(finalMins / 60);
+                    const newM = finalMins % 60;
+                    currentStart = `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
+                }
+
+                if (extraPost > 0) {
+                    const [eh, em] = e.end.split(':').map(Number);
+                    const totalMins = eh * 60 + em + (extraPost * 60);
+                    const newH = Math.floor(totalMins / 60) % 24;
+                    const newM = totalMins % 60;
+                    currentEnd = `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
+                }
+
+                displayTxt = formatShiftText(e, currentStart, currentEnd);
+
+                // Agregar posición si se solicita
+                if (showPositions && e.position) {
+                    displayTxt += `\n(${e.position})`;
+                }
+
+            }
+
+            row.push(displayTxt);
+        });
+        row.push(formatScheduleMinutes(calculateScheduleTotals(schedules[p.id], p, dateStr).totalMinutes));
+        return row;
+    });
+
+    const gerencialBody = buildRows(gerencial);
+    const personalBody = buildRows(personal);
+    const colCount = head.length;
+    const sectionRow = (label) => [{
+        content: label,
+        colSpan: colCount,
+        styles: { fillColor: [230, 126, 34], textColor: 255, fontStyle: 'bold', halign: 'left', fontSize: 8 },
+    }];
+
+    const body = [];
+    if (gerencialBody.length > 0) {
+        body.push(sectionRow('EQUIPO GERENCIAL'));
+        body.push(...gerencialBody);
+    }
+    if (personalBody.length > 0) {
+        body.push(sectionRow('PERSONAL DE TIENDA'));
+        body.push(...personalBody);
+    }
+
+    autoTable(pdf, {
+        head: [head],
+        body,
+        margin: { top: 40 },
+        styles: { fontSize: showPositions ? 6 : 6.5, cellPadding: 2, overflow: 'linebreak' },
+        headStyles: { fillColor: [44, 62, 80], textColor: 255 },
+        didDrawPage: () => {
+            pdf.setFontSize(10);
+            pdf.text(`HORARIOS SEMANALES - ${excludeTrainees ? 'PERSONAL DE TIENDA' : 'TODO EL PERSONAL'}`, 40, 25);
+            if (showPositions) {
+                pdf.setFontSize(8);
+                pdf.text(`Semana: ${weekKey}`, 40, 35);
+            }
+        }
+    });
+
+    const end = new Date(start.getTime() + 6 * 864e5);
+    pdf.save(`horarios_${excludeTrainees ? 'tienda_' : ''}${fmt(start)}_${fmt(end)}.pdf`);
+};
+
+
+const getBase64ImageFromURL = (url) => {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.crossOrigin = 'Anonymous';
+        img.src = url;
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            resolve(canvas.toDataURL('image/png'));
+        };
+        img.onerror = () => resolve(null);
+    });
+};
+
+export const exportGroupedPositionsPDF = async (
+    staff,
+    schedules,
+    selectedDay,
+    dateText = '',
+    turno = 'ambos',
+    orderedPositions = []
+) => {
+    const pdf = new jsPDF('p', 'pt', 'a4');
+    const logoB64 = await getBase64ImageFromURL('/images/logo.png');
+
+    // Configuración general
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const margin = 30;
+    const colWidth = (pageWidth - (margin * 3)) / 2; // Dos columnas con margen central
+
+    // Colores corporativos (ajusta según la marca)
+    const primaryColor = [41, 128, 185]; // Azul
+    const secondaryColor = [52, 73, 94]; // Gris oscuro
+    const accentColor = [236, 240, 241]; // Gris muy claro
+
+    const corte = 14 * 60; // 14:00
+    const minTarde = 12 * 60; // 12:00
+
+    // Agrupar datos
+    const grupos = { mañana: {}, tarde: {}, ambos: {} };
+
+    staff.forEach((person) => {
+        const { id, name, modality } = person;
+        if (!id || !name) return;
+        const info = schedules[id]?.[selectedDay];
+        if (!info?.position || !info.start || !info.end) return;
+
+        // --- CALCULO DE HORAL REAL (BASE + EXTRAS) ---
+        let [sh, sm] = info.start.split(':').map(Number);
+        let [eh, em] = info.end.split(':').map(Number);
+
+        let extraPre = Number(info.extraHoursPre ?? 0);
+        let extraPost = Number(info.extraHoursPost ?? info.extraHours ?? 0);
+
+        let finalStartH = sh;
+        let finalStartM = sm;
+        if (extraPre > 0) {
+            const totalMins = sh * 60 + sm - (extraPre * 60);
+            const finalMins = Math.max(0, totalMins);
+            finalStartH = Math.floor(finalMins / 60);
+            finalStartM = finalMins % 60;
+        }
+
+        let finalEndH = eh;
+        let finalEndM = em;
+        if (extraPost > 0) {
+            const totalMins = eh * 60 + em + (extraPost * 60);
+            finalEndH = Math.floor(totalMins / 60) % 24;
+            finalEndM = totalMins % 60;
+        }
+
+        const finalStartStr = `${String(finalStartH).padStart(2, '0')}:${String(finalStartM).padStart(2, '0')}`;
+        const finalEndStr = `${String(finalEndH).padStart(2, '0')}:${String(finalEndM).padStart(2, '0')}`;
+
+        const startMin = finalStartH * 60 + finalStartM;
+        let endMin = eh * 60 + em;
+        if (endMin <= sh * 60 + sm) endMin += 1440;
+        const splitStartMin = info.splitShift && info.start2 ? info.start2.split(':').map(Number).reduce((h, m) => h * 60 + m) : null;
+        let splitEndMin = info.splitShift && info.end2 ? info.end2.split(':').map(Number).reduce((h, m) => h * 60 + m) : null;
+        if (splitStartMin !== null && splitEndMin !== null && splitEndMin <= splitStartMin) splitEndMin += 1440;
+
+        const displayName = name.toUpperCase();
+        let label = displayName;
+        if (extraPre + extraPost > 0) {
+            label += ` (+${extraPre + extraPost}h)`;
+        }
+
+        const entry = { 
+            n: label, 
+            mod: modality, 
+            h: info.splitShift && info.start2 && info.end2
+                ? `${finalStartStr} - ${finalEndStr} / ${info.start2} - ${info.end2}`
+                : `${finalStartStr} - ${finalEndStr}`,
+            startMin: finalStartH * 60 + finalStartM // Para ordenar internamente por hora de entrada
+        };
+
+        const pos = info.position;
+
+        // 1. Siempre añadir al grupo 'ambos'
+        if (!grupos.ambos[pos]) grupos.ambos[pos] = [];
+        grupos.ambos[pos].push(entry);
+
+        // 2. Clasificar en Mañana / Tarde para los filtros específicos
+        // Mañana: Inicia antes del corte
+        const hasMorningSegment = startMin < corte || (splitStartMin !== null && splitStartMin < corte);
+        if (hasMorningSegment) {
+            if (!grupos.mañana[pos]) grupos.mañana[pos] = [];
+            grupos.mañana[pos].push(entry);
+        }
+
+        // Tarde: Inicia después de las 12:00, o después del corte, o termina después del corte
+        const enTarde = startMin >= minTarde || startMin >= corte || endMin > corte ||
+            (splitStartMin !== null && splitEndMin !== null && (splitStartMin >= minTarde || splitStartMin >= corte || splitEndMin > corte));
+        if (enTarde) {
+            if (!grupos.tarde[pos]) grupos.tarde[pos] = [];
+            grupos.tarde[pos].push(entry);
+        }
+    });
+
+    // Función Header
+    const addHeader = (titleSuffix) => {
+        // Fondo del header
+        pdf.setFillColor(250, 250, 250);
+        pdf.rect(0, 0, pageWidth, 80, 'F');
+
+        // Logo
+        if (logoB64) {
+            pdf.addImage(logoB64, 'PNG', margin, 15, 100, 50, undefined, 'FAST');
+        }
+
+        // Título
+        pdf.setFontSize(18);
+        pdf.setTextColor(...secondaryColor);
+        pdf.setFont('helvetica', 'bold');
+        const title = `POSICIONAMIENTO DIARIO`;
+        const titleW = pdf.getTextWidth(title);
+        pdf.text(title, pageWidth - margin - titleW, 35);
+
+        // Subtítulo (Fecha y turno)
+        pdf.setFontSize(12);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(100);
+        const tLabel = titleSuffix === 'ambos' ? 'DÍA COMPLETO' : titleSuffix.toUpperCase();
+        const subtitle = `${dateText || selectedDay.toUpperCase()} | ${tLabel}`;
+        const subW = pdf.getTextWidth(subtitle);
+        pdf.text(subtitle, pageWidth - margin - subW, 55);
+
+        // Línea separadora
+        pdf.setDrawColor(...primaryColor);
+        pdf.setLineWidth(1.5);
+        pdf.line(margin, 80, pageWidth - margin, 80);
+    };
+
+    // Función Footer
+    const addFooter = (pageNumber) => {
+        pdf.setFontSize(8);
+        pdf.setTextColor(150);
+        const text = `Página ${pageNumber} - Generado el ${new Date().toLocaleDateString()}`;
+        pdf.text(text, pageWidth / 2, pageHeight - 15, { align: 'center' });
+    };
+
+    // Renderizar tablas
+    const turnosToRender = turno === 'ambos' ? ['ambos'] : [turno];
+
+    for (let i = 0; i < turnosToRender.length; i++) {
+        const t = turnosToRender[i];
+
+        // Obtener entradas
+        let entradas = Object.entries(grupos[t]);
+
+        // Ordenar según orderedPositions si existe
+        if (orderedPositions && orderedPositions.length > 0) {
+            entradas.sort((a, b) => {
+                const idxA = orderedPositions.indexOf(a[0]);
+                const idxB = orderedPositions.indexOf(b[0]);
+                // Si ambos están en la lista, comparar índices
+                if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+                // Si uno está y el otro no, el que está va primero
+                if (idxA !== -1) return -1;
+                if (idxB !== -1) return 1;
+                // Si ninguno está, alfabético
+                return a[0].localeCompare(b[0]);
+            });
+        }
+
+        if (entradas.length === 0 && turnosToRender.length === 1) {
+            // Caso borde vacío
+            addHeader(t);
+            pdf.setFontSize(12);
+            pdf.text("No hay asignaciones para este turno.", margin, 100);
+            continue;
+        }
+        if (entradas.length === 0) continue;
+
+        if (i > 0) pdf.addPage();
+        addHeader(t);
+
+        let yLeft = 100;
+        let yRight = 100;
+
+        // Distribuir en dos columnas
+        entradas.forEach(([pos, rows], idx) => {
+            const isLeft = idx % 2 === 0;
+            const currentY = isLeft ? yLeft : yRight;
+            const xPos = isLeft ? margin : margin + colWidth + margin;
+
+            // Verificar espacio
+            if (currentY > pageHeight - 60) {
+                pdf.addPage();
+                addHeader(t);
+                yLeft = 100;
+                yRight = 100;
+                // Recalcular Y
+            }
+
+            // Título de la posición
+            /*
+            pdf.setFontSize(11);
+            pdf.setFont('helvetica', 'bold');
+            pdf.setTextColor(...primaryColor);
+            pdf.text(pos.toUpperCase(), xPos, (isLeft ? yLeft : yRight) - 5);
+            */
+
+            autoTable(pdf, {
+                startY: currentY,
+                margin: { top: 95, left: xPos },
+                tableWidth: colWidth,
+                theme: 'grid',
+                head: [[pos.toUpperCase()]],
+                body: rows
+                    .sort((a,b) => a.startMin - b.startMin) // Ordenar por hora de entrada dentro de la posición
+                    .map(r => [`${r.n}\n${r.mod} • ${r.h}`]),
+                styles: {
+                    fontSize: 9,
+                    cellPadding: 4,
+                    overflow: 'linebreak',
+                    valign: 'middle'
+                },
+                headStyles: {
+                    fillColor: primaryColor,
+                    textColor: 255,
+                    fontStyle: 'bold',
+                    fontSize: 10,
+                    halign: 'center'
+                },
+                columnStyles: {
+                    0: { cellWidth: 'auto' }
+                },
+                alternateRowStyles: {
+                    fillColor: accentColor
+                },
+                didDrawPage: (data) => {
+                    addHeader(t);
+                }
+            });
+
+            const finalY = pdf.lastAutoTable.finalY + 15;
+            if (isLeft) yLeft = finalY;
+            else yRight = finalY;
+        });
+
+        addFooter(pdf.internal.getNumberOfPages());
+    }
+
+    pdf.save(`posicionamiento_${selectedDay}_${turno}_v${Date.now()}.pdf`);
+};
+
+export const exportExtraHoursReport = async (staff, schedules, weekKey) => {
+    const pdf = new jsPDF('p', 'pt', 'a4');
+    const logoB64 = await getBase64ImageFromURL('/images/logo.png');
+
+    const margin = 30;
+    const pageWidth = pdf.internal.pageSize.getWidth();
+
+    // Header
+    const addHeader = (data) => {
+        // Solo dibujar en la primera página o si es una nueva página agregada automáticamente
+        // autoTable llama a esto en cada página
+        pdf.setFillColor(250, 250, 250);
+        pdf.rect(0, 0, pageWidth, 80, 'F');
+        if (logoB64) pdf.addImage(logoB64, 'PNG', margin, 15, 100, 50, undefined, 'FAST');
+
+        pdf.setFontSize(16);
+        pdf.setTextColor(41, 128, 185);
+        pdf.setFont('helvetica', 'bold');
+        pdf.text("REPORTE DE HORAS EXTRAS", pageWidth - margin, 40, { align: 'right' });
+
+        pdf.setFontSize(10);
+        pdf.setTextColor(100);
+        pdf.setFont('helvetica', 'normal');
+        pdf.text(`Semana: ${weekKey}`, pageWidth - margin, 55, { align: 'right' });
+
+        pdf.setDrawColor(41, 128, 185);
+        pdf.setLineWidth(1);
+        pdf.line(margin, 80, pageWidth - margin, 80);
+    };
+
+    // Recopilar datos
+    const reportData = [];
+    const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    const dayNames = { monday: 'Lunes', tuesday: 'Martes', wednesday: 'Miércoles', thursday: 'Jueves', friday: 'Viernes', saturday: 'Sábado', sunday: 'Domingo' };
+
+    staff.forEach(p => {
+        const schedule = schedules[p.id] || {};
+        days.forEach(day => {
+            const info = schedule[day];
+            if (!info) return;
+
+            const extraPre = (info.extraHoursPre !== undefined && info.extraHoursPre !== null) ? Number(info.extraHoursPre) : 0;
+            const extraPost = (info.extraHoursPost !== undefined && info.extraHoursPost !== null) ? Number(info.extraHoursPost) : (info.extraHours ? Number(info.extraHours) : 0);
+            const totalExtra = extraPre + extraPost;
+
+            if (totalExtra > 0 && info.start && info.end) {
+                let startStr = info.start;
+                let endStr = info.end;
+
+                // Ajustar Inicio si hay HE Antes
+                if (extraPre > 0) {
+                    const [sh, sm] = info.start.split(':').map(Number);
+                    const totalMinsStart = sh * 60 + sm - (extraPre * 60);
+                    // Manejo simple de 00:00 como tope visual
+                    const finalMinsStart = Math.max(0, totalMinsStart);
+                    const finalH = Math.floor(finalMinsStart / 60);
+                    const finalM = finalMinsStart % 60;
+                    startStr = `${String(finalH).padStart(2, '0')}:${String(finalM).padStart(2, '0')}`;
+                }
+
+                // Ajustar Fin si hay HE Después
+                if (extraPost > 0) {
+                    const [eh, em] = info.end.split(':').map(Number);
+                    const totalMinsEnd = eh * 60 + em + (extraPost * 60);
+                    const finalH = Math.floor(totalMinsEnd / 60) % 24;
+                    const finalM = totalMinsEnd % 60;
+                    endStr = `${String(finalH).padStart(2, '0')}:${String(finalM).padStart(2, '0')}`;
+                }
+
+                reportData.push({
+                    name: `${p.name} ${p.lastName}`,
+                    modality: p.modality,
+                    day: dayNames[day],
+                    shift: `${startStr} - ${endStr}`,
+                    extra: totalExtra
+                });
+            }
+        });
+    });
+
+    if (reportData.length === 0) {
+        // Inicializar manualmente para pintar el header si no hay datos
+        addHeader({ pageNumber: 1 });
+        pdf.setFontSize(12);
+        pdf.setTextColor(0);
+        pdf.text("No se encontraron horas extras registradas esta semana.", margin, 100);
+        pdf.save(`Horas_Extras_${weekKey}.pdf`);
+        return;
+    }
+
+    const fullTimeData = reportData.filter(d => d.modality === 'Full-Time');
+    const partTimeData = reportData.filter(d => d.modality !== 'Full-Time');
+
+    let currentY = 100;
+
+    const drawTable = (title, data) => {
+        if (data.length === 0) return;
+
+        // Verificar si cabe el título, si no, nueva página
+        if (currentY + 50 > pdf.internal.pageSize.getHeight()) {
+            pdf.addPage();
+            currentY = 100;
+        }
+
+        pdf.setFontSize(14);
+        pdf.setTextColor(41, 128, 185);
+        pdf.setFont('helvetica', 'bold');
+        pdf.text(title, margin, currentY);
+        currentY += 15;
+
+        autoTable(pdf, {
+            startY: currentY,
+            margin: { top: 95 },
+            head: [['Colaborador', 'Día', 'Turno (+HE)', 'Horas Extras']],
+            body: data.map(d => [
+                d.name.toUpperCase(),
+                d.day,
+                d.shift,
+                d.extra + ' hrs'
+            ]),
+            theme: 'grid',
+            styles: { fontSize: 10, cellPadding: 5 },
+            headStyles: { fillColor: [41, 128, 185], textColor: 255, fontStyle: 'bold' },
+            didDrawPage: (data) => {
+                addHeader(data);
+            }
+        });
+
+        // Totales de la sección
+        const totalSection = data.reduce((acc, curr) => acc + curr.extra, 0);
+        currentY = pdf.lastAutoTable.finalY + 20;
+
+        // Verificar espacio para total
+        if (currentY + 20 > pdf.internal.pageSize.getHeight()) {
+            pdf.addPage();
+            currentY = 100;
+            // Si agregamos página manual, necesitamos poner el header manual si autoTable no lo hizo (que no lo hará pq no estamos dentro de autoTable)
+            // Pero addHeader usa datos de autoTable, aquí podemos llamar a addHeader mockeado o simplificado
+            addHeader({ pageNumber: pdf.internal.getNumberOfPages() });
+        }
+
+        pdf.setFontSize(12);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(0);
+        pdf.text(`TOTAL ${title}: ${totalSection} hrs`, margin, currentY);
+
+        currentY += 30; // Espacio para la siguiente tabla
+    };
+
+    // Dibujar Full Time
+    if (fullTimeData.length > 0) {
+        drawTable("FULL TIME", fullTimeData);
+    }
+
+    // Dibujar Part Time
+    if (partTimeData.length > 0) {
+        drawTable("PART TIME", partTimeData);
+    }
+
+    // Total General (Solo si mostramos ambos, o siempre?)
+    const totalExtras = reportData.reduce((acc, curr) => acc + curr.extra, 0);
+
+    // Verificar si cabe
+    if (currentY + 20 > pdf.internal.pageSize.getHeight()) {
+        pdf.addPage();
+        currentY = 100;
+        addHeader({ pageNumber: pdf.internal.getNumberOfPages() });
+    }
+
+    pdf.setDrawColor(200);
+    pdf.setLineWidth(1);
+    pdf.line(margin, currentY - 10, pageWidth - margin, currentY - 10);
+
+    pdf.setFontSize(14);
+    pdf.setTextColor(41, 128, 185);
+    pdf.text(`TOTAL GENERAL HORAS EXTRAS: ${totalExtras} hrs`, margin, currentY + 10);
+
+    pdf.save(`Reporte_Extras_${weekKey}_v${Date.now()}.pdf`);
+};

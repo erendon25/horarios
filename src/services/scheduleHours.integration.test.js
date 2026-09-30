@@ -6,11 +6,14 @@ import { transformSync } from 'esbuild';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import * as scheduleHours from './scheduleHours.js';
+import * as scheduleExportData from './scheduleExportData.js';
 
 // Componentes reales con datos aislados: sin sesión ni escrituras de producción.
 const schedule = {
-  monday: { start: '10:30', end: '14:30' },
-  tuesday: { start: '13:00', end: '21:45', extraHoursPost: 2 },
+  monday: { start: '10:30', end: '14:30', position: 'Caja', positionAssignments: [
+    { start: 660, end: 720, position: 'Cocina' }, { start: 720, end: 780, position: 'Despacho' },
+  ] },
+  tuesday: { start: '13:00', end: '21:45', extraHoursPost: 2, breakStart: '17:00' },
 };
 const person = { id: 'test', name: 'PRUEBA', modality: 'Full-Time', position: 'COLABORADOR' };
 
@@ -46,7 +49,7 @@ test('el exportador real escribe 14:00, no decimales, y mantiene el domingo cort
   const row = table.body.find(row => typeof row[0] === 'string' && row[0].startsWith('PRUEBA'));
   assert.equal(row.at(-1), '14:00');
   assert.equal(row[2], '10:30-14:30');
-  assert.equal(row[3], '13:00-23:45');
+  assert.equal(row[3], '13:00-23:45\nBreak: 17:00-17:45');
   assert.equal(table.head[0].at(-1), 'Total\n(h:mm)');
   assert.equal(filename, 'horarios_2026-09-14_2026-09-20.pdf');
 });
@@ -61,6 +64,7 @@ test('el panel real presenta 12:00 base, 2:00 extras, 14:00 total y 0:45 descont
     '../lib/supabase/client': { supabase: {} },
     'lucide-react': Object.fromEntries(['Calendar', 'Clock', 'MapPin', 'Coffee', 'AlertCircle', 'ChevronLeft', 'ChevronRight', 'ClipboardList', 'X', 'Download'].map(key => [key, icon])),
     './PDFExport': { exportGroupedPositionsPDF: () => {} },
+    '../services/scheduleExportData': scheduleExportData,
     '../services/scheduleHours': scheduleHours,
   });
   const markup = renderToStaticMarkup(module.default({ perfilId: person.id, staffProfile: person, storeId: 'test' }));
@@ -69,4 +73,9 @@ test('el panel real presenta 12:00 base, 2:00 extras, 14:00 total y 0:45 descont
   assert.match(markup, /\+2:00/);
   assert.match(markup, /Total: 14:00/);
   assert.match(markup, /Refrigerio descontado: 0:45/);
+  assert.match(markup, /10:30-11:00 · Caja/);
+  assert.match(markup, /11:00-12:00 · Cocina/);
+  assert.match(markup, /12:00-13:00 · Despacho/);
+  assert.match(markup, /13:00-14:30 · Caja/);
+  assert.match(markup, /Break: 17:00-17:45/);
 });

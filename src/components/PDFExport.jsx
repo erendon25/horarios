@@ -1,7 +1,7 @@
 // PDFExport.jsx - Corregido para evitar errores con nombres indefinidos
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { calculateScheduleTotals, formatScheduleMinutes } from '../services/scheduleHours';
+import { calculateScheduleTotals, formatScheduleMinutes, scheduleBreakLabel } from '../services/scheduleHours';
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const DAY_LABELS = {
@@ -77,7 +77,7 @@ export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = f
         const effModality = getEffectiveModality(p, dateStr);
         const nombre = p.name ? `${p.name} ${p.lastName || ''}`.toUpperCase() : 'SIN NOMBRE';
         const row = [nombre, effModality || '--'];
-        DAYS.forEach(d => {
+        DAYS.forEach((d, dayIndex) => {
             const e = schedules[p.id]?.[d];
 
             // Lógica para mostrar horario extendido si hay horas extras
@@ -111,6 +111,10 @@ export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = f
                 }
 
                 displayTxt = formatShiftText(e, currentStart, currentEnd);
+                const dayDate = new Date(start.getTime() + dayIndex * 864e5);
+                const dayDateStr = `${dayDate.getFullYear()}-${String(dayDate.getMonth() + 1).padStart(2, '0')}-${String(dayDate.getDate()).padStart(2, '0')}`;
+                const breakText = scheduleBreakLabel(e, getEffectiveModality(p, dayDateStr));
+                if (breakText) displayTxt += `\n${breakText}`;
 
                 // Agregar posición si se solicita
                 if (showPositions && e.position) {

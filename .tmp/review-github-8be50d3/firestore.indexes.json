@@ -1,0 +1,85 @@
+{
+    "indexes": [
+        {
+            "collectionGroup": "training_evaluations",
+            "queryScope": "COLLECTION",
+            "fields": [
+                {
+                    "fieldPath": "area",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "collaboratorId",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "storeId",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "timestamp",
+                    "order": "DESCENDING"
+                }
+            ]
+        },
+        {
+            "collectionGroup": "training_evaluations",
+            "queryScope": "COLLECTION",
+            "fields": [
+                {
+                    "fieldPath": "storeId",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "collaboratorId",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "area",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "timestamp",
+                    "order": "DESCENDING"
+                }
+            ]
+        },
+        {
+            "collectionGroup": "schedule_requests",
+            "queryScope": "COLLECTION",
+            "fields": [
+                {
+                    "fieldPath": "storeId",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "status",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "date",
+                    "order": "ASCENDING"
+                }
+            ]
+        },
+        {
+            "collectionGroup": "schedule_requests",
+            "queryScope": "COLLECTION",
+            "fields": [
+                {
+                    "fieldPath": "staffId",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "status",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "date",
+                    "order": "ASCENDING"
+                }
+            ]
+        }
+    ],
+    "fieldOverrides": []
+}

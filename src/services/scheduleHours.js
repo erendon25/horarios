@@ -13,6 +13,39 @@ const duration = (start, end) => {
   return (to - from + 1440) % 1440;
 };
 
+export function requiresScheduleBreak(shift, modality) {
+  return Boolean(shift && !shift.off && !shift.feriado && !shift.holiday && !shift.splitShift
+    && String(modality ?? '').trim().toLowerCase() === 'full-time'
+    && duration(shift.start, shift.end) >= FULL_TIME_BREAK_THRESHOLD);
+}
+
+const breakClock = minutes => `${String(Math.floor(minutes / 60) % 24).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+
+export function getScheduleBreak(shift, modality) {
+  if (!requiresScheduleBreak(shift, modality)) return null;
+  const start = clockMinutes(shift.breakStart);
+  if (start === null || start % 15 !== 0) return null;
+  const shiftStart = clockMinutes(shift.start);
+  const offset = (start - shiftStart + 1440) % 1440;
+  if (offset + 45 > duration(shift.start, shift.end)) return null;
+  return { start: shift.breakStart, end: breakClock(start + 45), startMinutes: shiftStart + offset, endMinutes: shiftStart + offset + 45 };
+}
+
+export function getScheduleBreakOptions(shift, modality) {
+  if (!requiresScheduleBreak(shift, modality)) return [];
+  const start = clockMinutes(shift.start);
+  const end = start + duration(shift.start, shift.end);
+  const options = [];
+  for (let minute = Math.ceil(start / 15) * 15; minute + 45 <= end; minute += 15) options.push(breakClock(minute));
+  return options;
+}
+
+export function scheduleBreakLabel(shift, modality) {
+  if (!requiresScheduleBreak(shift, modality)) return '';
+  const rest = getScheduleBreak(shift, modality);
+  return rest ? `Break: ${rest.start}-${rest.end}` : 'Break: pendiente';
+}
+
 const extraMinutes = value => {
   const hours = Number(value ?? 0);
   return Number.isFinite(hours) ? Math.max(0, Math.round(hours * 60)) : 0;
