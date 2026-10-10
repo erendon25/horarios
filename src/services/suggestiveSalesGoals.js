@@ -568,9 +568,13 @@ export function buildTransactionSuggestiveSalesPlan({
   history = [], schedules = [], staff = [], monthlyData = {}, month,
   salonShare = SUGGESTIVE_TRX_RULES.salonShare,
   participation = SUGGESTIVE_TRX_RULES.participation,
+  unitTargets = null,
 }) {
   if (![salonShare, participation].every((rate) => Number.isFinite(rate) && rate >= 0 && rate <= 1)) {
     throw new Error('Los porcentajes deben estar entre 0% y 100%.');
+  }
+  if (unitTargets !== null && !SUGGESTIVE_PRODUCTS.every(({ id }) => Number.isSafeInteger(unitTargets[id]) && unitTargets[id] >= 0)) {
+    throw new Error('Las metas deben ser cantidades enteras no negativas para cada producto.');
   }
   const dates = monthDates(month);
   const records = [...new Map(history.filter((day) => /^\d{4}-\d{2}-\d{2}$/.test(day.date || day.sales_date))
@@ -585,10 +589,12 @@ export function buildTransactionSuggestiveSalesPlan({
   const daily = [];
   const hourlyRows = [];
   const untimedRows = [];
+  const channelActuals = Object.fromEntries(SUGGESTIVE_PRODUCTS.map(({ id }) => [id, {}]));
+  let measuredUnits = 0;
   let measuredSalonTrx = 0;
   let skuDays = 0;
 
-  for (const date of dates) {
+  const forecasts = dates.map((date) => {
     const weekday = dateAtNoon(date).getUTCDay();
     const recorded = byDate.get(date);
     const configured = monthlyData[date]?.txs ?? monthlyData[Number(date.slice(-2))]?.txs;
@@ -609,7 +615,16 @@ export function buildTransactionSuggestiveSalesPlan({
       transactionSource = 'estimated';
     }
     const salonTransactions = transactions === null ? null : transactions * salonShare;
-    const totalGoal = salonTransactions === null ? 0 : Math.max(0, Math.ceil(salonTransactions * participation - 1e-9));
+    return { date, weekday, recorded, past, sameWeekday, transactions, transactionSource, salonTransactions };
+  });
+  const manualDaily = unitTargets && Object.fromEntries(SUGGESTIVE_PRODUCTS.map(({ id }) => [id,
+    largestRemainder(unitTargets[id], forecasts.map((day) => ({ weight: day.salonTransactions || 0 }))),
+  ]));
+
+  for (const [dateIndex, forecast] of forecasts.entries()) {
+    const { date, weekday, recorded, past, sameWeekday, transactions, transactionSource, salonTransactions } = forecast;
+    const totalGoal = manualDaily ? SUGGESTIVE_PRODUCTS.reduce((sum, { id }) => sum + manualDaily[id][dateIndex], 0)
+      : salonTransactions === null ? 0 : Math.max(0, Math.ceil(salonTransactions * participation - 1e-9));
 
     // Product mix only selects how the combined goal is split; it never sets
     // the combined volume. Exclude other channels and future observations.
@@ -623,15 +638,26 @@ export function buildTransactionSuggestiveSalesPlan({
     });
     const mixSource = totalOf(productWeights) > 0 ? 'salon-history' : 'equal';
     const productQuotas = largestRemainder(totalGoal, SUGGESTIVE_PRODUCTS.map(({ id }) => ({ weight: productWeights[id] })));
-    const goals = Object.fromEntries(SUGGESTIVE_PRODUCTS.map(({ id }, index) => [id, productQuotas[index]]));
+    const goals = Object.fromEntries(SUGGESTIVE_PRODUCTS.map(({ id }, index) => [id, manualDaily ? manualDaily[id][dateIndex] : productQuotas[index]]));
     SUGGESTIVE_PRODUCTS.forEach(({ id }) => { targets[id] += goals[id]; });
 
     const recordedProducts = object(recorded?.suggestiveProducts || recorded?.suggestive_products);
     const hasSkuData = hasCurrentSuggestiveProducts(recordedProducts);
+    // Sales are observed units, independent of TRX availability or other SKUs.
+    const quantities = salonProducts(recorded);
+    SUGGESTIVE_PRODUCTS.forEach(({ id }) => {
+      actual[id] += quantities[id];
+      for (const channels of Object.values(object(recordedProducts[id]))) {
+        for (const [rawChannel, quantity] of Object.entries(object(channels))) {
+          const label = normalizeLabel(rawChannel);
+          const channel = normalizeDirectSalesChannel(rawChannel) || (label || 'SIN CANAL');
+          channelActuals[id][channel] = (channelActuals[id][channel] || 0) + numericQuantity(quantity);
+        }
+      }
+    });
     if (hasSkuData && transactionSource === 'recorded') {
-      const quantities = salonProducts(recorded);
-      SUGGESTIVE_PRODUCTS.forEach(({ id }) => { actual[id] += quantities[id]; });
       measuredSalonTrx += salonTransactions;
+      measuredUnits += totalOf(quantities);
       skuDays += 1;
     }
 
@@ -691,7 +717,8 @@ export function buildTransactionSuggestiveSalesPlan({
   });
   const totalGoal = totalOf(targets);
   return {
-    month, rows, daily, targets, totals: targets, coveredDays: skuDays,
+    month, rows, daily, targets, totals: targets, coveredDays: skuDays, channelActuals,
+    targetMode: unitTargets ? 'units' : 'transactions',
     channelTargets: Object.fromEntries(SUGGESTIVE_PRODUCTS.map(({ id }) => [id, { 'SALÓN': targets[id] }])),
     unassignedGoals, unassignedRows: rows.filter((row) => row.missingStaff).length,
     summaries: SUGGESTIVE_PRODUCTS.map((product) => ({ ...product, target: targets[product.id],
@@ -702,7 +729,7 @@ export function buildTransactionSuggestiveSalesPlan({
       totalTransactions: daily.reduce((sum, day) => sum + (day.transactions || 0), 0),
       salonTransactions: daily.reduce((sum, day) => sum + (day.salonTransactions || 0), 0),
       actualUnits: totalOf(actual), measuredSalonTrx,
-      actualParticipation: measuredSalonTrx > 0 ? totalOf(actual) / measuredSalonTrx : null,
+      actualParticipation: measuredSalonTrx > 0 ? measuredUnits / measuredSalonTrx : null,
       estimatedDays: daily.filter((day) => day.transactionSource === 'estimated').length,
       missingDays: daily.filter((day) => day.transactionSource === 'missing').length,
       untimedDays: untimedRows.length,

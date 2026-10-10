@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { checklistScore, checkFulfilled } from '../../services/competitionChecklist';
 import {
   evaluationOutcome,
   formatCompetitionTime,
@@ -62,9 +63,12 @@ function ActiveEvaluation({
   const rubric = data.scores
     .filter((s) => s.evaluation_id === evaluation.id)
     .sort((a, b) => a.sort_order - b.sort_order);
-  const [scores, setScores] = useState(() =>
+  const [manualScores, setScores] = useState(() =>
     Object.fromEntries(rubric.map((r) => [r.rubric_item_id, r.score ?? ""])),
   );
+  const [checks, setChecks] = useState(() => Object.fromEntries(rubric.map(r=>[r.rubric_item_id,r.checked_steps || {}])));
+  const scores=Object.fromEntries(rubric.map(r=>[r.rubric_item_id,r.checklist?.length ? checklistScore(r.checklist,checks[r.rubric_item_id],evaluation) : manualScores[r.rubric_item_id]]));
+  const submittedChecks=Object.fromEntries(rubric.filter(r=>r.checklist?.length).map(r=>[r.rubric_item_id,Object.fromEntries(r.checklist.map(step=>[step.id,step.automatic ? checkFulfilled(step,checks[r.rubric_item_id],evaluation) : checks[r.rubric_item_id]?.[step.id]]))]));
   const [critical, setCritical] = useState(evaluation.critical_error);
   const [reason, setReason] = useState(evaluation.critical_error_reason || "");
   const [confirm, setConfirm] = useState(false);
@@ -85,6 +89,7 @@ function ActiveEvaluation({
     rubric.length > 0 &&
     rubric.every(
       (r) =>
+        (!r.checklist?.length || r.checklist.every(step=>step.automatic || typeof checks[r.rubric_item_id]?.[step.id]==='boolean')) &&
         scores[r.rubric_item_id] !== "" &&
         Number.isFinite(Number(scores[r.rubric_item_id])) &&
         Number(scores[r.rubric_item_id]) >= 0 &&
@@ -211,9 +216,20 @@ function ActiveEvaluation({
         </p>
       )}
       <h3>Rúbrica de calidad</h3>
+      {rubric.some(r=>r.checklist?.length) && <p className="notice">Evalúe cada acción como Cumple o No cumple. Los puntos se suman automáticamente; No cumple suma 0. Revise las acciones y los valores configurados para el producto del ejercicio.</p>}
       <fieldset disabled={terminal || stale || !entry.eligible}>
         {rubric.map((r) => (
-          <label key={r.rubric_item_id} className="score-row">
+          r.checklist?.length ? <section className="card rubric-criterion" key={r.rubric_item_id}>
+            <h4>{r.label} · {scores[r.rubric_item_id]} / {r.max_score} puntos</h4>
+            {r.checklist.map(step=><label className="score-row rubric-check" key={step.id}>
+              <span>{step.label}<br/><small className="muted">Cumple: +{step.points} puntos · No cumple: 0</small></span>
+              {step.automatic ? <strong>{evaluation.duration_ms == null ? 'Pendiente del cronómetro' : checkFulfilled(step,checks[r.rubric_item_id],evaluation) ? 'Cumple' : 'No cumple'} · automático</strong> :
+              <select aria-label={`${r.label}: ${step.label}`} data-points={step.points} required value={typeof checks[r.rubric_item_id]?.[step.id]==='boolean' ? String(checks[r.rubric_item_id][step.id]) : ''}
+                onChange={event=>{const value=event.target.value;setChecks(current=>({...current,[r.rubric_item_id]:{...current[r.rubric_item_id],[step.id]:value===''?undefined:value==='true'}}));}}>
+                <option value="">Evaluar…</option><option value="true">Cumple (+{step.points})</option><option value="false">No cumple (0)</option>
+              </select>}
+            </label>)}
+          </section> : <label key={r.rubric_item_id} className="score-row">
             <span>
               {r.label}
               <br />
@@ -301,6 +317,7 @@ function ActiveEvaluation({
                   const result = await execute("finalize", {
                     evaluation_id: evaluation.id,
                     scores,
+                    checks: submittedChecks,
                     critical_error: critical,
                     reason: critical ? reason : null,
                   });

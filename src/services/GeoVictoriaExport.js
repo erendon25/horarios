@@ -1,3 +1,4 @@
+import { orderScheduleStaff } from './scheduleStaffOrder.js';
 // GeoVictoriaExport.js – Versión corregida
 import * as XLSX from "xlsx";
 import { parseISO, addDays, format } from "date-fns";
@@ -29,7 +30,7 @@ export const exportGeoVictoriaExcel = (staff, schedules, weekKey, turnoMap) => {
     return `${hh}:${mm}`;
   };
 
-  activeStaff.forEach(person => {
+  orderScheduleStaff(activeStaff, startDateStr).forEach(person => {
     const dni = person.dni || person.DNI || "";
     if (!dni) return;
 

@@ -60,6 +60,8 @@ export function AuthProvider({ children }) {
 
       const requiresStaffSelection = !profile
         || profile.status !== "active"
+        || (["collaborator", "trainer"].includes(profile.role)
+          && (profile.registration_pending || !profile.staff_profile_id || !profile.store_id))
         || Boolean(cessationDate && today > cessationDate);
       if (requiresStaffSelection) {
         // La cuenta Auth permanece iniciada para que un alta nueva o un

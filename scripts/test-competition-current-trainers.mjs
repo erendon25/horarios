@@ -1,0 +1,70 @@
+import assert from 'node:assert/strict';
+import { createCompetitionTestDb } from './competition-test-db.mjs';
+import { buildCompetitionTeamTemplate } from '../src/services/competitionRules.js';
+const db = await createCompetitionTestDb();
+const scalar = async (sql, params=[]) => Object.values((await db.query(sql,params)).rows[0])[0];
+const one = async (sql, params=[]) => (await db.query(sql,params)).rows[0];
+const login = async (id) => {
+  await db.exec('reset role');
+  await db.query("select set_config('request.jwt.claim.sub',$1,false)",[id]);
+  await db.exec('set role authenticated');
+};
+const cmd = (id, action, payload={}) => scalar('select competition_command($1,$2,$3::jsonb)',[id,action,JSON.stringify(payload)]);
+try {
+  const store=await scalar('insert into stores default values returning id');
+  const admin=await scalar('insert into auth.users values(gen_random_uuid()) returning id');
+  const formerTrainer=await scalar('insert into auth.users values(gen_random_uuid()) returning id');
+  const trainer=await scalar("insert into staff_profiles(store_id,first_name,position) values($1,'Líder','ENTRENADOR') returning id",[store]);
+  const collaborator=await scalar("insert into staff_profiles(store_id,first_name,position) values($1,'Integrante','COLABORADOR') returning id",[store]);
+  await db.query("insert into user_profiles(id,store_id,role,staff_profile_id) values($1,$3,'admin',null),($2,$3,'trainer',$4)",[admin,formerTrainer,store,trainer]);
+  await login(admin);
+  const c=await cmd(null,'create',{store_id:store});
+  await assert.rejects(()=>cmd(c.id,'team',{name:'Inválido',trainer_staff_id:collaborator}),/puesto ENTRENADOR/);
+  const team=await cmd(c.id,'team',{name:'Equipo',trainer_staff_id:trainer});
+  const member=await cmd(c.id,'member',{team_id:team.id,staff_id:collaborator});
+  const current=()=>one('select trainer_staff_id,trainer_name,trainer_eligible from competition_current_teams where id=$1',[team.id]);
+  assert.deepEqual(await current(),{trainer_staff_id:trainer,trainer_name:'Líder',trainer_eligible:true});
+  await cmd(c.id,'publication',{published:true});
+  await db.exec('reset role');
+  await db.query("update staff_profiles set position='COLABORADOR' where id=$1",[trainer]);
+  await login(formerTrainer);
+  assert.deepEqual(await current(),{trainer_staff_id:null,trainer_name:'Sin trainer vigente',trainer_eligible:false});
+  assert.equal(Number(await scalar('select count(*) from competition_trainer_ranking')),0,'Un rol de cuenta trainer no sustituye el puesto actual');
+  assert.equal(Number(await scalar('select count(*) from competition_team_ranking')),1,'El equipo se conserva');
+  assert.equal(await scalar('select team_id from competition_team_members where id=$1',[member.id]),team.id,'Los integrantes se conservan');
+  await assert.rejects(()=>scalar("select private.competition_command_before_current_trainers($1,'team','{}'::jsonb)",[c.id]),/permission denied/);
+  await login(admin);
+  await assert.rejects(()=>cmd(c.id,'team',{id:team.id,name:team.name,trainer_staff_id:trainer}),/puesto ENTRENADOR/);
+  const c2=await cmd(null,'create',{store_id:store});
+  await assert.rejects(()=>cmd(c2.id,'roster',{teams:[{name:'Inválido',trainer_staff_id:trainer,staff_ids:[]}]}),/puesto ENTRENADOR/);
+  assert.equal(Number(await scalar('select count(*) from competition_teams where competition_id=$1',[c2.id])),0);
+  await db.exec('reset role');
+  await db.query("update staff_profiles set position='ENTRENADOR' where id=$1",[trainer]);
+  await login(formerTrainer);
+  assert.equal((await current()).trainer_eligible,true,'Recuperar el puesto restaura el liderazgo');
+  assert.equal(Number(await scalar('select count(*) from competition_trainer_ranking')),1);
+  await db.exec('reset role');
+  const extraTrainers = [];
+  for (const name of ['Segundo', 'Tercero']) {
+    extraTrainers.push(await scalar("insert into staff_profiles(store_id,first_name,position,status) values($1,$2,'ENTRENADOR','pending') returning id", [store, name]));
+  }
+  await login(admin);
+  const template = buildCompetitionTeamTemplate([trainer, ...extraTrainers].map((id,index) => ({ id, position: 'ENTRENADOR', status: index === 0 ? 'active' : 'pending' })));
+  await cmd(c2.id, 'roster', { teams: template });
+  assert.equal(Number(await scalar('select count(*) from competition_teams where competition_id=$1', [c2.id])), 3, 'Tres trainers crean tres equipos');
+  assert.equal(Number(await scalar('select count(*) from competition_current_teams where competition_id=$1 and trainer_eligible', [c2.id])), 3, 'Los tres equipos tienen trainer vigente');
+  await db.exec('reset role');
+  await db.query("update staff_profiles set status='inactive' where id=$1",[trainer]);
+  await login(admin);
+  assert.equal((await current()).trainer_eligible,false);
+  await db.exec('reset role');
+  await db.query("update staff_profiles set status='active',cessation_date=((clock_timestamp() at time zone 'America/Lima')::date-1) where id=$1",[trainer]);
+  await login(admin);
+  assert.equal((await current()).trainer_eligible,false,'El cese efectivo también retira el liderazgo');
+  await cmd(c.id,'publication',{published:false});
+  await login(formerTrainer);
+  assert.equal(Number(await scalar('select count(*) from competition_current_teams')),0,'Se mantiene la privacidad del concurso');
+  console.log('PASS: solo ENTRENADOR vigente lidera, cambio de puesto inmediato, cuenta trainer obsoleta, rankings, creación y plantilla, conservación de integrantes, cese y publicación.');
+} finally {
+  await db.close();
+}

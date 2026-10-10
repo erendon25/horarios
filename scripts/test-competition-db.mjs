@@ -2,7 +2,7 @@
 // PGLITE_MODULE may point to an installed @electric-sql/pglite module.
 import assert from "node:assert/strict";
 import { createCompetitionTestDb } from "./competition-test-db.mjs";
-const db = await createCompetitionTestDb();
+const db = await createCompetitionTestDb({ includeObservable: false });
 const one = async (sql, params = []) => (await db.query(sql, params)).rows[0];
 const scalar = async (sql, params = []) =>
   Object.values(await one(sql, params))[0];
@@ -60,6 +60,7 @@ for (let i = 0; i < 9; i++)
       [store, `Persona ${i}`],
     ),
   );
+await db.query("update staff_profiles set position='ENTRENADOR' where id=any($1::uuid[])", [[staff[0], staff[3], staff[8]]]);
 await login(admin);
 const team = await cmd(c.id, "team", {
   name: "Equipo 1",
@@ -124,12 +125,14 @@ const scoresFor = async (id, total = 100) => {
       [id],
     )
   ).rows;
-  return Object.fromEntries(
-    rows.map((r, i) => [
-      r.rubric_item_id,
-      Number(r.max_score) - (i === 0 ? 100 - total : 0),
-    ]),
-  );
+  let remaining = total;
+  const scores = Object.fromEntries(rows.map((r) => {
+    const score = Math.min(Number(r.max_score), Math.max(remaining, 0));
+    remaining -= score;
+    return [r.rubric_item_id, score];
+  }));
+  if (remaining > 0) scores[rows[0].rubric_item_id] += remaining;
+  return scores;
 };
 await fails(
   () => cmd(c.id, "finalize", { evaluation_id: ev.id, scores: {} }),
@@ -219,6 +222,7 @@ assert.equal(
   ]),
   "active",
 );
+await cmd(c.id, 'publication', { published: true });
 await login(collab);
 assert.equal(await scalar("select count(*)::integer from competitions"), 1);
 await fails(
@@ -506,6 +510,8 @@ await fails(
 await cmd(c3.id, "cancel", { evaluation_id: restoredAttempt.id, reason: "Perfil inactivo" });
 await db.exec("reset role");
 await db.query("update staff_profiles set status='active' where id=$1", [staff[1]]);
+await login(admin);
+await cmd(c3.id, 'publication', { published: true });
 await login(collab);
 assert.deepEqual(
   await one("select eligible,effective_status from competition_fixture_view where id=$1", [c3Entry.id]),

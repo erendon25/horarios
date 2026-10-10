@@ -4,7 +4,8 @@ import { getFirestore, doc, onSnapshot, query, collection, where } from '../lib/
 import { supabase } from '../lib/supabase/client';
 import { Calendar, Clock, MapPin, Coffee, AlertCircle, ChevronLeft, ChevronRight, ClipboardList, X, Download } from 'lucide-react';
 import { exportGroupedPositionsPDF } from './PDFExport';
-import { calculateScheduleTotals, formatScheduleMinutes } from '../services/scheduleHours';
+import { calculateScheduleTotals, formatScheduleMinutes, scheduleBreakLabel } from '../services/scheduleHours';
+import { getPositionTimeline, effectiveModality, getWeekDates } from '../services/scheduleExportData';
 
 const weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const weekdayLabels = {
@@ -322,11 +323,15 @@ export default function WeeklyView({ perfilId, staffProfile, storeId, canDownloa
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 bg-white">
-                            {weekdays.map((day) => {
+                            {weekdays.map((day, dayIndex) => {
                                 const info = schedule[day];
                                 const isOff = info?.off;
                                 const isFeriado = info?.feriado;
                                 const hasShift = info?.start && info?.end;
+                                const date = weekStartDate ? getWeekDates(weekStartDate)[dayIndex] : '';
+                                const modality = effectiveModality(staffProfile || {}, date);
+                                const positionTimeline = getPositionTimeline(info, modality);
+                                const breakText = scheduleBreakLabel(info, modality);
                                  const extraHrsPre = Number(info?.extraHoursPre || 0);
                                  const extraHrsPost = Number(info?.extraHoursPost ?? info?.extraHours ?? 0);
                                  const totalExtraDay = extraHrsPre + extraHrsPost;
@@ -394,7 +399,11 @@ export default function WeeklyView({ perfilId, staffProfile, storeId, canDownloa
                                             )}
                                         </td>
                                         <td className="px-4 py-3 text-center">
-                                            {info?.position ? (
+                                            {info?.positionAssignments?.length > 0 && !isOff && !isFeriado ? (
+                                                <ul className="space-y-1 text-left text-xs text-purple-800" aria-label="Puestos por horario">
+                                                    {positionTimeline.map((segment, index) => <li key={index}>{segment.label}</li>)}
+                                                </ul>
+                                            ) : info?.position ? (
                                                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-purple-50 text-purple-700 font-medium border border-purple-100">
                                                     <MapPin className="w-3.5 h-3.5" />
                                                     {info.position}
@@ -404,6 +413,7 @@ export default function WeeklyView({ perfilId, staffProfile, storeId, canDownloa
                                                     {isOff ? 'Día Libre' : isFeriado ? 'Feriado' : 'Sin asignar'}
                                                 </span>
                                             )}
+                                            {breakText && <p className="mt-2 text-xs text-amber-800">{breakText}</p>}
                                         </td>
                                         <td className="px-4 py-3 text-center">
                                             {totalExtraDay > 0 ? (

@@ -1,4 +1,5 @@
 // AdminDashboard.jsx
+import './AdminDashboard.css';
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
@@ -50,12 +51,15 @@ import {
     where,
     getDoc,
     setDoc,
+    saveGeoVictoriaExtraHours,
     onSnapshot
 } from "../lib/supabase/firestoreCompat";
 import { db } from "../supabase";
 import StudyScheduleEditor from './StudyScheduleEditor';
 import ModalSelectorDePosiciones from './ModalSelectorDePosiciones';
 import StaffModal from './StaffModal';
+import SanitaryCardQuickEdit from './SanitaryCardQuickEdit';
+import ArchivedStaffHistory from './ArchivedStaffHistory';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import VHLConsultation from './VHLConsultation';
 import ScheduleRequestsManager from './ScheduleRequestsManager';
@@ -385,6 +389,18 @@ function AdminDashboard() {
     const [positionTarget, setPositionTarget] = useState(null);
     const [tempAbilities, setTempAbilities] = useState([]);
     const [showCesadosModal, setShowCesadosModal] = useState(false);
+    const [showArchivedHistory, setShowArchivedHistory] = useState(false);
+    useEffect(() => {
+        if (!showCesadosModal) return;
+        const previousBodyOverflow = document.body.style.overflow;
+        const previousRootOverflow = document.documentElement.style.overflow;
+        document.body.style.overflow = 'hidden';
+        document.documentElement.style.overflow = 'hidden';
+        return () => {
+            document.body.style.overflow = previousBodyOverflow;
+            document.documentElement.style.overflow = previousRootOverflow;
+        };
+    }, [showCesadosModal]);
     const [cesosRegistros, setCesosRegistros] = useState([]);
     const [cesosFilterMonth, setCesosFilterMonth] = useState('');
     const [cesosLoading, setCesosLoading] = useState(false);
@@ -971,7 +987,7 @@ function AdminDashboard() {
         const recordDni = normalizeDni(record?.dni);
         return staff.find((person) =>
             person.id === record?.staffId
-            || person.uid === record?.uid
+            || (record?.uid && person.uid === record.uid)
             || (recordDni && normalizeDni(person.dni) === recordDni)
         ) || {};
     };
@@ -1370,8 +1386,6 @@ function AdminDashboard() {
 
             for (const item of grouped.values()) {
                 const person = item.person;
-                const ref = doc(db, 'extra_hours', `gvextra_${person.id}_${item.periodStart || item.fecha}_${item.periodEnd || item.fecha}`);
-                const existed = await getDoc(ref);
                 const totalExtraMinutes = item.totalExtraMinutes;
                 const extraMinutesPre = item.extraMinutesPre;
                 const extraMinutesPost = item.extraMinutesPost;
@@ -1428,9 +1442,9 @@ function AdminDashboard() {
                     dailyDetails: item.dailyDetails || [],
                 };
 
-                await setDoc(ref, payload, { merge: true });
-                if (existed.exists()) updated += 1;
-                else created += 1;
+                const saved = await saveGeoVictoriaExtraHours(payload);
+                if (saved.created) created += 1;
+                else updated += 1;
 
                 const staffKey = person.id;
                 const current = totalByStaff.get(staffKey) || {
@@ -2243,11 +2257,11 @@ function AdminDashboard() {
     });
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+        <div className="admin-dashboard min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
             {/* Header */}
             <div className="bg-white shadow-md border-b border-gray-200">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                    <div className="flex min-w-0 flex-col xl:flex-row justify-between items-start xl:items-center gap-4">
                         <div>
                             <h1 className="text-3xl font-black text-gray-900 tracking-tight">
                                 Panel <span className="text-indigo-600">Admin</span>
@@ -2261,7 +2275,7 @@ function AdminDashboard() {
                                 </div>
                             )}
                         </div>
-                        <div className="flex flex-wrap items-center gap-3">
+                        <div className="admin-navigation flex w-full min-w-0 flex-wrap items-center gap-3 xl:w-auto">
                             <button onClick={() => navigate("/concurso")} className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-xl text-xs font-bold"><Award className="w-4 h-4" />CONCURSO</button>
                             {/* Grupo: Operaciones */}
                             <div className="flex items-center bg-gray-50 p-1 rounded-2xl border border-gray-100">
@@ -2495,6 +2509,11 @@ function AdminDashboard() {
                                         <p className="text-sm text-slate-500 mt-1">
                                             Importa usuarios activos nuevos y completa luego su modalidad y carnet.
                                         </p>
+                                    </button>
+
+                                    <button onClick={() => { setShowHRPanel(false); setShowArchivedHistory(true); }} className="bg-white border border-slate-200 rounded-2xl p-5 text-left hover:shadow-md">
+                                        <h3 className="font-black text-slate-900">Archivo de horarios</h3>
+                                        <p className="text-sm text-slate-500 mt-1">Consulta horarios antiguos conservados como texto, sin cuenta vinculada.</p>
                                     </button>
 
                                     <button
@@ -2987,7 +3006,7 @@ function AdminDashboard() {
                 )}
 
                 {/* Stats Cards - Rediseño Minimalista */}
-                <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mb-8">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-8">
                     {/* Total Plantilla */}
                     <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-6 flex items-center gap-4 transition-all hover:shadow-md">
                         <div className="p-3 bg-indigo-50 rounded-xl">
@@ -3081,7 +3100,7 @@ function AdminDashboard() {
                             />
                         </div>
                         
-                        <div className="flex items-center gap-3 w-full lg:w-auto overflow-x-auto pb-1 lg:pb-0">
+                        <div className="admin-controls grid grid-cols-2 items-center gap-3 w-full lg:w-auto lg:flex lg:flex-wrap">
                             <select
                                 className="px-4 py-3 bg-gray-50 border border-transparent rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-sm outline-none font-medium text-gray-700 min-w-[140px]"
                                 value={modalityFilter}
@@ -3111,7 +3130,7 @@ function AdminDashboard() {
 
                             <button
                                 onClick={handleAddStaff}
-                                className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 hover:shadow-indigo-300 transition-all text-sm font-bold whitespace-nowrap ml-2"
+                                className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 hover:shadow-indigo-300 transition-all text-sm font-bold whitespace-nowrap col-span-2 lg:ml-2"
                             >
                                 <Plus className="w-4 h-4" />
                                 Agregar Personal
@@ -3128,8 +3147,8 @@ function AdminDashboard() {
                     </div>
                 ) : filteredStaff.length > 0 ? (
                     <div className="bg-white rounded-xl shadow-md overflow-hidden">
-                        <div className="overflow-x-auto">
-                            <table className="w-full">
+                        <div className="admin-staff-scroll overflow-x-auto">
+                            <table className="admin-staff-table w-full">
                                 <thead className="bg-gray-50/50 border-b border-gray-200">
                                     <tr>
                                         <th className="px-8 py-4 text-left text-[11px] font-bold text-gray-500 uppercase tracking-widest">Nombre y Detalle</th>
@@ -3147,7 +3166,7 @@ function AdminDashboard() {
                                             key={idx}
                                             className="hover:bg-blue-50 transition-colors duration-150 group"
                                         >
-                                            <td className="px-8 py-5 relative">
+                                            <td data-label="Colaborador" className="px-8 py-5 relative">
                                                 <div className="flex flex-col gap-1">
                                                     <span
                                                         onClick={() => handleViewHolidays(colab)}
@@ -3205,7 +3224,7 @@ function AdminDashboard() {
                                                     </div>
                                                 </div>
                                             </td>
-                                            <td className="px-8 py-4">
+                                            <td data-label="Modalidad" className="px-8 py-4">
                                                 <div className="flex items-center">
                                                     <span className={`px-3 py-1 rounded-lg text-xs font-bold border ${colab.modality === "Full-Time"
                                                         ? "bg-emerald-50 text-emerald-700 border-emerald-100"
@@ -3215,10 +3234,10 @@ function AdminDashboard() {
                                                     </span>
                                                 </div>
                                             </td>
-                                            <td className="px-6 py-5 text-gray-700">
+                                            <td data-label="Rol" className="px-6 py-5 text-gray-700">
                                                 <span className="text-base">{colab.position || 'colaborador'}</span>
                                             </td>
-                                            <td className="px-6 py-4 text-center">
+                                            <td data-label="Acceso a la app" className="px-6 py-4 text-center">
                                                 <div className="flex flex-col items-center gap-1.5">
                                                     {colab.uid ? (
                                                         <CheckCircle2 className="text-emerald-500 w-5 h-5" />
@@ -3234,7 +3253,7 @@ function AdminDashboard() {
                                                 </div>
                                             </td>
                                             {/* Carnet Sanidad */}
-                                            <td className="px-6 py-5">
+                                            <td data-label="Carnet de sanidad" className="px-6 py-5">
                                                 <div className="flex flex-col gap-1">
                                                     {colab.sanitaryCardDate ? (
                                                         <>
@@ -3270,10 +3289,22 @@ function AdminDashboard() {
                                                     ) : (
                                                         <span className="text-xs text-gray-400 italic">No registrado</span>
                                                     )}
+                                                    {['admin', 'superadmin'].includes(userRole) && <SanitaryCardQuickEdit
+                                                        name={`${colab.name || ''} ${colab.lastName || ''}`.trim()}
+                                                        expiry={colab.sanitaryCardDate} unlocked={colab.sanitaryCardUnlock}
+                                                        onSave={async (date, unlocked) => {
+                                                            const { error: saveError } = await supabase.from('staff_profiles')
+                                                                .update({ sanitary_card_expiry: date || null, sanitary_card_unlock: unlocked })
+                                                                .eq('id', colab.id).select('id').single();
+                                                            if (saveError) throw saveError;
+                                                            setStaff(previous => previous.map(person => person.id === colab.id
+                                                                ? { ...person, sanitaryCardDate: date, sanitaryCardExpiry: date || null, sanitaryCardUnlock: unlocked }
+                                                                : person));
+                                                        }} />}
                                                 </div>
                                             </td>
                                             {/* Columna Estado / Cesar */}
-                                            <td className="px-6 py-4 text-center">
+                                            <td data-label="Estado" className="px-6 py-4 text-center">
                                                 <button
                                                     onClick={() => handleCessation(colab)}
                                                     className={`w-full text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl border transition-all ${
@@ -3288,7 +3319,7 @@ function AdminDashboard() {
                                                     }
                                                 </button>
                                             </td>
-                                            <td className="px-6 py-4">
+                                            <td data-label="Acciones" className="px-6 py-4">
                                                 <div className="flex flex-col gap-2">
                                                     {colab.isTrainee && (
                                                         <button
@@ -3405,6 +3436,8 @@ function AdminDashboard() {
                 )}
 
                 {/* Modal Consultar Ceses */}
+                {showArchivedHistory && <ArchivedStaffHistory storeId={userData.storeId} onClose={() => setShowArchivedHistory(false)} />}
+
                 {showCesadosModal && (() => {
                     const today = new Date(); today.setHours(0, 0, 0, 0);
 
@@ -3488,12 +3521,12 @@ function AdminDashboard() {
 
                     return (
                         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm px-4">
-                            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+                            <div role="dialog" aria-modal="true" aria-labelledby="cessation-history-title" className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90dvh] flex flex-col overflow-hidden">
 
                                 {/* Header */}
                                 <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-orange-500 to-orange-600 flex-shrink-0">
                                     <div>
-                                        <h2 className="text-xl font-bold text-white">Historial de Ceses / Cambios</h2>
+                                        <h2 id="cessation-history-title" className="text-xl font-bold text-white">Historial de Ceses / Cambios</h2>
                                         <p className="text-orange-100 text-sm mt-0.5">
                                             {filtered.length} registro{filtered.length !== 1 ? 's' : ''} encontrado{filtered.length !== 1 ? 's' : ''}
                                             {cesosFilterMonth && ` en ${new Date(cesosFilterMonth + '-02').toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}`}
@@ -3549,7 +3582,8 @@ function AdminDashboard() {
                                     </button>
                                 </div>
 
-                                <div className="px-6 py-4 bg-white border-b border-gray-100 flex-shrink-0">
+                                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain" data-cessation-history-scroll>
+                                <div className="px-6 py-4 bg-white border-b border-gray-100">
                                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                                         <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3">
                                             <p className="text-[10px] font-black uppercase tracking-widest text-red-700">Ceses reales</p>
@@ -3618,7 +3652,7 @@ function AdminDashboard() {
                                 </div>
 
                                 {/* Body */}
-                                <div className="overflow-y-auto flex-1 p-4">
+                                <div className="overflow-x-auto p-4">
                                     {cesosLoading ? (
                                         <div className="text-center py-12 text-gray-400">
                                             <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-orange-500 mb-3"></div>
@@ -3690,6 +3724,8 @@ function AdminDashboard() {
                                     )}
                                 </div>
 
+                                </div>
+
                                 {/* Footer */}
                                 <div className="px-6 py-4 border-t border-gray-100 flex justify-between items-center flex-shrink-0">
                                     <span className="text-xs text-gray-400">
@@ -3711,7 +3747,10 @@ function AdminDashboard() {
                     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 px-4" role="dialog" aria-modal="true" aria-label="Feriados del colaborador">
                         <div className="w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-2xl bg-white p-5">
                             <div className="mb-4 flex items-center justify-between gap-3">
-                                <h2 className="text-xl font-bold">{selectedStaff.name} {selectedStaff.lastName}</h2>
+                                <div className="min-w-0">
+                                    <h2 className="break-words text-xl font-bold">{`${selectedStaff.name || ''} ${selectedStaff.lastName || ''}`.trim() || 'Colaborador sin nombre'}</h2>
+                                    <p className="mt-1 text-sm text-gray-600">DNI: <span className="font-mono font-semibold text-gray-900">{selectedStaff.dni || 'No registrado'}</span></p>
+                                </div>
                                 <button type="button" onClick={() => setShowHolidayModal(false)} className="rounded-lg border px-3 py-2">Cerrar</button>
                             </div>
                             <HolidayBalancePanel staffId={selectedStaff.id} previousBalance={selectedStaff.holidayBalance} refreshKey={holidayRefresh} canDelete={['admin', 'superadmin'].includes(userRole)} onChanged={fetchAllStaffProfiles} />
@@ -4019,7 +4058,7 @@ function AdminDashboard() {
             {/* Modal de Solicitudes */}
             {showRequestsModal && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setShowRequestsModal(false)}>
-                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in duration-300" onClick={e => e.stopPropagation()}>
+                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90dvh] overflow-y-auto animate-in fade-in zoom-in duration-300" onClick={e => e.stopPropagation()}>
                         <div className="bg-gradient-to-r from-gray-800 to-gray-900 px-8 py-6 flex justify-between items-center">
                             <h3 className="text-xl font-bold text-white flex items-center gap-3">
                                 <ClipboardList className="w-6 h-6 text-orange-400" />

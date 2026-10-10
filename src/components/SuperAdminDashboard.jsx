@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import {
   collection,
+  query,
+  where,
   onSnapshot,
   addDoc,
   getFirestore,
@@ -39,6 +41,7 @@ function SuperAdminDashboard() {
   const [newStore, setNewStore] = useState({ name: '', ciudad: '', direccion: '' });
   const [adminEmail, setAdminEmail] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
+  const [creatingAdmin, setCreatingAdmin] = useState(false);
   const [selectedStoreId, setSelectedStoreId] = useState('');
   const [editingStoreId, setEditingStoreId] = useState(null);
   const [staffProfiles, setStaffProfiles] = useState([]);
@@ -52,7 +55,7 @@ function SuperAdminDashboard() {
   const db = getFirestore();
 
   useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, 'stores'), (snapshot) => {
+    const unsubscribe = onSnapshot(query(collection(db, 'stores'), where('active', '==', true)), (snapshot) => {
       const storeList = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
       setStores(storeList);
     });
@@ -122,21 +125,35 @@ function SuperAdminDashboard() {
   };
 
   const handleCreateAdmin = async () => {
+    if (creatingAdmin) return;
     try {
       if (!adminEmail.includes('@') || adminPassword.length < 6 || !selectedStoreId) {
         toast.error('Email inválido, contraseña muy corta (mín. 6) o tienda no seleccionada');
         return;
       }
 
+      setCreatingAdmin(true);
       const { error } = await supabase.functions.invoke('staff-account-admin', {
         body: {
           operation: 'create_admin',
-          email: adminEmail,
+          email: adminEmail.trim().toLowerCase(),
           password: adminPassword,
           storeId: selectedStoreId,
         },
       });
-      if (error) throw error;
+      if (error) {
+        const payload = await error.context?.json?.().catch(() => null);
+        const messages = {
+          forbidden: 'Solo un superadmin activo puede crear administradores.',
+          invalid_admin_details: 'Revisa el correo, la contraseña y la tienda seleccionada.',
+          inactive_store: 'La tienda seleccionada no está activa.',
+          email_already_registered: 'Este correo ya tiene una cuenta. Utiliza otro correo.',
+          admin_creation_failed: 'No se pudo crear la cuenta. Revisa la contraseña e inténtalo nuevamente.',
+          admin_profile_creation_failed: 'No se pudo guardar el acceso del administrador. Inténtalo nuevamente.',
+          rate_limited: 'Has realizado demasiados intentos. Espera unos minutos.',
+        };
+        throw new Error(messages[payload?.error] || 'No se pudo crear el administrador. Inténtalo nuevamente.');
+      }
 
       toast.success('Administrador creado exitosamente');
       setAdminEmail('');
@@ -145,6 +162,8 @@ function SuperAdminDashboard() {
     } catch (err) {
       console.error(err);
       toast.error('Error al crear administrador: ' + err.message);
+    } finally {
+      setCreatingAdmin(false);
     }
   };
 
@@ -434,9 +453,9 @@ function SuperAdminDashboard() {
                 </div>
 
                 <div className="pt-4">
-                  <button onClick={handleCreateAdmin} className="w-full bg-gradient-to-r from-fuchsia-600 to-purple-600 hover:from-fuchsia-700 hover:to-purple-700 text-white py-3 rounded-xl font-bold shadow-md transition-all flex justify-center items-center gap-2 transform hover:-translate-y-0.5">
+                  <button onClick={handleCreateAdmin} disabled={creatingAdmin} className="w-full bg-gradient-to-r from-fuchsia-600 to-purple-600 hover:from-fuchsia-700 hover:to-purple-700 text-white py-3 rounded-xl font-bold shadow-md transition-all flex justify-center items-center gap-2 transform hover:-translate-y-0.5 disabled:opacity-50">
                     <ShieldAlert className="w-5 h-5"/>
-                    Confirmar Creación de Administrador
+                    {creatingAdmin ? 'Creando administrador…' : 'Confirmar Creación de Administrador'}
                   </button>
                 </div>
              </div>

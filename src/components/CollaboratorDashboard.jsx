@@ -10,6 +10,7 @@ import ScheduleRequestForm from "./ScheduleRequestForm";
 import WeeklyView from "./WeeklyView";
 import CollaboratorSuggestiveGoals from "./CollaboratorSuggestiveGoals";
 import { canDownloadSchedulePdf } from "../services/schedulePdfAuthorization";
+import { hasPublishedCompetition } from "../services/competition";
 import {
   BookOpen,
   Calendar,
@@ -45,6 +46,7 @@ const CollaboratorDashboard = () => {
   const [passwordError, setPasswordError] = useState("");
   const [passwordSuccess, setPasswordSuccess] = useState(false);
   const [perfil, setPerfil] = useState(null);
+  const [competitionPublished, setCompetitionPublished] = useState(false);
   const [storeName, setStoreName] = useState("");
   const [loading, setLoading] = useState(true);
   const [modalType, setModalType] = useState(null);
@@ -124,6 +126,32 @@ const CollaboratorDashboard = () => {
   };
 
   const isTrainer = perfil?.position === 'ENTRENADOR';
+  useEffect(() => {
+    setCompetitionPublished(false);
+    if (!perfil?.storeId) return;
+    let active = true;
+    let request = 0;
+    const refresh = async () => {
+      if (document.hidden) return;
+      const current = ++request;
+      try {
+        const published = await hasPublishedCompetition(perfil.storeId);
+        if (active && current === request) setCompetitionPublished(published);
+      } catch {
+        if (active && current === request) setCompetitionPublished(false);
+      }
+    };
+    void refresh();
+    const timer = setInterval(refresh, 15000);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      active = false;
+      clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [perfil?.storeId]);
   const mayDownloadSchedulePdf = canDownloadSchedulePdf({
     staffPosition: perfil?.position,
   });
@@ -246,7 +274,7 @@ const CollaboratorDashboard = () => {
   useEffect(() => {
     const loadStores = async () => {
       const db = getFirestore();
-      const storeSnap = await getDocs(collection(db, "stores"));
+      const storeSnap = await getDocs(query(collection(db, "stores"), where("active", "==", true)));
       setStores(storeSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     };
     loadStores();
@@ -430,7 +458,7 @@ const CollaboratorDashboard = () => {
               <p className="text-gray-600 mt-1">Panel de colaborador</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <button onClick={() => navigate("/concurso")} className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg font-medium"><Award className="w-4 h-4" />MI CONCURSO</button>
+              {competitionPublished && <button onClick={() => navigate("/concurso")} className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg font-medium"><Award className="w-4 h-4" />MI CONCURSO</button>}
               {(userRole === 'trainer' || userRole === 'admin' || userRole === 'superadmin') && (
                 <button
                   onClick={() => navigate('/entrenamiento')}

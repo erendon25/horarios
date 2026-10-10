@@ -1,7 +1,9 @@
+import { orderScheduleStaff, scheduleStaffRank, compareScheduleStaff } from '../services/scheduleStaffOrder.js';
 // PDFExport.jsx - Corregido para evitar errores con nombres indefinidos
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { calculateScheduleTotals, formatScheduleMinutes } from '../services/scheduleHours';
+import { isActiveOnDate } from '../services/scheduleExportData';
+import { calculateScheduleTotals, formatScheduleMinutes, scheduleBreakLabel } from '../services/scheduleHours';
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const DAY_LABELS = {
@@ -55,34 +57,26 @@ export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = f
         filteredStaff = filteredStaff.filter(p => !p.isTrainee);
     }
 
-    const MANAGERIAL_POSITIONS = ['GERENTE', 'ASISTENTE', 'LIDER'];
-    const normalizePos = (value) => String(value || '')
-        .normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toUpperCase();
-    const isManagerial = (person) => MANAGERIAL_POSITIONS.includes(normalizePos(person.position));
-
-    const sortByModality = (a, b) => {
-        const modA = getEffectiveModality(a, dateStr);
-        const modB = getEffectiveModality(b, dateStr);
-        if (modA === 'Full-Time' && modB !== 'Full-Time') return -1;
-        if (modA !== 'Full-Time' && modB === 'Full-Time') return 1;
-        if (modA === 'Part-Time' && modB !== 'Part-Time') return -1;
-        if (modA !== 'Part-Time' && modB === 'Part-Time') return 1;
-        return 0;
-    };
-
-    const gerencial = filteredStaff.filter(isManagerial).sort(sortByModality);
-    const personal = filteredStaff.filter((p) => !isManagerial(p)).sort(sortByModality);
+    const ordered = orderScheduleStaff(filteredStaff, dateStr);
+    const gerencial = ordered.filter(person => scheduleStaffRank(person, dateStr) < 3);
+    const personal = ordered.filter(person => scheduleStaffRank(person, dateStr) >= 3);
 
     const buildRows = (list) => list.map(p => {
         const effModality = getEffectiveModality(p, dateStr);
         const nombre = p.name ? `${p.name} ${p.lastName || ''}`.toUpperCase() : 'SIN NOMBRE';
         const row = [nombre, effModality || '--'];
-        DAYS.forEach(d => {
+        const validSchedule = {};
+        DAYS.forEach((d, dayIndex) => {
             const e = schedules[p.id]?.[d];
 
             // Lógica para mostrar horario extendido si hay horas extras
             let displayTxt = 'S/A';
-            if (e?.off) displayTxt = 'DESCANSO';
+            const workDate = new Date(start.getTime() + dayIndex * 864e5);
+            const workDateStr = `${workDate.getFullYear()}-${String(workDate.getMonth() + 1).padStart(2, '0')}-${String(workDate.getDate()).padStart(2, '0')}`;
+            const activeOnDay = isActiveOnDate(p, workDateStr);
+            if (activeOnDay) validSchedule[d] = e;
+            if (!activeOnDay) displayTxt = 'CESE';
+            else if (e?.off) displayTxt = 'DESCANSO';
             else if (e?.feriado) {
                 displayTxt = 'FERIADO';
             }
@@ -111,6 +105,10 @@ export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = f
                 }
 
                 displayTxt = formatShiftText(e, currentStart, currentEnd);
+                const dayDate = new Date(start.getTime() + dayIndex * 864e5);
+                const dayDateStr = `${dayDate.getFullYear()}-${String(dayDate.getMonth() + 1).padStart(2, '0')}-${String(dayDate.getDate()).padStart(2, '0')}`;
+                const breakText = scheduleBreakLabel(e, getEffectiveModality(p, dayDateStr));
+                if (breakText) displayTxt += `\n${breakText}`;
 
                 // Agregar posición si se solicita
                 if (showPositions && e.position) {
@@ -121,7 +119,7 @@ export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = f
 
             row.push(displayTxt);
         });
-        row.push(formatScheduleMinutes(calculateScheduleTotals(schedules[p.id], p, dateStr).totalMinutes));
+        row.push(formatScheduleMinutes(calculateScheduleTotals(validSchedule, p, dateStr).totalMinutes));
         return row;
     });
 
@@ -256,7 +254,8 @@ export const exportGroupedPositionsPDF = async (
             label += ` (+${extraPre + extraPost}h)`;
         }
 
-        const entry = { 
+        const entry = {
+            person,
             n: label, 
             mod: modality, 
             h: info.splitShift && info.start2 && info.end2
@@ -399,7 +398,7 @@ export const exportGroupedPositionsPDF = async (
                 theme: 'grid',
                 head: [[pos.toUpperCase()]],
                 body: rows
-                    .sort((a,b) => a.startMin - b.startMin) // Ordenar por hora de entrada dentro de la posición
+                    .sort((a, b) => compareScheduleStaff(a.person, b.person, dateText) || a.startMin - b.startMin)
                     .map(r => [`${r.n}\n${r.mod} • ${r.h}`]),
                 styles: {
                     fontSize: 9,
@@ -471,7 +470,7 @@ export const exportExtraHoursReport = async (staff, schedules, weekKey) => {
     const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
     const dayNames = { monday: 'Lunes', tuesday: 'Martes', wednesday: 'Miércoles', thursday: 'Jueves', friday: 'Viernes', saturday: 'Sábado', sunday: 'Domingo' };
 
-    staff.forEach(p => {
+    orderScheduleStaff(staff, weekKey.split('_to_')[0]).forEach(p => {
         const schedule = schedules[p.id] || {};
         days.forEach(day => {
             const info = schedule[day];

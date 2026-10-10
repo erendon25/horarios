@@ -1,3 +1,4 @@
+import { orderScheduleStaff } from './scheduleStaffOrder.js';
 import { addHeatmapWorksheet } from './heatmapExport.js';
 import { HOURS, buildHeatmapRows } from './heatmapModel.js';
 import { calculateScheduleTotals } from './scheduleHours.js';
@@ -15,11 +16,7 @@ const numericExtras = value => Math.max(0, Number(String(value ?? 0).replace(','
 
 export async function buildWeeklyScheduleWorkbook({ staff = [], schedules = {}, weekStart, requirements = {}, projectionPositions = [], hasUnsavedChanges = false }) {
   const dates = getWeekDates(weekStart);
-  const people = staff.filter(person => isActiveOnDate(person, dates[0])).slice().sort((a, b) => (
-    Number(isManagement(b)) - Number(isManagement(a))
-    || Number(shortModality(effectiveModality(b, dates[0])) === 'FT') - Number(shortModality(effectiveModality(a, dates[0])) === 'FT')
-    || `${a.name || ''} ${a.lastName || ''}`.localeCompare(`${b.name || ''} ${b.lastName || ''}`, 'es')
-  ));
+  const people = orderScheduleStaff(staff.filter(person => isActiveOnDate(person, dates[0])), dates[0]);
   if (!people.length) throw new Error('No hay colaboradores para exportar en esta semana.');
   const { default: ExcelJS } = await import('exceljs');
   const workbook = new ExcelJS.Workbook();

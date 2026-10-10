@@ -44,13 +44,14 @@ export default function SuggestiveSalesGoalsPage() {
     const [refreshToken, setRefreshToken] = useState(0);
     const [publication, setPublication] = useState({ state: 'idle', count: 0, message: '' });
     const [participationDraft, setParticipationDraft] = useState('30');
+    const [unitDrafts, setUnitDrafts] = useState({});
     const [savingParticipation, setSavingParticipation] = useState(false);
     const [participationMessage, setParticipationMessage] = useState('');
     const [participationError, setParticipationError] = useState('');
     const draftValue = Number(participationDraft);
     const validDraft = participationDraft.trim() !== '' && Number.isFinite(draftValue)
         && draftValue >= 0 && draftValue <= 100;
-    const hasParticipationChange = validDraft && source && Math.abs(draftValue / 100 - source.participation) > 1e-10;
+    const hasParticipationChange = validDraft && source && (source.unitTargets !== null || Math.abs(draftValue / 100 - source.participation) > 1e-10);
 
     const plan = useMemo(() => {
         if (!source || source.month !== month || source.storeId !== storeId) return null;
@@ -67,6 +68,7 @@ export default function SuggestiveSalesGoalsPage() {
         let cancelled = false;
         const loadSource = async () => {
             setSource(null);
+            setUnitDrafts({});
             setLoading(true);
             setError('');
             setParticipationMessage('');
@@ -89,6 +91,7 @@ export default function SuggestiveSalesGoalsPage() {
                     month,
                     storeId,
                     participation,
+                    unitTargets: participationSnap.data()?.unitTargets ?? null,
                     monthlyData: configSnap.data()?.monthlyData || {},
                     history: historySnap.docs.map((item) => ({ ...item.data(), date: item.id })),
                     schedules: schedulesSnap.docs.map((item) => ({ ...item.data(), id: item.id })),
@@ -137,7 +140,7 @@ export default function SuggestiveSalesGoalsPage() {
                 p_month_start: `${month}-01`,
                 p_rows: rows,
                 p_targets: { ...plan.targets, calculation: {
-                    basis: 'salon_transactions', participation: plan.metrics.participation,
+                    basis: plan.targetMode === 'units' ? 'monthly_units' : 'salon_transactions', participation: plan.metrics.participation,
                     salonShare: plan.metrics.salonShare,
                     productSet: SUGGESTIVE_PRODUCT_SET,
                 } },
@@ -171,10 +174,10 @@ export default function SuggestiveSalesGoalsPage() {
         const participation = draftValue / 100;
         try {
             await setDoc(doc(db, 'stores', storeId, 'config', participationConfigKey(month)), {
-                participation,
+                participation, unitTargets: null,
             });
             setSource((current) => current?.month === month && current?.storeId === storeId
-                ? { ...current, participation } : current);
+                ? { ...current, participation, unitTargets: null } : current);
             setParticipationMessage(`Objetivo de ${formatPercent(participation)}% guardado para ${month}.`);
         } catch (saveError) {
             console.error('Error guardando el porcentaje de venta sugestiva:', saveError);
@@ -183,6 +186,37 @@ export default function SuggestiveSalesGoalsPage() {
             setSavingParticipation(false);
         }
     };
+
+    const saveUnitTargets = async (event) => {
+        event.preventDefault();
+        if (!plan || savingParticipation || publication.state === 'publishing') return;
+        const unitTargets = Object.fromEntries(SUGGESTIVE_PRODUCTS.map(({ id }) => [id,
+            Number(unitDrafts[id] ?? plan.targets[id]),
+        ]));
+        if (!SUGGESTIVE_PRODUCTS.every(({ id }) => String(unitDrafts[id] ?? plan.targets[id]).trim() !== ''
+            && Number.isSafeInteger(unitTargets[id]) && unitTargets[id] >= 0)) {
+            setParticipationError('Ingresa una cantidad entera no negativa para cada producto.');
+            return;
+        }
+        setSavingParticipation(true);
+        setParticipationError('');
+        setParticipationMessage('');
+        try {
+            await setDoc(doc(db, 'stores', storeId, 'config', participationConfigKey(month)), {
+                participation: source.participation, unitTargets,
+            });
+            setSource((current) => current?.month === month && current?.storeId === storeId
+                ? { ...current, unitTargets } : current);
+            setParticipationMessage(`Metas en unidades guardadas para ${month}.`);
+        } catch (saveError) {
+            console.error('Error guardando metas en unidades:', saveError);
+            setParticipationError('No se pudieron guardar las metas. Vuelve a intentarlo.');
+        } finally {
+            setSavingParticipation(false);
+        }
+    };
+    const latestSalesDate = source?.history?.map((day) => day.date).sort().at(-1);
+    const monthHasSales = source?.history?.some((day) => day.date?.startsWith(`${month}-`));
 
     const changeMonth = (value) => {
         setMonth(value);
@@ -282,6 +316,35 @@ export default function SuggestiveSalesGoalsPage() {
                     </div>
                 )}
 
+                {source && !monthHasSales && (
+                    <div role="status" className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm">
+                        No hay ventas importadas para {month}.
+                        {latestSalesDate && <> El último día importado es {latestSalesDate}.
+                            <button type="button" onClick={() => changeMonth(latestSalesDate.slice(0, 7))}
+                                className="ml-2 font-bold underline">Ver ventas de {latestSalesDate.slice(0, 7)}</button>
+                        </>}
+                    </div>
+                )}
+                <form onSubmit={saveUnitTargets} className="mb-4 rounded-xl border border-orange-200 bg-white p-4">
+                    <h2 className="font-bold text-slate-900">Metas mensuales en unidades — Salón</h2>
+                    <p className="mt-1 text-xs text-slate-500">Los productos se mantienen; define la cantidad de cada uno para esta tienda y mes. Al guardar, estas cantidades reemplazan la meta calculada por porcentaje.</p>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                        {SUGGESTIVE_PRODUCTS.map(({ id, label }) => (
+                            <label key={id} className="text-xs font-bold text-slate-700">{label}
+                                <input type="number" min="0" step="1" required
+                                    value={unitDrafts[id] ?? plan?.targets[id] ?? ''}
+                                    onChange={(event) => setUnitDrafts((current) => ({ ...current, [id]: event.target.value }))}
+                                    disabled={!plan || loading || savingParticipation}
+                                    className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-lg" />
+                            </label>
+                        ))}
+                    </div>
+                    <button type="submit" disabled={!plan || loading || savingParticipation || publication.state === 'publishing'}
+                        className="mt-3 rounded-lg bg-orange-600 px-4 py-3 text-xs font-bold text-white disabled:opacity-50">
+                        {savingParticipation ? 'Guardando…' : 'Guardar metas en unidades'}
+                    </button>
+                </form>
+
                 <form onSubmit={saveParticipation} className="mb-4 rounded-xl border border-indigo-200 bg-white p-4">
                     <div className="flex flex-wrap items-end gap-3">
                         <label className="text-xs font-bold text-slate-700">
@@ -302,7 +365,7 @@ export default function SuggestiveSalesGoalsPage() {
                         <button type="submit"
                             disabled={!plan || !validDraft || !hasParticipationChange || loading || savingParticipation || publication.state === 'publishing'}
                             className="rounded-lg bg-indigo-700 px-4 py-3 text-xs font-black text-white hover:bg-indigo-800 disabled:opacity-50">
-                            {savingParticipation ? 'Guardando…' : 'Guardar y recalcular metas'}
+                            {savingParticipation ? 'Guardando…' : 'Usar meta por porcentaje'}
                         </button>
                     </div>
                     <p id="participation-help" className="mt-2 text-xs text-slate-500">
@@ -378,9 +441,9 @@ function SuggestiveGoalsWorkspace({
 
             <div className="p-5">
                 <div className="mb-5 rounded-lg border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-950">
-                    <p className="font-black">Objetivo: {participationLabel} unidades sugestivas por cada 100 TRX de SALÓN</p>
+                    {plan?.targetMode === 'units' ? <p className="font-black">Objetivo mensual definido: {formatUnits(metrics?.totalGoal)} unidades en Salón. Las cantidades por producto se distribuyen entre fechas y turnos según las TRX.</p> : <><p className="font-black">Objetivo: {participationLabel} unidades sugestivas por cada 100 TRX de SALÓN</p>
                     <p className="mt-2">TRX totales × {salonLabel}% de participación estimada de SALÓN × {participationLabel}% de venta sugestiva.</p>
-                    <p className="mt-1 text-xs">Borde de queso + VS HAZLO CMB V3 CANELITAS + VS HAZLO CMB V3 CRAZY suman ese {participationLabel}%. Cada unidad registrada del SKU cuenta una vez. Ejemplo: 1.000 TRX × {salonLabel}% × {participationLabel}% = {formatUnits(exampleGoal)} unidades entre los tres productos.</p>
+                    <p className="mt-1 text-xs">Borde de queso + VS HAZLO CMB V3 CANELITAS + VS HAZLO CMB V3 CRAZY suman ese {participationLabel}%. Cada unidad registrada del SKU cuenta una vez. Ejemplo: 1.000 TRX × {salonLabel}% × {participationLabel}% = {formatUnits(exampleGoal)} unidades entre los tres productos.</p></>}
                     {metrics && <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
                         <div><span className="block text-xs">TRX base del mes</span><strong>{formatUnits(metrics.totalTransactions)}</strong></div>
                         <div><span className="block text-xs">TRX estimadas de SALÓN</span><strong>{formatUnits(metrics.salonTransactions)}</strong></div>
@@ -388,9 +451,9 @@ function SuggestiveGoalsWorkspace({
                         <div><span className="block text-xs">Participación registrada*</span><strong>{metrics.actualParticipation === null ? 'Sin detalle comparable' : `${(metrics.actualParticipation * 100).toFixed(1)}%`}</strong></div>
                     </div>}
                     <p className="mt-3 text-xs leading-relaxed">*Unidades de los tres SKU vendidas en SALÓN ÷ (TRX totales × 60%), sólo en fechas con TRX y detalle completo de SKU. El 60% se aplica como supuesto sobre tickets, no como porcentaje comprobado de TRX. No mide tickets únicos con venta sugestiva.</p>
-                    <p className="mt-2 text-xs">Se usan TRX registradas del día; si faltan, las configuradas del mes; y luego el promedio histórico del mismo día de semana (promedio general si no hay muestra). Se redondea la meta conjunta diaria hacia arriba para alcanzar al menos el {participationLabel}%.</p>
+                    <p className="mt-2 text-xs">Se usan TRX registradas del día; si faltan, las configuradas del mes; y luego el promedio histórico del mismo día de semana (promedio general si no hay muestra). {plan?.targetMode === 'units' ? 'Las cantidades mensuales se reparten en unidades enteras conservando el total por producto.' : <>Se redondea la meta conjunta diaria hacia arriba para alcanzar al menos el {participationLabel}%.</>}</p>
                     {metrics?.estimatedDays > 0 && <p className="mt-2 text-xs font-bold">{metrics.estimatedDays} días calculados con TRX estimadas a partir del histórico.</p>}
-                    {metrics?.equalMixDays > 0 && <p className="mt-2 text-xs font-bold">{metrics.equalMixDays} días sin mezcla histórica de los tres SKU actuales de SALÓN: reparto inicial equitativo. Reimporta el Excel detallado para incorporar los productos HAZLO CMB V3; los antiguos combos x4 no se convierten a estos SKU.</p>}
+                    {plan?.targetMode !== 'units' && metrics?.equalMixDays > 0 && <p className="mt-2 text-xs font-bold">{metrics.equalMixDays} días sin mezcla histórica de los tres SKU actuales de SALÓN: reparto inicial equitativo. Reimporta el Excel detallado para incorporar los productos HAZLO CMB V3; los antiguos combos x4 no se convierten a estos SKU.</p>}
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     {SUGGESTIVE_PRODUCTS.map((product) => {
@@ -404,7 +467,7 @@ function SuggestiveGoalsWorkspace({
                                         <p className="text-[10px] text-slate-500 mt-1">SKU: {product.importName}</p>
                                     </div>
                                     <div className="text-[9px] font-black uppercase text-slate-500 text-right">
-                                        Meta mensual calculada
+                                        {plan?.targetMode === 'units' ? 'Meta mensual definida' : 'Meta mensual calculada'}
                                         <strong className="block mt-1 text-xl text-slate-900">{formatUnits(summary?.target)}</strong>
                                     </div>
                                 </div>
@@ -417,7 +480,7 @@ function SuggestiveGoalsWorkspace({
                                     <div className="h-full bg-orange-500" style={{ width: `${Math.min(100, progress)}%` }} />
                                 </div>
                                 <p className="text-[10px] text-slate-500 mt-3">
-                                    Peso en la meta conjunta: <strong>{((summary?.mixShare || 0) * 100).toFixed(1)}%</strong>. La mezcla histórica de SALÓN reparte la cantidad; las TRX determinan el total.
+                                    {plan?.targetMode === 'units' ? 'Participación en la meta definida:' : 'Peso en la meta conjunta:'} <strong>{((summary?.mixShare || 0) * 100).toFixed(1)}%</strong>. {plan?.targetMode === 'units' ? 'Se respeta la cantidad mensual guardada para este producto.' : 'La mezcla histórica de SALÓN reparte la cantidad; las TRX determinan el total.'}
                                 </p>
                             </article>
                         );
@@ -427,7 +490,7 @@ function SuggestiveGoalsWorkspace({
                 <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4">
                     <p className="text-xs font-black uppercase text-blue-900">Alcance de esta meta</p>
                     <p className="mt-1 text-xs leading-relaxed text-blue-800">
-                        Borde de queso, VS HAZLO CMB V3 CANELITAS y VS HAZLO CMB V3 CRAZY se asignan únicamente a colaboradores posicionados en Salón. Drive Thru y Módulo quedan fuera de este cálculo porque tendrán metas comerciales distintas.
+                        Borde de queso, VS HAZLO CMB V3 CANELITAS y VS HAZLO CMB V3 CRAZY se asignan únicamente a colaboradores posicionados en Salón. Drive Thru, Módulo y Delivery se muestran solo como información; sus ventas no suman al avance de Salón.
                     </p>
                     {plan && (
                         <div className="mt-3 overflow-x-auto rounded border border-blue-200 bg-white">
@@ -436,6 +499,7 @@ function SuggestiveGoalsWorkspace({
                                     <tr>
                                         <th className="p-2.5 text-left font-black uppercase">Producto</th>
                                         <th className="p-2.5 text-right font-black uppercase">Meta Salón</th>
+                                        {['SALÓN', 'DRIVE THRU', 'SERV. FILA', 'DELIVERY'].map((channel) => <th key={channel} className="p-2.5 text-right font-black uppercase">Vendido {channel === 'SERV. FILA' ? 'Módulo' : channel}</th>)}
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -443,6 +507,7 @@ function SuggestiveGoalsWorkspace({
                                         <tr key={product.id} className="border-t border-blue-100">
                                             <td className="p-2.5 font-bold text-slate-800">{product.label}</td>
                                             <td className="p-2.5 text-right font-black text-blue-800">{formatUnits(channelTargets[product.id]?.['SALÓN'])}</td>
+                                            {['SALÓN', 'DRIVE THRU', 'SERV. FILA', 'DELIVERY'].map((channel) => <td key={channel} className="p-2.5 text-right">{formatUnits(plan.channelActuals?.[product.id]?.[channel])}</td>)}
                                         </tr>
                                     ))}
                                 </tbody>
@@ -495,7 +560,7 @@ function SuggestiveGoalsWorkspace({
                         <p className="mt-3 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs leading-relaxed text-indigo-800">
                             {selectedDay && <span className="mb-2 block font-bold">
                                 TRX del día: {selectedDay.transactions === null ? 'sin datos' : formatUnits(selectedDay.transactions)} ({({ recorded: 'registradas', configured: 'configuradas', estimated: 'estimadas', missing: 'sin datos' })[selectedDay.transactionSource]})
-                                {` × ${salonLabel}% × ${participationLabel}% = `}{formatUnits(selectedDay.totalGoal)} unidades entre los tres productos.
+                                {plan?.targetMode === 'units' ? ' → distribución de la meta mensual: ' : ` × ${salonLabel}% × ${participationLabel}% = `}{formatUnits(selectedDay.totalGoal)} unidades entre los tres productos.
                             </span>}
                             <strong>La meta mostrada es la suma de todo el turno.</strong> Por ejemplo, un horario de 09:00 a 19:00 incorpora cada hora entre 09:00 y 18:59: las horas de alta demanda aportan más y las horas de baja demanda aportan menos. Abre “franjas ponderadas” para revisar el aporte horario.
                         </p>
@@ -574,7 +639,7 @@ function SuggestiveGoalsWorkspace({
                         )}
 
                         <p className="mt-3 text-[10px] leading-relaxed text-slate-500">
-                            Método: la meta conjunta del día se obtiene de TRX × {salonLabel}% × {participationLabel}%. Las TRX por hora distribuyen esa cantidad dentro de SALÓN; se usa el patrón horario de la tienda como respaldo cuando falta el de SALÓN. La mezcla histórica de los tres productos divide las unidades por SKU. Cada colaborador recibe la suma de los minutos que cubre en su turno; cuando coinciden, comparten la demanda. Los minutos sin cobertura quedan como “Sin colaborador asignado”.
+                            Método: {plan?.targetMode === 'units' ? 'las metas mensuales guardadas se reparten por producto según las TRX de cada día.' : <>la meta conjunta del día se obtiene de TRX × {salonLabel}% × {participationLabel}%.</>} Las TRX por hora distribuyen esa cantidad dentro de SALÓN; se usa el patrón horario de la tienda como respaldo cuando falta el de SALÓN. {plan?.targetMode !== 'units' && 'La mezcla histórica de los tres productos divide las unidades por SKU.'} Cada colaborador recibe la suma de los minutos que cubre en su turno; cuando coinciden, comparten la demanda. Los minutos sin cobertura quedan como “Sin colaborador asignado”.
                         </p>
                     </>
                 )}

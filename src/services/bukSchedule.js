@@ -1,0 +1,161 @@
+import { orderScheduleStaff, isBukScheduleExempt } from './scheduleStaffOrder.js';
+import * as XLSX from 'xlsx';
+import approved from '../data/bukApprovedShifts.js';
+import defaultCatalog from '../data/bukShiftCatalog.js';
+import { SCHEDULE_DAYS, SCHEDULE_DAY_LABELS, getWeekDates, effectiveModality, isActiveOnDate, getExportShiftSegments } from './scheduleExportData.js';
+import { calculateScheduleTotals, formatScheduleMinutes } from './scheduleHours.js';
+
+export const BUK_HEADERS = ['Nombre del Colaborador', 'RUT', 'Área', 'Supervisor'];
+export const approvedBukShifts = approved;
+export const defaultBukCatalog = defaultCatalog;
+const normalize = value => String(value ?? '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+const dni = value => String(value ?? '').trim().replace(/[.\s-]/g, '');
+const clock = value => {
+  if (typeof value === 'number') {
+    const minutes = Math.round(value * 1440) % 1440;
+    return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+  }
+  const m = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(String(value ?? '').trim());
+  return m && +m[1] <= 24 && +m[2] < 60 ? `${String(+m[1] % 24).padStart(2, '0')}:${m[2]}` : '';
+};
+export const bukGroup = (modality, restDays) => normalize(modality).startsWith('FULL') ? 'FT1' : `PT${restDays}`;
+export const getApprovedBukOptions = (modality, restDays) => approved.filter(shift => shift.group === bukGroup(modality, restDays));
+export function findApprovedBukShiftByStart(modality, restDays, start) {
+  const matches = getApprovedBukOptions(modality, restDays).filter(item => item.start === clock(start));
+  return matches.length && new Set(matches.map(item => item.end)).size === 1 ? matches[0] : null;
+}
+export function makeApprovedBukPatch(option, current = {}, day = 'monday', catalog = defaultCatalog) {
+  const shift = approved.find(item => item.id === option);
+  if (!shift) throw new Error('Selecciona un horario aprobado.');
+  const match = catalog.find(item => normalize(item.day) === normalize(SCHEDULE_DAY_LABELS[SCHEDULE_DAYS.indexOf(day)]) && clock(item.start) === shift.start && clock(item.end) === shift.end);
+  return { start: shift.start, end: shift.end, off: false,
+    splitShift: false, start2: '', end2: '',
+    bukRestDays: Number(shift.group.slice(2)), bukApprovedShiftId: shift.id, bukBreakMinutes: shift.breakMinutes,
+    breakStart: shift.breakMinutes ? clock(match?.breakStart) : '' };
+}
+
+export function parseBukTemplate(workbook) {
+  const sheet = workbook.Sheets.turnosColaboradores;
+  if (!sheet) throw new Error('El archivo debe contener la hoja turnosColaboradores de BUK.');
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  if (BUK_HEADERS.some((header, index) => normalize(rows[0]?.[index]) !== normalize(header))) throw new Error('Las cuatro primeras columnas no corresponden a la plantilla BUK.');
+  const identities = rows.slice(1).filter(row => row[0] || row[1]).map(row => ({ name: String(row[0]), dni: dni(row[1]), area: String(row[2]), supervisor: String(row[3]) }));
+  if (identities.some(row => !row.dni) || new Set(identities.map(row => row.dni)).size !== identities.length) throw new Error('La plantilla contiene DNI vacíos o duplicados.');
+  const catalogSheet = workbook.Sheets.turnosSemanales;
+  if (!catalogSheet) throw new Error('Falta la hoja de turnos activos turnosSemanales.');
+  const catalog = XLSX.utils.sheet_to_json(catalogSheet, { header: 1, defval: '' }).slice(1).map(row => ({ code: String(row[1]), day: String(row[2]), start: clock(row[3]), end: clock(row[4]), breakStart: clock(row[5]), breakEnd: clock(row[6]) }));
+  const auxiliarySheets = Object.fromEntries(['turnosSemanales', 'turnosFlexibles', 'turnosTransitorios'].filter(name => workbook.Sheets[name]).map(name => [name, XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: '' })]));
+  return { identities, catalog, auxiliarySheets };
+}
+
+export function systemBukIdentities(staff, weekStart, storeName, supervisorName) {
+  if (!storeName?.trim()) throw new Error('La tienda no tiene un nombre registrado.');
+  if (!supervisorName?.trim()) throw new Error('No se encontró el nombre del gerente de la tienda.');
+  const dates = getWeekDates(weekStart);
+  return staff.filter(person => person.status !== 'inactive' && dates.some(date => isActiveOnDate(person, date)))
+    .map(person => ({ name: `${person.name || ''} ${person.lastName || ''}`.trim(), dni: dni(person.dni ?? person.DNI), area: storeName, supervisor: supervisorName }));
+}
+
+export function buildBukRows({ staff, schedules, weekStart, identities, storeName, supervisorName, catalog = defaultCatalog }) {
+  const dates = getWeekDates(weekStart);
+  if (new Date(`${weekStart}T12:00:00Z`).getUTCDay() !== 1) throw new Error('La semana debe comenzar un lunes.');
+  identities ??= systemBukIdentities(staff, weekStart, storeName, supervisorName);
+  if (!identities.length) throw new Error('La tienda no tiene personal vigente para esta semana.');
+  const byDni = new Map();
+  const errors = [];
+  for (const person of staff) {
+    if (person.status === 'inactive' || !dates.some(date => isActiveOnDate(person, date))) continue;
+    const key = dni(person.dni ?? person.DNI);
+    if (!key) { errors.push(`${person.name}: falta DNI.`); continue; }
+    if (byDni.has(key)) errors.push(`DNI duplicado en el personal: ${key}.`);
+    byDni.set(key, person);
+    if (!identities.some(row => row.dni === key)) errors.push(`${person.name}: no aparece en la plantilla BUK.`);
+  }
+  const identityByDni = new Map(identities.map(identity => [identity.dni, identity]));
+  const orderedIdentities = orderScheduleStaff([...byDni.values()], weekStart)
+    .map(person => identityByDni.get(dni(person.dni ?? person.DNI))).filter(Boolean);
+  orderedIdentities.push(...identities.filter(identity => !byDni.has(identity.dni)));
+  const rows = orderedIdentities.map(identity => {
+    const person = byDni.get(identity.dni);
+    const values = SCHEDULE_DAYS.map((day, index) => {
+      // BUK treats empty cells as no change: managerial shifts are informational only.
+      if (!person || isBukScheduleExempt(person) || !isActiveOnDate(person, dates[index])) return '';
+      const shift = schedules[person.id]?.[day];
+      if (!shift) return '';
+      if (shift.off) return 'D';
+      if (shift.feriado || shift.holiday) return 'F';
+      if (!shift.start && !shift.end) return '';
+      const prefix = `${identity.name}, ${dates[index]}`;
+      if (shift.splitShift) { errors.push(`${prefix}: turno partido; requiere un turno equivalente en BUK.`); return ''; }
+      const matches = catalog.filter(item => normalize(item.day) === normalize(SCHEDULE_DAY_LABELS[index]) && clock(item.start) === clock(shift.start) && clock(item.end) === clock(shift.end) && item.start && item.end);
+      const codes = [...new Set(matches.map(item => item.code))];
+      if (codes.length !== 1) { errors.push(`${prefix}: turno ${shift.start || '?'} A ${shift.end || '?'} ${codes.length ? 'ambiguo' : 'no disponible'} en BUK.`); return ''; }
+      const match = matches[0];
+      if (shift.breakStart && clock(shift.breakStart) !== clock(match.breakStart)) errors.push(`${prefix}: el refrigerio BUK es ${match.breakStart || 'sin refrigerio'}; en el editor es ${shift.breakStart}.`);
+      return codes[0];
+    });
+    return [identity.name, identity.dni, identity.area, identity.supervisor, ...values];
+  });
+  if (errors.length) throw new Error(errors.join('\n'));
+  return [[...BUK_HEADERS, ...dates.map(date => date.split('-').reverse().join('-'))], ...rows];
+}
+
+export function createBukWorkbook(data) {
+  const rows = buildBukRows(data);
+  const workbook = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  sheet['!cols'] = [{ wch: 46 }, { wch: 13 }, { wch: 24 }, { wch: 46 }, ...Array(7).fill({ wch: 20 })];
+  XLSX.utils.book_append_sheet(workbook, sheet, 'turnosColaboradores');
+  const catalog = data.catalog ?? defaultCatalog;
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Nombre del turno', 'Siglas', 'Nombre del día', 'Entrada del turno', 'Salida del turno', 'Entrada de colación', 'Salida de colación'], ...catalog.map(item => [item.code, item.code, item.day, item.start || '-', item.end || '-', item.breakStart || '-', item.breakEnd || '-'])]), 'turnosSemanales');
+  for (const name of ['turnosFlexibles', 'turnosTransitorios']) XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Nombre del turno', 'Sigla']]), name);
+  for (const [name, values] of Object.entries(data.auxiliarySheets || {})) workbook.Sheets[name] = XLSX.utils.aoa_to_sheet(values);
+  return workbook;
+}
+
+export function planningBukRows(staff, schedules, weekStart) {
+  const dates = getWeekDates(weekStart);
+  return orderScheduleStaff(staff.filter(person => person.status !== 'inactive'), weekStart).map((person, index) => {
+    const schedule = schedules[person.id] ?? {};
+    const rests = SCHEDULE_DAYS.filter((day, i) => isActiveOnDate(person, dates[i]) && schedule[day]?.off).length;
+    const valid = {};
+    const cells = SCHEDULE_DAYS.map((day, i) => {
+      const shift = schedule[day];
+      if (!isActiveOnDate(person, dates[i])) return ['CESE', '', ''];
+      valid[day] = shift;
+      if (shift?.off) return ['DESCANSO', '', ''];
+      if (shift?.feriado || shift?.holiday) return ['FERIADO', '', ''];
+      const segment = getExportShiftSegments(shift)[0];
+      const displayed = minute => `${String(Math.floor(minute / 60) % 24).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+      return [segment ? displayed(segment.start) : shift?.start || '', segment ? displayed(segment.end) : shift?.end || '', shift?.position || ''];
+    }).flat();
+    const total = calculateScheduleTotals(valid, person, weekStart);
+    const modality = effectiveModality(person, weekStart);
+    const full = normalize(modality).startsWith('FULL');
+    const expected = full ? 2880 : 1425;
+    const complete = SCHEDULE_DAYS.every((day, i) => !isActiveOnDate(person, dates[i]) || schedule[day]?.off || (schedule[day]?.start && schedule[day]?.end));
+    const state = isBukScheduleExempt(person) ? 'HORARIO LIBRE' : !complete ? 'INCOMPLETO' : total.baseMinutes === expected && (full ? rests === 1 : rests >= 1 && rests <= 4) ? 'CORRECTO' : 'REVISAR';
+    return [index + 1, `${person.name || ''} ${person.lastName || ''}`.trim(), modality, `${rests} día${rests === 1 ? '' : 's'}`, ...cells, formatScheduleMinutes(total.totalMinutes), state];
+  });
+}
+
+export function createBukPlanningWorkbook({ staff, schedules, weekStart, identities, catalog, storeName, supervisorName }) {
+  const workbook = XLSX.utils.book_new();
+  if (identities?.length || (storeName && supervisorName)) {
+    try {
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(buildBukRows({ staff, schedules, weekStart, identities, catalog, storeName, supervisorName })), 'BUK');
+    } catch (cause) {
+      // Compartir la planificación sigue siendo posible; nunca generar una
+      // hoja de importación aparentemente válida con turnos no disponibles.
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+        ['NO IMPORTAR EN BUK: turnos pendientes de validar'],
+        ...String(cause.message).split('\n').map(message => [message]),
+      ]), 'BUK PENDIENTE');
+    }
+  }
+  const dates = getWeekDates(weekStart);
+  const rows = [['N°', 'NOMBRE DEL COLABORADOR', 'MODALIDAD', 'DESCANSO', ...dates.flatMap((date, i) => [`${SCHEDULE_DAY_LABELS[i]} ${date} · INGRESO`, 'SALIDA', 'POSICIÓN']), 'HORAS NETAS', 'CONTROL'], ...planningBukRows(staff, schedules, weekStart)];
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'PLANIFICACIÓN');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Plan', 'Ingreso', 'Salida', 'Refrigerio (min)'], ...approved.map(item => [item.group, item.start, item.end, item.breakMinutes])]), 'HORARIOS APROBADOS');
+  return workbook;
+}

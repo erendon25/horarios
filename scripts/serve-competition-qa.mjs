@@ -17,12 +17,14 @@ const admin = await scalar(
 const collab = await scalar(
   "insert into auth.users values(gen_random_uuid()) returning id",
 );
+const rivalAccount = await scalar('insert into auth.users values(gen_random_uuid()) returning id');
+const trainerAccount = await scalar('insert into auth.users values(gen_random_uuid()) returning id');
 await db.query(
   "insert into user_profiles(id,store_id,role) values($1,$3,'admin'),($2,$3,'collaborator')",
   [admin, collab, store],
 );
 const trainer = await scalar(
-  "insert into staff_profiles(store_id,first_name,last_name) values($1,'Trainer','Demo') returning id",
+  "insert into staff_profiles(store_id,first_name,last_name,position) values($1,'Trainer','Demo','ENTRENADOR') returning id",
   [store],
 );
 const staff = await scalar(
@@ -50,22 +52,27 @@ const areas = (await db.query("select * from competition_areas")).rows;
 for (const a of areas)
   await cmd(c.id, "area", { ...a, maximum_duration_ms: 45000 });
 const landing = areas.find((a) => a.name === "Landing");
-await cmd(c.id, "entry", { member_id: m.id, area_id: landing.id });
+const evaluationMode = process.env.COMPETITION_QA_MODE === 'evaluation';
+if (!evaluationMode) await cmd(c.id, "entry", { member_id: m.id, area_id: landing.id });
 await db.exec("reset role");
 const rivalStaff = await scalar("insert into staff_profiles(store_id,first_name,last_name) values($1,'Rival','Demo') returning id", [store]);
 await db.query("update user_profiles set staff_profile_id=$1 where id=$2", [staff, collab]);
+await db.query("insert into user_profiles(id,store_id,staff_profile_id,role) values($1,$3,$4,'collaborator'),($2,$3,$5,'trainer')",[rivalAccount,trainerAccount,store,rivalStaff,trainer]);
 await db.exec("set role authenticated");
 const rivalMember = await cmd(c.id, "member", { team_id: t.id, staff_id: rivalStaff });
-await cmd(c.id, "entry", { member_id: rivalMember.id, area_id: landing.id });
-await cmd(c.id, "status", { status: "active" });
+if (!evaluationMode) {
+  await cmd(c.id, "entry", { member_id: rivalMember.id, area_id: landing.id });
+  await cmd(c.id, "status", { status: "active" });
+}
+await cmd(c.id, "publication", { published: true });
 const mock = `
-export function useAuth(){return {userRole:location.search.includes('role=collaborator')||sessionStorage.getItem('qa-role')==='collaborator'?'collaborator':'admin',userData:{storeId:${JSON.stringify(store)},staffProfileId:${JSON.stringify(staff)}}};}
+export function useAuth(){const role=new URLSearchParams(location.search).get('role')||sessionStorage.getItem('qa-role')||'admin';if(new URLSearchParams(location.search).has('role'))sessionStorage.setItem('qa-role',role);return {userRole:role==='rival'?'collaborator':role,userData:{storeId:${JSON.stringify(store)},staffProfileId:role==='trainer'?${JSON.stringify(trainer)}:role==='rival'?${JSON.stringify(rivalStaff)}:${JSON.stringify(staff)}}};}
 `;
 const transport = `
-function role(){if(location.search.includes('role=collaborator'))sessionStorage.setItem('qa-role','collaborator');return sessionStorage.getItem('qa-role')||'admin'}
+function role(){const role=new URLSearchParams(location.search).get('role');if(role)sessionStorage.setItem('qa-role',role);return sessionStorage.getItem('qa-role')||'admin'}
 async function request(body){const r=await fetch('/api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,role:role()})});return r.json()}
 export const supabase={
-from(table){const filters={},orders=[];let start=0,end=999,columns='*';return {select(s){columns=s;return this},eq(k,v){filters[k]=v;return this},order(k){orders.push(k);return this},range(a,b){start=a;end=b;return this},then(resolve,reject){return request({table,filters,orders,start,end,columns}).then(resolve,reject)}}},
+from(table){const filters={},inFilters={},orders=[];let start=0,end=999,columns='*';return {select(s){columns=s;return this},eq(k,v){filters[k]=v;return this},in(k,v){inFilters[k]=v;return this},order(k){orders.push(k);return this},range(a,b){start=a;end=b;return this},then(resolve,reject){return request({table,filters,inFilters,orders,start,end,columns}).then(resolve,reject)}}},
 rpc(name,args){return request({rpc:name,args})},channel(){let callback;return {on(event,filter,fn){callback=fn;return this},subscribe(fn){fn('SUBSCRIBED');this.interval=setInterval(()=>callback?.(),1500);return this}}},removeChannel(c){clearInterval(c.interval)}
 };`;
 const bundle = await build({
@@ -120,7 +127,7 @@ const server = createServer(async (req, res) => {
       try {
         await db.exec("reset role");
         await db.query("select set_config('request.jwt.claim.sub',$1,false)", [
-          body.role === "collaborator" ? collab : admin,
+          ({ collaborator:collab, rival:rivalAccount, trainer:trainerAccount })[body.role] || admin,
         ]);
         await db.exec("set role authenticated");
         let data;
@@ -141,7 +148,8 @@ const server = createServer(async (req, res) => {
             throw new Error("Table not allowed");
           const keys = Object.keys(body.filters),
             orders = body.orders;
-          for (const k of [...keys, ...orders])
+          const inKeys = Object.keys(body.inFilters || {});
+          for (const k of [...keys, ...inKeys, ...orders])
             if (!/^[a-z_]+$/.test(k)) throw new Error("Invalid identifier");
           const cols =
             body.columns === "*"
@@ -160,9 +168,9 @@ const server = createServer(async (req, res) => {
                 ' from "' +
                 body.table +
                 '"' +
-                (keys.length
+                (keys.length || inKeys.length
                   ? " where " +
-                    keys.map((k, i) => '"' + k + '"=$' + (i + 1)).join(" and ")
+                    [...keys.map((k, i) => '"' + k + '"=$' + (i + 1)), ...inKeys.map((k,i)=>'"'+k+'"::text=any($'+(keys.length+i+1)+'::text[])')].join(" and ")
                   : "") +
                 (orders.length
                   ? " order by " + orders.map((k) => '"' + k + '"').join(",")
@@ -171,7 +179,7 @@ const server = createServer(async (req, res) => {
                 Number(body.end - body.start + 1) +
                 " offset " +
                 Number(body.start),
-              Object.values(body.filters),
+              [...Object.values(body.filters),...Object.values(body.inFilters || {})],
             )
           ).rows;
         }

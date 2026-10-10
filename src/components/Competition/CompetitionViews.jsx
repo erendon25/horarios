@@ -26,7 +26,8 @@ const badgeClass = (status) =>
       ? "failure"
       : status === "finalist"
         ? "success"
-        : "";
+      : "";
+const displayTrainerPoints = (points) => Number(points || 0).toLocaleString('es-PE', { maximumFractionDigits: 2 });
 export function Statistics({ data }) {
   const saved = data.evaluations.filter(
     (e) => e.timer_status === "saved" && !e.is_tiebreaker,
@@ -126,12 +127,14 @@ export function Statistics({ data }) {
           )}
         </section>
         <section className="card">
-          <h3>Puntos por trainer</h3>
-          {data.teamRanking.map((t) => (
+          <h3>Puntos promedio por trainer</h3>
+          <p className="muted">Total del equipo ÷ colaboradores asignados, incluidos quienes tienen cero puntos.</p>
+          {(data.trainerRanking || []).map((t) => (
             <p key={t.team_id}>
               {t.trainer_name}
               <br />
-              <strong>{t.points} puntos</strong> · {t.team_name}
+              <strong>{displayTrainerPoints(t.points)} puntos</strong> · {t.team_name}
+              <br />{t.team_points} ÷ {t.members} colaboradores
             </p>
           ))}
         </section>
@@ -265,6 +268,7 @@ export function Fixture({ data, admin, contest, execute }) {
 }
 export function Rankings({ data }) {
   const [view, setView] = useState("individual");
+  const teamRows = view === 'trainers' ? (data.trainerRanking || []) : data.teamRanking;
   return (
     <>
       <h2>Ranking</h2>
@@ -283,6 +287,7 @@ export function Rankings({ data }) {
           </button>
         ))}
       </div>
+      {view === 'trainers' && <p className="notice">Puntos del líder = puntos totales del equipo ÷ cantidad de colaboradores asignados. El líder no se cuenta como integrante; un equipo vacío tiene 0 puntos.</p>}
       <div className="card table-wrap">
         <table>
           <thead>
@@ -304,7 +309,7 @@ export function Rankings({ data }) {
                     "Equipo / trainer",
                     ...data.phases.filter((p) => p.active).map((p) => p.name),
                     "Campeones",
-                    "Puntos",
+                    ...(view === 'trainers' ? ["Colaboradores", "Total del equipo", "Puntos promedio"] : ["Puntos"]),
                   ]
               ).map((h) => (
                 <th key={h}>{h}</th>
@@ -330,7 +335,7 @@ export function Rankings({ data }) {
                     </td>
                   </tr>
                 ))
-              : data.teamRanking.map((r, i) => (
+              : teamRows.map((r, i) => (
                   <tr key={r.team_id}>
                     <td>{i + 1}</td>
                     <td>{view === "teams" ? r.team_name : r.trainer_name}</td>
@@ -341,8 +346,9 @@ export function Rankings({ data }) {
                         <td key={p.id}>{r.phase_approvals[p.name] || 0}</td>
                       ))}
                     <td>{r.champions}</td>
+                    {view === 'trainers' && <><td>{r.members}</td><td>{r.team_points}</td></>}
                     <td>
-                      <strong>{r.points}</strong>
+                      <strong>{view === 'trainers' ? displayTrainerPoints(r.points) : r.points}</strong>
                     </td>
                   </tr>
                 ))}
@@ -358,7 +364,7 @@ export function Rankings({ data }) {
 }
 export function MyCompetition({ data, staffId }) {
   const member = data.members.find((m) => m.staff_id === staffId);
-  const trainerTeam = data.teams.find((t) => t.trainer_staff_id === staffId);
+  const trainerTeam = data.teams.find((t) => t.trainer_eligible && t.trainer_staff_id === staffId);
   const team = data.teams.find((t) => t.id === member?.team_id) || trainerTeam;
   const ranking = data.individual.find((r) => r.staff_id === staffId);
   const entries = data.entries.filter((x) => x.staff_id === staffId);
@@ -388,11 +394,11 @@ export function MyCompetition({ data, staffId }) {
           Trainer: <strong>{team.trainer_name}</strong>
         </p>
         <p className="stat">
-          {ranking?.points ??
-            data.teamRanking.find((t) => t.team_id === team.id)?.points ??
-            0}{" "}
+          {trainerTeam
+            ? displayTrainerPoints(data.trainerRanking?.find((t) => t.team_id === team.id)?.points)
+            : ranking?.points ?? 0}{" "}
           <small className="muted">
-            puntos{trainerTeam ? " de tu equipo" : ""}
+            puntos{trainerTeam ? " promedio por colaborador" : ""}
           </small>
         </p>
         <h3>Compañeros</h3>
@@ -478,6 +484,7 @@ export function History({ data, execute, contest }) {
                 "Calidad",
                 "Resultado",
                 "Puntos",
+                "Justificación",
                 "Acciones",
               ].map((h) => (
                 <th key={h}>{h}</th>
@@ -516,6 +523,12 @@ export function History({ data, execute, contest }) {
                         : ""}
                     </td>
                     <td>{e.points_awarded}</td>
+                    <td><details><summary>Ver comprobaciones</summary>
+                      {data.scores.filter(s=>s.evaluation_id===e.id).sort((a,b)=>a.sort_order-b.sort_order).map(s=><section key={s.rubric_item_id}>
+                        <strong>{s.label}: {s.score ?? '—'} / {s.max_score}</strong>
+                        {s.checklist?.length ? <ul>{s.checklist.map(step=><li key={step.id}>{step.label}: {typeof s.checked_steps?.[step.id] !== 'boolean' ? 'Sin confirmar' : s.checked_steps[step.id] ? `Cumple (+${step.points})` : 'No cumple (0)'}</li>)}</ul> : <p className="muted">Puntuación manual de la rúbrica anterior.</p>}
+                      </section>)}
+                    </details></td>
                     <td>
                       {e.timer_status === "saved" &&
                         contest.status === "active" && (

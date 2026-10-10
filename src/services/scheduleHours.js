@@ -1,4 +1,7 @@
+import bukApprovedShifts from '../data/bukApprovedShifts.js';
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+const approvedBukBreak = shift => bukApprovedShifts.find(item => item.id === shift?.bukApprovedShiftId
+  && item.start === shift.start && item.end === shift.end)?.breakMinutes;
 const FULL_TIME_BREAK_THRESHOLD = 8 * 60 + 45;
 
 const clockMinutes = value => {
@@ -12,6 +15,39 @@ const duration = (start, end) => {
   if (from === null || to === null) return 0;
   return (to - from + 1440) % 1440;
 };
+
+export function requiresScheduleBreak(shift, modality) {
+  return Boolean(shift && !shift.off && !shift.feriado && !shift.holiday && !shift.splitShift
+    && (approvedBukBreak(shift) === 45 || (String(modality ?? '').trim().toLowerCase() === 'full-time'
+    && duration(shift.start, shift.end) >= FULL_TIME_BREAK_THRESHOLD)));
+}
+
+const breakClock = minutes => `${String(Math.floor(minutes / 60) % 24).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+
+export function getScheduleBreak(shift, modality) {
+  if (!requiresScheduleBreak(shift, modality)) return null;
+  const start = clockMinutes(shift.breakStart);
+  if (start === null || start % 15 !== 0) return null;
+  const shiftStart = clockMinutes(shift.start);
+  const offset = (start - shiftStart + 1440) % 1440;
+  if (offset + 45 > duration(shift.start, shift.end)) return null;
+  return { start: shift.breakStart, end: breakClock(start + 45), startMinutes: shiftStart + offset, endMinutes: shiftStart + offset + 45 };
+}
+
+export function getScheduleBreakOptions(shift, modality) {
+  if (!requiresScheduleBreak(shift, modality)) return [];
+  const start = clockMinutes(shift.start);
+  const end = start + duration(shift.start, shift.end);
+  const options = [];
+  for (let minute = Math.ceil(start / 15) * 15; minute + 45 <= end; minute += 15) options.push(breakClock(minute));
+  return options;
+}
+
+export function scheduleBreakLabel(shift, modality) {
+  if (!requiresScheduleBreak(shift, modality)) return '';
+  const rest = getScheduleBreak(shift, modality);
+  return rest ? `Break: ${rest.start}-${rest.end}` : 'Break: pendiente';
+}
 
 const extraMinutes = value => {
   const hours = Number(value ?? 0);
@@ -30,12 +66,13 @@ export function calculateScheduleDay(shift, modality) {
     + (shift.splitShift ? duration(shift.start2, shift.end2) : 0);
   // Conservar el crédito de feriados del PDF, separado de las horas trabajadas.
   if (shift.feriado || shift.holiday) {
-    return { ...empty, holidayMinutes: grossMinutes, totalMinutes: grossMinutes };
+    const credit = grossMinutes - (approvedBukBreak(shift) ?? 0);
+    return { ...empty, holidayMinutes: credit, totalMinutes: credit };
   }
   const fullTime = String(modality ?? '').trim().toLowerCase() === 'full-time';
   // Las extras no convierten un turno base corto en una jornada con refrigerio.
   // Se conserva la excepción existente para turnos partidos y Part-Time.
-  const breakMinutes = fullTime && !shift.splitShift && grossMinutes >= FULL_TIME_BREAK_THRESHOLD ? 45 : 0;
+  const breakMinutes = !shift.splitShift ? (approvedBukBreak(shift) ?? (fullTime && grossMinutes >= FULL_TIME_BREAK_THRESHOLD ? 45 : 0)) : 0;
   const extras = extraMinutes(shift.extraHoursPre)
     + extraMinutes(shift.extraHoursPost ?? shift.extraHours);
   const baseMinutes = grossMinutes - breakMinutes;

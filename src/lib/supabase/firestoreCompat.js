@@ -152,7 +152,7 @@ const mappers = {
   extra_hours: (row) => ({ ...legacy(row), uid: row.user_id, staffId: row.staff_id, storeId: row.store_id, fecha: row.work_date, inicio: clock(row.start_time), fin: clock(row.end_time), duracion: row.duration_minutes, durationMinutes: row.duration_minutes, extraMinutesPre: row.pre_shift_minutes, extraMinutesPost: row.post_shift_minutes, actividad: row.activity, source: row.source, sourceFile: row.source_file, importedAt: row.imported_at, segments: row.segments ?? [], dailyDetails: row.daily_details ?? [] }),
   ceses: (row) => ({ ...legacy(row), staffId: row.staff_id, storeId: row.store_id, joinDate: row.join_date, cessationDate: row.cessation_date, modality: row.previous_modality, nextModality: row.next_modality, isModalityChange: row.is_modality_change, desempenio: row.performance, motivoCese: row.cessation_reason, motivoReal: row.real_reason, comentario: row.store_comment, diasDescansoMedico: row.medical_leave_days, inasistencias: row.absences, tardanzas: row.tardiness, horasNocturnas: row.night_hours, horasExtras: row.extra_hours, feriados: row.holidays, descuentos: row.discounts, registeredAt: row.registered_at, lastUpdated: row.updated_at }),
   schedule_requests: (row) => ({ ...legacy(row), uid: row.user_id, staffId: row.staff_id, storeId: row.store_id, date: row.requested_date, shiftType: row.shift_type, startTime: clock(row.start_time), endTime: clock(row.end_time), reason: row.reason, status: row.status, adminComment: row.admin_comment, reviewedBy: row.reviewed_by, reviewedAt: row.reviewed_at, createdAt: row.created_at }),
-  training_evaluations: (row) => ({ ...legacy(row), collaboratorId: row.staff_id, trainerId: row.trainer_id, storeId: row.store_id, date: row.evaluation_date, area: row.area, station: row.station_code, stationName: row.station_name, score: row.score, responses: row.responses ?? {}, feedback: row.feedback ?? {}, generalFindings: row.general_findings, status: row.status, step: row.current_step, collabSignature: row.collaborator_signature_url ?? row.collaborator_signature_path, trainerSignature: row.trainer_signature_url ?? row.trainer_signature_path, isEdited: row.is_edited, timestamp: row.created_at, lastUpdated: row.updated_at }),
+  training_evaluations: (row) => ({ ...legacy(row), collaboratorId: row.staff_id, trainerId: row.trainer_id, trainerName: row.trainer_name_snapshot, storeId: row.store_id, date: row.evaluation_date, area: row.area, station: row.station_code, stationName: row.station_name, score: row.score, responses: row.responses ?? {}, feedback: row.feedback ?? {}, generalFindings: row.general_findings, status: row.status, step: row.current_step, collabSignature: row.collaborator_signature_url ?? row.collaborator_signature_path, trainerSignature: row.trainer_signature_url ?? row.trainer_signature_path, isEdited: row.is_edited, timestamp: row.created_at, lastUpdated: row.updated_at }),
 };
 
 const pathOf = (parts) => parts.filter((part) => part !== db && part != null).flatMap((part) => part?.path ?? String(part)).join("/");
@@ -382,7 +382,7 @@ function columnsFor(root, data, previous = {}) {
   return columns;
 }
 
-async function resolveNativeStaffIdentity(data, { required = false } = {}) {
+async function resolveNativeStaffIdentity(data, { required = false, requireAccount = required } = {}) {
   let prepared = { ...data };
   const key = prepared.staffId || prepared.uid;
   const needsResolve = !prepared.staffId
@@ -407,7 +407,7 @@ async function resolveNativeStaffIdentity(data, { required = false } = {}) {
     if (required) throw new Error("No se encontró el perfil vinculado del colaborador.");
     return prepared;
   }
-  if (required && !profile.user_id) {
+  if (requireAccount && !profile.user_id) {
     throw new Error("El colaborador no tiene una cuenta vinculada para enviar solicitudes.");
   }
 
@@ -442,8 +442,8 @@ async function saveSchedule(ref, data) {
   if (!staffId || !start) throw new Error("Horario sin colaborador o semana válida.");
   const days = WEEKDAYS.map((day, index) => {
     const shift = data[day] ?? {};
-    const { start: shiftStart = "", end = "", position = "", off = false, feriado = false, holiday = false, notes = "", ...metadata } = shift;
-    return { date: addDays(start, index), start: shiftStart, end, position, off: Boolean(off), holiday: Boolean(feriado || holiday), notes, metadata: sanitizeScheduleMetadata(metadata) };
+    const { start: shiftStart = "", end = "", position = "", off = false, feriado, holiday = false, notes = "", ...metadata } = shift;
+    return { date: addDays(start, index), start: shiftStart, end, position, off: Boolean(off), holiday: Boolean(feriado ?? holiday), notes, metadata: sanitizeScheduleMetadata(metadata) };
   });
   const result = await supabase.rpc("save_weekly_schedules", { p_week_start: start, p_changes: [{ staffId, days }] });
   throwIfError(result.error);
@@ -577,6 +577,66 @@ async function persist(ref, data, merge) {
 }
 
 export const setDoc = (ref, data, options = {}) => persist(ref, data, Boolean(options.merge));
+
+// GeoVictoria identifica un periodo, no un documento de Firebase. La clave
+// coincide con los registros migrados y su índice único evita duplicados.
+export async function saveGeoVictoriaExtraHours(data) {
+  const prepared = await resolveNativeStaffIdentity(data, { required: true, requireAccount: false });
+  const start = prepared.periodStart || prepared.fecha;
+  const end = prepared.periodEnd || prepared.fecha;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start || '') || !/^\d{4}-\d{2}-\d{2}$/.test(end || '') || end < start) {
+    throw new Error('El periodo de horas extras no es válido.');
+  }
+  const sourceKey = `geovictoria:${prepared.staffId}:${start}:${end}`;
+  const columns = columnsFor('extra_hours', {
+    ...prepared,
+    periodStart: start,
+    periodEnd: end,
+    source: 'geovictoria_extra_hours',
+  });
+  // duracion es una etiqueta ("2h 30m"); en Postgres se guardan minutos.
+  columns.duration_minutes = Number(prepared.durationMinutes ?? prepared.totalExtraMinutes);
+  if (!Number.isFinite(columns.duration_minutes) || columns.duration_minutes < 0) {
+    throw new Error('La duración de horas extras no es válida.');
+  }
+  columns.source_key = sourceKey;
+  const findExisting = async () => {
+    const result = await supabase.from('extra_hours').select('id').eq('source_key', sourceKey).maybeSingle();
+    throwIfError(result.error);
+    return result.data;
+  };
+  const updateExisting = async (existing) => {
+    const result = await supabase.from('extra_hours').update(columns).eq('id', existing.id).select('id').single();
+    throwIfError(result.error);
+    return { id: String(result.data.id), created: false };
+  };
+  const existing = await findExisting();
+  if (existing) return updateExisting(existing);
+
+  // Algunas importaciones anteriores tienen ID nativo pero no source_key.
+  const historical = await supabase.from('extra_hours').select('id,work_date,legacy_data,segments')
+    .eq('staff_id', prepared.staffId).eq('store_id', prepared.storeId)
+    .eq('source', 'geovictoria_extra_hours').is('source_key', null);
+  throwIfError(historical.error);
+  const matches = (historical.data ?? []).filter((row) => {
+    const oldStart = legacy(row).periodStart || row.segments?.[0]?.periodStart || row.work_date;
+    const oldEnd = legacy(row).periodEnd || row.segments?.[0]?.periodEnd || row.work_date;
+    return oldStart === start && oldEnd === end;
+  });
+  if (matches.length > 1) throw new Error('Hay varios registros para el mismo colaborador y periodo. Revisa el historial antes de importar.');
+  if (matches.length === 1) return updateExisting(matches[0]);
+
+  const result = await supabase.from('extra_hours').insert(columns).select('id').single();
+  // El índice de source_key es parcial: no admite el onConflict genérico.
+  // Si otra importación ganó la carrera, actualizar su registro por ID nativo.
+  if (result.error?.code === '23505') {
+    const concurrent = await findExisting();
+    if (concurrent) return updateExisting(concurrent);
+  }
+  throwIfError(result.error);
+  return { id: String(result.data.id), created: true };
+}
+
 export async function updateDoc(ref, data) {
   const current = await getDoc(ref);
   if (!current.exists()) throw new Error(`Documento no encontrado: ${ref.path}`);

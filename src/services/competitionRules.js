@@ -1,3 +1,4 @@
+export const COMPETITION_AREAS = ['Landing', 'Landing Crazy', 'Vestido', 'Sheetout', 'Masa', 'Drive Thru', 'Servicio'];
 export function formatCompetitionTime(ms) {
   const value = Math.max(0, Math.floor(Number(ms) || 0));
   return `${String(Math.floor(value / 60000)).padStart(2, "0")}:${String(Math.floor(value / 1000) % 60).padStart(2, "0")}.${String(Math.floor(value / 10) % 100).padStart(2, "0")}`;
@@ -58,10 +59,14 @@ export function competitionLimaDate(date = new Date()) {
   return `${value("year")}-${value("month")}-${value("day")}`;
 }
 export function competitionStaffUnavailable(staff, today = competitionLimaDate()) {
-  if (staff.status && !["active", "pending"].includes(staff.status))
+  // HR treats pending registration as active employment. Account authorization
+  // remains separate and still requires an active authenticated user profile.
+  if (!["active", "pending"].includes(staff.status))
     return "Perfil inactivo";
   if (staff.cessation_date && staff.cessation_date < today)
     return `Cese efectivo ${staff.cessation_date}`;
+  if (staff.is_trainee && staff.training_end_date && staff.training_end_date < today)
+    return `Entrenamiento finalizado ${staff.training_end_date}`;
   return "";
 }
 export function matchCompetitionStaff(name, staff) {
@@ -73,6 +78,19 @@ export function matchCompetitionStaff(name, staff) {
   );
   return matches.length === 1 ? matches[0].id : "";
 }
+export function competitionStaffIsTrainer(staff) {
+  return String(staff?.position || '').trim().toUpperCase() === 'ENTRENADOR'
+    && !competitionStaffUnavailable(staff);
+}
+
+export function buildCompetitionTeamTemplate(staff = []) {
+  return staff.filter(competitionStaffIsTrainer).map((trainer, index) => ({
+    name: `Equipo ${index + 1}`,
+    trainer_staff_id: trainer.id,
+    staff_ids: [],
+  }));
+}
+
 export const INITIAL_TEAMS = [
   {
     name: "Equipo 1",

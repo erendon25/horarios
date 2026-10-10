@@ -29,6 +29,10 @@ export function useCompetition(id, admin) {
         synchronizeCompetitionClock(),
       ]);
       if (request !== generation.current) return;
+      if (!contests[0] || (!admin && !contests[0].published_at)) {
+        setState({ data: null, contest: null, loading: false, error: "" });
+        return;
+      }
       setState({ data, contest: contests[0], loading: false, error: "" });
       setClock(synchronized);
     } catch (error) {

@@ -24,11 +24,27 @@ Cada comando bloquea la fila del concurso. Esta granularidad sacrifica concurren
 
 ## Reglas operativas
 
-Los tiempos máximos NO se deducen de los ejemplos: deben configurarse antes de activar. Calidad mínima 90; fases 1/2/3/5; bonus campeón 3; máximo 2 áreas por persona y 6 integrantes por equipo. Los nombres sugeridos requieren revisión y asociación por UUID.
+### Publicación al equipo
 
-La inscripción personal está en **Inscripción**, con botón por área y retiro disponible mientras el concurso esté en borrador. Se permiten como máximo 2 integrantes de un mismo equipo en cada área, además del límite de áreas por persona. El administrador debe formar los equipos primero. Para activar, cada área que tenga inscripciones necesita al menos 2 inscritos elegibles; las áreas vacías no compiten. Se valida nuevamente ese mínimo antes de iniciar la primera evaluación del área. Una vez que el área ya tuvo resultados, la eliminación deportiva puede dejar un único finalista sin incumplir el mínimo inicial.
+Cada concurso empieza oculto, independientemente de su estado. Los administradores de la tienda y los superadmins pueden prepararlo desde **Concurso → Configuración**. **Publicar al equipo** habilita **Mi concurso** para colaboradores y trainers de esa tienda; **Ocultar al equipo** revoca esa visibilidad sin borrar inscripciones, evaluaciones ni puntos. El panel del colaborador comprueba la publicación al abrirse, recuperar el foco y cada 15 segundos.
 
-Los perfiles de RR. HH. en estado `pending` también pueden asociarse al concurso si no tienen cese efectivo; ese estado es el valor inicial de los perfiles creados y no equivale a un cese. Las cuentas que se inscriben sí requieren una sesión activa y un vínculo válido. El selector muestra inactivos y cesados deshabilitados con motivo. No se activan ni modifican perfiles de RR. HH. automáticamente. Los líderes ven en **Mi concurso** las áreas y fases de todos los integrantes de su equipo.
+La publicación es independiente de la activación: se puede publicar un borrador para abrir inscripciones, y activar después para cerrarlas y sortear el fixture. Activar un concurso oculto no lo publica. La migración de publicación deja también los concursos existentes ocultos hasta una publicación explícita.
+
+La base de datos aplica la restricción a la lista de concursos, sus tablas y sus rankings mediante RLS. Los comandos de inscripción y retiro también rechazan concursos ocultos aunque se conozca su UUID. Solo un administrador de la tienda o superadmin puede cambiar la publicación; cada cambio se audita.
+
+Prueba aislada de acceso y publicación: `PGLITE_MODULE=<ruta a @electric-sql/pglite/dist/index.js> node scripts/test-competition-publication.mjs`.
+
+### Participación y evaluación
+
+La plantilla inicial se genera con los trainers vigentes de la tienda: tres trainers producen tres equipos, cada uno con un líder distinto y sin integrantes todavía. Los nombres y asociaciones se revisan antes de guardar; luego se añaden o sortean integrantes sin límite de integrantes por equipo. No se usa una cantidad fija de cuatro equipos ni nombres de entrenadores predefinidos.
+
+Solo un perfil disponible cuyo puesto actual en RR. HH. sea `ENTRENADOR` puede liderar un equipo. El rol de su cuenta no sustituye ese puesto. La vista `competition_current_teams` comprueba el puesto, la actividad laboral y el cese en cada consulta: al dejar de cumplirlos, el equipo se muestra sin trainer vigente y la persona sale del ranking de trainers. Se conserva la asociación histórica junto con integrantes y resultados; no se redistribuyen integrantes automáticamente. El selector de líderes y los comandos de creación/edición y plantilla aplican la misma restricción. Prueba: `PGLITE_MODULE=<ruta a @electric-sql/pglite/dist/index.js> node scripts/test-competition-current-trainers.mjs`.
+
+Los tiempos máximos NO se deducen de los ejemplos: deben configurarse antes de activar. Calidad mínima 90; fases 1/2/3/5; bonus campeón 3; máximo 2 áreas por persona y equipos sin límite de integrantes. Los nombres sugeridos requieren revisión y asociación por UUID.
+
+La inscripción personal está en **Inscripción**, con botón por área y retiro disponible mientras el concurso esté en borrador. Cada colaborador elige hasta 2 áreas entre Landing, Landing Crazy, Vestido, Sheetout, Masa, Drive Thru y Servicio. No hay cupo por equipo en cada área. En Participantes, el administrador consulta las elecciones sin formularios de asignación o retiro manual. El administrador debe formar los equipos primero. Para activar, cada área que tenga inscripciones necesita al menos 2 inscritos elegibles; las áreas vacías no compiten. Se valida nuevamente ese mínimo antes de iniciar la primera evaluación del área. Una vez que el área ya tuvo resultados, la eliminación deportiva puede dejar un único finalista sin incumplir el mínimo inicial.
+
+Solo pueden asociarse perfiles laboralmente vigentes (`active` o `pending`), sin cese efectivo ni entrenamiento finalizado. `pending` indica vinculación o registro de cuenta pendiente, no inactividad laboral; puede integrar o liderar equipos si cumple las condiciones de empleo y puesto. El selector y el sorteo ocultan inactivos, cesados y entrenamientos finalizados. La autorización de cuentas sigue requiriendo una sesión y un perfil de usuario activo; no se activa ninguna cuenta ni se modifica RR. HH. automáticamente. El último día de entrenamiento permanece válido, calculado en `America/Lima`; al día siguiente el perfil deja de ser elegible. El servidor valida estas reglas en asignaciones, plantillas y sorteos. Las cuentas que se inscriben requieren una sesión activa y un vínculo válido. No se activan ni modifican perfiles de RR. HH. automáticamente. Los líderes ven en **Mi concurso** las áreas y fases de todos los integrantes de su equipo.
 
 Al activar se guarda un sorteo por área con turnos y cruces, alternando equipos cuando es posible. Los grupos son de 2; con un total impar el último grupo tiene 3 para evitar una persona sola. El sorteo persiste al recargar y se audita. Los cruces organizan las evaluaciones: el avance sigue dependiendo del umbral de calidad y tiempo, y la comparación entre finalistas decide el campeón. No existe eliminación directa por ganar un cruce. Volver a borrador antes de cualquier intento permite editar inscripciones y regenerar el sorteo al activar de nuevo.
 
@@ -41,8 +57,8 @@ Una fecha de cese futura permite inscribir y evaluar al colaborador hasta el fin
 ## Uso
 
 1. Entrar en **CONCURSO** desde el panel administrativo, o **MI CONCURSO** desde el panel personal. Ruta: `/concurso`.
-2. Crear concurso y seleccionar su tienda. En Equipos, asociar la plantilla de los cuatro equipos o crear equipos y sortear integrantes seleccionados. Las asociaciones se guardan juntas en una transacción.
-3. Asignar áreas en Participantes. Configurar tiempos máximos y revisar rúbricas en Áreas. Configurar calendario, límite de áreas, tamaño de equipo, pausas y fases en Configuración.
+2. Crear concurso y seleccionar su tienda. En Equipos, preparar un equipo por cada trainer vigente o crear equipos y sortear integrantes seleccionados. Las asociaciones se guardan juntas en una transacción.
+3. Publicar el concurso al equipo para que cada colaborador elija hasta 2 áreas desde Inscripción. Consultar las elecciones en Participantes. Configurar tiempos máximos y rúbricas en Áreas, y calendario, pausas y fases en Configuración.
 4. Activar concurso. Evaluar → área → fase → colaborador → abrir evaluación → iniciar → detener → completar rúbrica → guardar → confirmar.
 5. Consultar Fixture y Ranking. Una aprobación avanza a la siguiente fase. Resolver cada área cuando termine; una igualdad exacta crea una ronda de desempate. El administrador no puede seleccionar arbitrariamente al ganador.
 6. Los resultados pueden corregirse desde Historial con motivo obligatorio. Un eliminado puede recibir un reintento desde Participantes, también con motivo. Ambas acciones se auditan.
@@ -57,7 +73,7 @@ Instaladas en el proyecto Supabase `nwwnnnjppycdrbeuzhnf`:
 
 Las versiones locales coinciden con el historial remoto. No volver a aplicar manualmente estos archivos al mismo proyecto. En otro entorno, aplicar las migraciones después del esquema y de las funciones de autorización existentes. `scripts/verify-competition-remote.sql` contiene comprobaciones exclusivamente de lectura.
 
-**Pendiente de aplicar y validar:** `20260930000609_competition_registration_and_draw.sql`. Añade inscripción propia, cupos por equipo, mínimo por área, perfiles pendientes y sorteo persistido. El usuario pidió el 30/09/2026 subir el trabajo a GitHub sin ejecutar pruebas. Estos últimos cambios no se probaron ni compilaron y esta migración no se instaló en el proyecto remoto. Los resultados de verificación documentados más abajo corresponden a la versión anterior. Antes de usar los nuevos botones en Supabase hay que aplicar esta migración y validar su comportamiento. Los fixtures locales se adaptaron a los nuevos mínimos, sin ejecutarlos.
+Actualizaciones del 30/09/2026: inscripción y sorteo (`20260930000609`), publicación (`20260930203005`), trainers vigentes (`20260930210634`), colaboradores activos (`20260930212759`) y equipos sin límite con promedio por líder (`20260930213448`). Las suites de PostgreSQL cubren estas reglas, autorización, publicación, puntuación e historial.
 
 La configuración de Firebase Hosting permanece igual. El frontend se compila con `npm run build` y se publica mediante el procedimiento existente: `firebase deploy --only hosting:lc-scheduler`. Esta implementación no publica automáticamente el frontend.
 
@@ -101,3 +117,27 @@ Verificación en navegador local: recarga durante cronómetro, segunda pestaña 
 Referencias de implementación: [RLS y vistas invoker](https://supabase.com/docs/guides/database/postgres/row-level-security), [Postgres Changes y limpieza de canales](https://supabase.com/docs/guides/realtime/postgres-changes).
 
 Última verificación: 27/09/2026. Build de producción correcto; 13 archivos de pruebas JS aprobados; suite PostgreSQL aprobada. Se verificó y corrigió también la navegación Atrás durante una evaluación. El asesor de seguridad remoto no reportó incidencias de las tablas o RPC nuevas. Conserva el aviso previo de [protección de contraseñas filtradas desactivada](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection); no se cambió la configuración global de Auth. Se añadieron los índices de claves foráneas identificados para el módulo. La advertencia de tamaño del bundle principal ya existía; el concurso se carga en un chunk separado.
+
+### Puntos de líderes y tamaño de equipos
+
+Los equipos pueden tener distinta cantidad de colaboradores. No hay capacidad máxima por trainer en asignaciones, plantillas ni sorteos; el sorteo reparte la selección de forma equilibrada. No hay cupo fijo de integrantes del mismo equipo por área. El límite de áreas por persona y el mínimo de inscritos elegibles por área se mantienen. `team_size` se conserva como campo histórico de compatibilidad, sin limitar la formación de equipos.
+
+Los puntos del líder son el total de puntos oficiales del equipo dividido entre todos sus colaboradores asignados, incluidos quienes tienen cero puntos. El líder no forma parte del denominador. Se conservan los integrantes y puntos históricos tras un cese; no se excluyen del denominador para evitar que sus puntos eleven artificialmente el promedio. Un equipo vacío tiene cero puntos. El ranking se ordena por el promedio sin redondear y la pantalla muestra hasta dos decimales. El ranking de equipos conserva su total y el individual conserva los puntos de cada colaborador. Dashboard, Ranking de trainers y Mi concurso del líder muestran el mismo promedio calculado en el servidor.
+
+Corrección del 30/09/2026 (`20260930214519`): la elegibilidad distingue registro pendiente de cuenta (`pending`) y vigencia laboral, en línea con RR. HH.; mantiene restricciones de inactividad, fechas, tienda y puesto ENTRENADOR.
+
+Elección de áreas (`20260930220620`): seis áreas predeterminadas y límite fijo de dos; Sheetout sin inscripciones queda inactivo conservando sus datos. La pantalla de Participantes permite consultar inscripciones y autorizar reintentos deportivos; no asigna ni retira elecciones. El retiro personal y la sustitución de áreas permanecen disponibles en borrador. Prueba: `node scripts/test-competition-self-selected-areas.mjs` con PGlite.
+
+Sheetout (`20260930221302`) vuelve a estar disponible: siete áreas predeterminadas, incluida su rúbrica de 100 puntos. Se reactiva o crea en concursos en borrador y se incluye en concursos nuevos. Se mantiene el máximo de dos elecciones propias y la publicación independiente.
+
+### Verificación E2E de evaluación
+
+El 30/09/2026 pasó `scripts/verify-competition-evaluation-ui.mjs`: 10 comprobaciones de navegador sobre componentes reales y comandos PostgreSQL de PGlite, con autenticación, transporte y actualización aislados para pruebas. Cubre elección de dos áreas, activación, recuperación del cronómetro, pausa, rúbrica, 90/89, error crítico, tiempo excedido, reinicio, cuatro fases, campeón, promedio del líder y correcciones con auditoría. No comprueba Auth/Realtime reales de Supabase ni la red de Firebase. La suite `scripts/test-competition-db.mjs` también pasó.
+
+Para repetir, iniciar `COMPETITION_QA_MODE=evaluation COMPETITION_QA_PORT=4189 node scripts/serve-competition-qa.mjs` y, en otra terminal, ejecutar `COMPETITION_QA_PORT=4189 node scripts/verify-competition-evaluation-ui.mjs`. Usar `PGLITE_MODULE`, `PLAYWRIGHT_MODULE` y `CHROMIUM_PATH` si las dependencias están fuera de node_modules. Cada repetición necesita un servidor de prueba nuevo para comenzar con datos limpios. Informe, capturas y traza se guardan en `output/evaluation-e2e/`, excluido de Git.
+
+## Puntuación por comprobaciones
+
+Los concursos nuevos y en borrador contienen una guía editable por criterio en Áreas → Rúbrica. Cada acción tiene un peso positivo; todas las acciones deben sumar el máximo del criterio. Evaluar exige Cumple/No cumple y calcula el total en el servidor. Tiempo/Rapidez usan el cronómetro del servidor. Historial muestra la guía copiada al abrir la evaluación y las decisiones guardadas. Los concursos activos anteriores y sus evaluaciones conservan el sistema manual histórico.
+
+Validación: `scripts/test-competition-observable-rubrics.mjs` comprueba cálculo, pesos, decisiones, tiempo automático, roles y conservación histórica. `scripts/test-competition-db.mjs` mantiene cobertura de las rúbricas manuales históricas. `scripts/verify-competition-evaluation-ui.mjs` verifica el flujo de evaluación con React y PostgreSQL aislado.

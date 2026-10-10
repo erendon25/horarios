@@ -1,3 +1,4 @@
+import { isBukScheduleExempt } from '../services/scheduleStaffOrder.js';
 // WeeklyScheduleEditor.jsx – versión con detección de conflictos corregida
 import React, { useEffect, useState, useRef } from 'react';
 import { getFirestore, writeBatch, doc, getDoc, setDoc, collection, query, where, onSnapshot, getDocs } from '../lib/supabase/firestoreCompat';
@@ -6,10 +7,16 @@ import { useAuth } from '../contexts/AuthContext';
 import { useScheduleDraft } from '../hooks/useScheduleDraft';
 import ScheduleHeatmapMatrix from './ScheduleHeatmapMatrix';
 import WeeklyScheduleExcelButton from './WeeklyScheduleExcelButton';
-import { getHeatmapAssignments, getProjectionForDay } from '../services/scheduleExportData';
+import { getHeatmapAssignments, getProjectionForDay, getExportShiftSegments, getPositionSegments, canLimitPositionCoverage } from '../services/scheduleExportData';
+import SchedulePositionControl from './SchedulePositionControl';
+import { validateHeatmapTransfer, replacePositionInterval } from '../services/heatmapTransfers';
 import { exportSchedulePDF, exportGroupedPositionsPDF, exportExtraHoursReport } from './PDFExport';
 import { exportGeoVictoriaExcel } from "../services/GeoVictoriaExport";
-import { calculateScheduleTotals, formatScheduleMinutes } from '../services/scheduleHours';
+import { calculateScheduleTotals, calculateScheduleDay, formatScheduleMinutes, getScheduleBreak, requiresScheduleBreak } from '../services/scheduleHours';
+import ScheduleBreakControl from './ScheduleBreakControl';
+import BukScheduleTools from './BukScheduleTools';
+import BukApprovedShiftControl from './BukApprovedShiftControl';
+import { getApprovedBukOptions, makeApprovedBukPatch, findApprovedBukShiftByStart } from '../services/bukSchedule';
 import { FaInfoCircle, FaExclamationTriangle, FaExclamationCircle } from 'react-icons/fa';
 import {
     Calendar,
@@ -113,6 +120,7 @@ const isOperationallyActiveStaff = (person, referenceDate = new Date()) => {
 };
 
 export default function WeeklyScheduleEditor() {
+    const { currentUser, userRole } = useAuth();
     const [staff, setStaff] = useState([]);
     const [positions, setPositions] = useState([]);
     const [projectionPositions, setProjectionPositions] = useState([]);
@@ -133,6 +141,16 @@ export default function WeeklyScheduleEditor() {
     const [scheduleAttempt, setScheduleAttempt] = useState(0);
     const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'success' | 'error'
     const [storeId, setStoreId] = useState('');
+    const [scheduleMode, setScheduleMode] = useState('buk');
+    const modeKey = currentUser?.uid && storeId ? `schedule_mode:${currentUser.uid}:${storeId}` : '';
+    useEffect(() => {
+        if (modeKey) setScheduleMode(localStorage.getItem(modeKey) === 'legacy' ? 'legacy' : 'buk');
+    }, [modeKey]);
+    const bukMode = scheduleMode === 'buk';
+    const changeScheduleMode = value => {
+        setScheduleMode(value);
+        if (modeKey) localStorage.setItem(modeKey, value);
+    };
     const [approvedRequests, setApprovedRequests] = useState([]);
     const [approvedRequestsError, setApprovedRequestsError] = useState('');
     const [showApprovedRequestsModal, setShowApprovedRequestsModal] = useState(false);
@@ -153,7 +171,6 @@ export default function WeeklyScheduleEditor() {
     const [highlightedStaffId, setHighlightedStaffId] = useState(null);
 
     const wk = getWeekKey(weekStartDate);
-    const { currentUser, userRole } = useAuth();
     const draft = useScheduleDraft(currentUser?.uid || '', storeId, wk);
     const { schedules, dirtyStaff, controller: draftController } = draft;
     const hasUnsavedChanges = dirtyStaff.size > 0;
@@ -392,7 +409,7 @@ export default function WeeklyScheduleEditor() {
         // Detectar conflictos de horario
         const shiftStart = timeToMinutes(shift.start);
         let shiftEndRaw = timeToMinutes(shift.end);
-        
+
         // Manejar cruce de medianoche
         const isOvernight = shiftEndRaw <= shiftStart;
         const shiftEnd = isOvernight ? shiftEndRaw + (24 * 60) : shiftEndRaw;
@@ -403,7 +420,7 @@ export default function WeeklyScheduleEditor() {
 
             // Caso 1: Traslape en el día actual
             const overlapCurrent = shiftStart < blockEnd && Math.min(shiftEnd, 1440) > blockStart;
-            
+
             // Caso 2: Traslape después de medianoche (si el turno es overnight)
             let overlapNext = false;
             if (isOvernight) {
@@ -457,14 +474,37 @@ export default function WeeklyScheduleEditor() {
         }
 
         let updates = { [field]: finalValue };
+        if (bukMode && isBukScheduleExempt(person) && ['start', 'end'].includes(field)) {
+            updates = { ...updates, bukApprovedShiftId: '', bukBreakMinutes: 0 };
+        }
+        if (bukMode && !isBukScheduleExempt(person) && field === 'start') {
+            const restDays = current.bukRestDays
+                || Number(current.bukApprovedShiftId?.match(/^PT([1-4])-/)?.[1])
+                || Math.min(4, Math.max(1, weekdays.filter(day => schedules[staffId]?.[day]?.off).length));
+            const approved = findApprovedBukShiftByStart(getEffectiveModality(person, dateStr), restDays, value);
+            updates = approved
+                ? makeApprovedBukPatch(approved.id, current, selectedDay)
+                : { start: finalValue, bukApprovedShiftId: '', bukBreakMinutes: 0 };
+        }
+
 
         // 🔒 Si se marca "off", borrar datos relacionados
         if (field === 'off' && value === true) {
             updates = { off: true, start: '', end: '', position: '', feriado: false, extraHours: '', extraHoursPre: '', extraHoursPost: '', splitShift: false, start2: '', end2: '' };
         }
 
-        // 🔒 Si se marca "feriado", setear horarios fijos según modalidad
-        if (field === 'feriado' && value === true) {
+        if (bukMode && isBukScheduleExempt(person) && field === 'feriado' && value === true) {
+            updates = { feriado: true, off: false };
+        }
+        if (bukMode && !isBukScheduleExempt(person) && field === 'feriado' && value === true) {
+            const modality = getEffectiveModality(person, dateStr);
+            const restDays = Math.min(4, Math.max(1, weekdays.filter(day => schedules[staffId]?.[day]?.off).length));
+            const first = getApprovedBukOptions(modality, restDays)[0];
+            if (!first) return;
+            updates = { ...makeApprovedBukPatch(first.id, current, selectedDay), feriado: true, off: false };
+        }
+
+        if (!bukMode && field === 'feriado' && value === true) {
             const holiday = isHoliday(dateStr);
 
             if (holiday) {
@@ -499,7 +539,7 @@ export default function WeeklyScheduleEditor() {
                     end2: ''
                 };
             }
-        }
+                }
 
         if (field === 'splitShift') {
             updates = value
@@ -515,6 +555,17 @@ export default function WeeklyScheduleEditor() {
         // Si se desmarca off → limpiar solo off
         if (field === 'off' && value === false) {
             updates = { ...current, off: false };
+        }
+
+        // Keep the legacy alias synchronized with the checkbox's canonical state.
+        if (Object.prototype.hasOwnProperty.call(updates, 'feriado')) updates.holiday = Boolean(updates.feriado);
+
+        const nextShift = { ...current, ...updates };
+        if (!getScheduleBreak(nextShift, getEffectiveModality(person, dateStr))) updates.breakStart = '';
+        if (Array.isArray(nextShift.positionAssignments)) {
+            const segments = getExportShiftSegments(nextShift);
+            updates.positionAssignments = nextShift.positionAssignments.filter(item =>
+                segments.some(segment => item.start >= segment.start && item.end <= segment.end));
         }
 
         draftController.edit(prev => ({
@@ -575,6 +626,7 @@ export default function WeeklyScheduleEditor() {
     };
 
     const getShiftBaseMinutes = (shift) => {
+        if (shift?.bukApprovedShiftId) return calculateScheduleDay(shift, '').baseMinutes;
         return getShiftSegments(shift).reduce((total, segment) => {
             const startMinutes = timeToMinutes(segment.start);
             let endMinutes = timeToMinutes(segment.end);
@@ -1107,7 +1159,7 @@ export default function WeeklyScheduleEditor() {
                 const weekStart = new Date(y, m - 1, d);
 
                 const endDateStr = person.isTrainee ? person.trainingEndDate : (person.cessationDate || person.terminationDate);
-                
+
                 if (endDateStr) {
                     const [tY, tM, tD] = endDateStr.split('-').map(Number);
                     const endDate = new Date(tY, tM - 1, tD);
@@ -1149,12 +1201,12 @@ export default function WeeklyScheduleEditor() {
 
         if (positionFilter !== 'Todas') {
             const posKey = positionFilter.toUpperCase();
-            const assignedPos = (schedules[person.id]?.[selectedDay]?.position || '').toUpperCase();
+            const assignedPositions = getPositionSegments(schedules[person.id]?.[selectedDay]).map(segment => (segment.position || '').toUpperCase());
 
             // Si el filtro de aptitud es 'Todos', mantenemos el comportamiento original: filtrar por ASIGNACIÓN
             // PERO si el filtro de aptitud está activo, queremos ver quién TIENE la habilidad para esa posición
             if (aptitudeFilter === 'Todos') {
-                if (assignedPos !== posKey) return false;
+                if (!assignedPositions.includes(posKey)) return false;
             } else {
                 const isCertified = person.skills?.some(s => s.toUpperCase() === posKey);
                 const score = person.trainingScores?.[posKey] || 0;
@@ -1233,6 +1285,19 @@ export default function WeeklyScheduleEditor() {
         selectablePositionsByNorm.get(normalizePosition(position)) || '';
 
     const assignedArray = getHeatmapAssignments(filteredStaff, schedules, selectedDay, safeRequirements.positions, getSelectedDateStr());
+    const handleHeatmapTransfer = transfer => {
+        if (!draft.ready) throw new Error('Espera a que termine de cargar el horario.');
+        draftController.edit(previous => {
+            // Validate against the whole store even when the editor has filters.
+            const currentAssignments = getHeatmapAssignments(activeStaff, previous, selectedDay, safeRequirements.positions, getSelectedDateStr());
+            const error = validateHeatmapTransfer(currentAssignments, safeRequirements, transfer);
+            if (error) throw new Error(error);
+            const shift = previous[transfer.staffId]?.[selectedDay];
+            return { ...previous, [transfer.staffId]: { ...previous[transfer.staffId],
+                [selectedDay]: { ...shift, positionAssignments: replacePositionInterval(shift, transfer) },
+            } };
+        });
+    };
 
     if (isUnauthenticated) return <p className="text-center py-8">Inicia sesión</p>;
     const getWeeklyStudyConflicts = () => {
@@ -1565,19 +1630,30 @@ export default function WeeklyScheduleEditor() {
                             </button>
 
                             <button
-                                onClick={() => setShowExportModal(true)}
-                                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
-                            >
-                                <FileText className="w-5 h-5" />
-                                PDF
-                            </button>
-
-                            <button
                                 onClick={() => setShowTurnoModal(true)}
                                 className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
                                 <Download className="w-5 h-5" />
                                 PDF Posiciones
+                            </button>
+
+
+
+                            <label className="flex flex-col gap-1 text-sm font-semibold">
+                                Modalidad de planificación
+                                <select aria-label="Modalidad de planificación" value={scheduleMode} onChange={event => changeScheduleMode(event.target.value)} className="border rounded-lg px-3 py-2 bg-white">
+                                    <option value="buk">BUK</option>
+                                    <option value="legacy">Anterior / GeoVictoria</option>
+                                </select>
+                                <span className="text-xs font-normal text-gray-600">Puedes cambiar en cualquier momento. No modifica tus horarios. Se recuerda en este navegador.</span>
+                            </label>
+                            {bukMode ? <BukScheduleTools storeId={storeId} staff={staff} schedules={schedules} weekStart={weekStartDate} /> : <>
+                            <button
+                                onClick={() => setShowExportModal(true)}
+                                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
+                            >
+                                <FileText className="w-5 h-5" />
+                                PDF
                             </button>
 
                             <button
@@ -1594,6 +1670,8 @@ export default function WeeklyScheduleEditor() {
                                 <Download className="w-5 h-5" />
                                 {turnoMapLoading ? 'Cargando GeoVictoria...' : 'Excel GeoVictoria'}
                             </button>
+
+                            </>}
 
                             <button
                                 onClick={async () => {
@@ -1643,10 +1721,11 @@ export default function WeeklyScheduleEditor() {
                                     <thead className="bg-gradient-to-r from-gray-700 to-gray-800 text-white">
                                         <tr>
                                             <th className="px-4 py-4 text-left text-xs font-semibold uppercase tracking-wider md:sticky md:left-0 z-10 bg-gradient-to-r from-gray-700 to-gray-800 min-w-[150px] max-w-[150px] md:min-w-[240px] md:max-w-[240px]">Nombre</th>
-                                            <th className="px-2 py-4 text-center text-[10px] font-semibold uppercase tracking-normal md:sticky md:left-[240px] z-10 bg-gradient-to-r from-gray-700 to-gray-800 min-w-[82px] max-w-[82px] md:min-w-[92px] md:max-w-[92px]">Modalidad</th>
+                                            <th className="px-2 py-4 text-center text-[10px] font-semibold uppercase tracking-normal md:sticky md:left-[240px] z-10 bg-gradient-to-r from-gray-700 to-gray-800 min-w-[170px] max-w-[200px]">Modalidad</th>
                                             <th className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center text-xs font-semibold uppercase tracking-wider">Entrada</th>
                                             <th className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center text-xs font-semibold uppercase tracking-wider">Salida</th>
-                                            <th className="w-[72px] min-w-[72px] max-w-[72px] px-2 py-4 text-center text-[11px] font-semibold uppercase tracking-normal">Partido</th>
+
+                                            {!bukMode && <th className="px-2 py-4 text-center">Partido</th>}
                                             <th className="w-[72px] min-w-[72px] max-w-[72px] px-1 py-4 text-center text-[11px] font-semibold uppercase tracking-normal" title="Horas Extras Antes">HE Ant</th>
                                             <th className="w-[72px] min-w-[72px] max-w-[72px] px-1 py-4 text-center text-[11px] font-semibold uppercase tracking-normal" title="Horas Extras Después">HE Desp</th>
                                             <th className="w-[72px] min-w-[72px] max-w-[72px] px-1 py-4 text-center text-[11px] font-semibold uppercase leading-tight tracking-normal">Horas<br />Día</th>
@@ -1691,8 +1770,9 @@ export default function WeeklyScheduleEditor() {
                                             );
                                             // Cálculo de rango correcto de horas según modalidad
                                             const esFullTime = effModality?.toLowerCase() === 'full-time';
-                                            const horasMin = esFullTime ? 48 * 60 : 24 * 60;  // 45h FT, 24h PT
-                                            const horasMax = esFullTime ? 48 * 60 : 24 * 60;  // Máximo razonable (evita abusos)
+                                            const isBukWeek = bukMode && weekdays.some(day => schedules[p.id]?.[day]?.bukApprovedShiftId);
+                                            const horasMin = esFullTime ? 48 * 60 : (isBukWeek ? 23 * 60 + 45 : 24 * 60);
+                                            const horasMax = horasMin;
                                             const horasEnRango = horas.total >= horasMin && horas.total <= horasMax;
                                             const { preCierres, cierres } = calcularCierres(schedules[p.id] || {});
 
@@ -1955,7 +2035,7 @@ export default function WeeklyScheduleEditor() {
                                                             );
                                                         })()}
                                                     </td>
-                                                    <td className="px-1.5 py-4 text-center md:sticky md:left-[240px] z-10 bg-white group-hover:bg-blue-50 min-w-[82px] max-w-[82px] md:min-w-[92px] md:max-w-[92px]">
+                                                    <td className="px-1.5 py-4 text-center md:sticky md:left-[240px] z-10 bg-white group-hover:bg-blue-50 min-w-[170px] max-w-[200px]">
                                                         {(() => {
                                                             const dateStr = getSelectedDateStr();
                                                             const effModality = getEffectiveModality(p, dateStr);
@@ -1968,6 +2048,13 @@ export default function WeeklyScheduleEditor() {
                                                                         }`}>
                                                                         {effModality}
                                                                     </span>
+                                                                    {bukMode && <BukApprovedShiftControl
+                                                                        person={{ ...p, modality: getEffectiveModality(p, getSelectedDateStr()) }}
+                                                                        shift={d} schedule={schedules[p.id]} day={selectedDay}
+                                                                        onApply={patch => draftController.edit(prev => ({
+                                                                            ...prev,
+                                                                            [p.id]: { ...prev[p.id], [selectedDay]: { ...prev[p.id]?.[selectedDay], ...patch } }
+                                                                        }))} />}
                                                                     {isChangeDay && (
                                                                         <span className="text-[9px] font-bold text-blue-600 animate-pulse mt-1">
                                                                             🔄 CAMBIO HOY
@@ -1977,6 +2064,17 @@ export default function WeeklyScheduleEditor() {
                                                             );
                                                         })()}
                                                     </td>
+                                                    {bukMode ? <>
+                                                    <td className="w-[120px] px-2 py-4 text-center align-top">
+                                                        {isCeased ? '--' : <div className="flex flex-col gap-2">
+                                                            <input type="time" value={d.start || ''} onChange={e => handleChange(p.id, 'start', e.target.value)} disabled={d.feriado || d.off} title="Entrada" className="w-full border-2 rounded-lg px-2 py-2 text-center font-bold" />
+                                                            {requiresScheduleBreak(d, effModality) && <ScheduleBreakControl shift={d} modality={effModality} name={`${p.name} ${p.lastName || ''}`.trim()} onChange={value => handleChange(p.id, 'breakStart', value)} />}
+                                                        </div>}
+                                                    </td>
+                                                    <td className="w-[120px] px-2 py-4 text-center align-top">
+                                                        {isCeased ? '--' : <input type="time" value={d.end || ''} onChange={e => handleChange(p.id, 'end', e.target.value)} disabled={d.feriado || d.off} title="Salida" className="w-full border-2 rounded-lg px-2 py-2 text-center font-bold" />}
+                                                    </td>
+                                                    </> : <>
                                                     <td className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center">
                                                         {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
                                                             <div className="flex flex-col gap-1.5">
@@ -2043,6 +2141,7 @@ export default function WeeklyScheduleEditor() {
                                                             />
                                                         )}
                                                     </td>
+                                                    </>}
                                                     <td className="w-[72px] min-w-[72px] max-w-[72px] px-1 py-4 text-center">
                                                         {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
                                                             <input
@@ -2101,6 +2200,13 @@ export default function WeeklyScheduleEditor() {
                                                                 ))}
                                                             </select>
                                                         )}
+                                                        {!isCeased && !d.off && !d.feriado && d.start && d.end && (canLimitPositionCoverage(p) || d.positionAssignments?.length > 0) && (
+                                                            <SchedulePositionControl shift={d} modality={getEffectiveModality(p, getSelectedDateStr())}
+                                                                name={`${p.name} ${p.lastName || ''}`.trim()}
+                                                                positions={positions} allowRangesOnly={canLimitPositionCoverage(p)}
+                                                                onModeChange={value => handleChange(p.id, 'positionRangesOnly', value)}
+                                                                onChange={value => handleChange(p.id, 'positionAssignments', value)} />
+                                                        )}
                                                     </td>
                                                     <td className="w-[50px] min-w-[50px] max-w-[50px] px-1 py-4 text-center font-bold text-orange-600 text-xs">
                                                         {isCeased ? '--' : `${preCierres}/4`}
@@ -2147,29 +2253,29 @@ export default function WeeklyScheduleEditor() {
                                     // Calcular métricas reales (VHL/THL)
                                     let totalMinutes = 0;
                                     let totalMinutesWithExtras = 0;
-                                    
+
                                     activeStaff.forEach(p => {
                                         const daySchedule = schedules[p.id]?.[selectedDay];
                                         if (daySchedule && !daySchedule.off && !daySchedule.feriado && daySchedule.start && daySchedule.end) {
                                             const baseMin = getShiftBaseMinutes(daySchedule);
                                             totalMinutes += baseMin;
-                                            
+
                                             const pre = parseFloat(String(daySchedule.extraHoursPre || 0).replace(',', '.')) || 0;
                                             const post = parseFloat(String((daySchedule.extraHoursPost ?? daySchedule.extraHours) || 0).replace(',', '.')) || 0;
-                                            
+
                                             totalMinutesWithExtras += baseMin + (pre * 60) + (post * 60);
                                         }
                                     });
-                                    
+
                                     const totalHours = totalMinutes / 60;
                                     const totalHoursWithExtras = totalMinutesWithExtras / 60;
-                                    
+
                                     const vta = Number(salesConfig.vta) || 0;
                                     const txs = Number(salesConfig.txs) || 0;
-                                    
+
                                     const vhl = totalHours > 0 ? (vta / totalHours).toFixed(1) : "0.0";
                                     const thl = totalHours > 0 ? (txs / totalHours).toFixed(1) : "0.0";
-                                    
+
                                     const vhlExt = totalHoursWithExtras > 0 ? (vta / totalHoursWithExtras).toFixed(1) : "0.0";
                                     const thlExt = totalHoursWithExtras > 0 ? (txs / totalHoursWithExtras).toFixed(1) : "0.0";
 
@@ -2184,21 +2290,21 @@ export default function WeeklyScheduleEditor() {
                                             <div className="flex flex-col gap-0.5 border-r border-gray-200 pr-3 flex-1">
                                                 <span className="text-gray-500 text-[9px] uppercase font-bold tracking-wider">Total HH <span className="text-orange-500 lowercase opacity-80">(c/extras)</span></span>
                                                 <span className="font-bold text-indigo-600 text-xs">
-                                                    {Math.round(totalHours * 10) / 10}h 
+                                                    {Math.round(totalHours * 10) / 10}h
                                                     {totalHoursWithExtras > totalHours && <span className="text-orange-500 ml-1">({Math.round(totalHoursWithExtras * 10) / 10}h)</span>}
                                                 </span>
                                             </div>
                                             <div className="flex flex-col gap-0.5 border-r border-gray-200 pr-3 flex-1">
                                                 <span className="text-gray-500 text-[9px] uppercase font-bold tracking-wider">VHL <span className="text-orange-500 lowercase opacity-80">(c/extras)</span></span>
                                                 <span className="font-bold text-blue-600 text-xs">
-                                                    S/ {vhl} 
+                                                    S/ {vhl}
                                                     {totalHoursWithExtras > totalHours && <span className="text-orange-500 ml-1">(S/ {vhlExt})</span>}
                                                 </span>
                                             </div>
                                             <div className="flex flex-col gap-0.5 flex-1">
                                                 <span className="text-gray-500 text-[9px] uppercase font-bold tracking-wider">THL <span className="text-orange-500 lowercase opacity-80">(c/extras)</span></span>
                                                 <span className="font-bold text-purple-600 text-xs">
-                                                    {thl} 
+                                                    {thl}
                                                     {totalHoursWithExtras > totalHours && <span className="text-orange-500 ml-1">({thlExt})</span>}
                                                 </span>
                                             </div>
@@ -2208,12 +2314,13 @@ export default function WeeklyScheduleEditor() {
                             </div>
                             <div className="h-[calc(100vh-280px)] overflow-auto">
                                 <ScheduleHeatmapMatrix
-                                    key={selectedDay}
+                                    key={`${wk}-${selectedDay}`}
                                     assigned={assignedArray}
                                     requirements={safeRequirements}
                                     date={getSelectedDateStr() || ''}
                                     dayLabel={weekdayLabels[selectedDay]}
                                     canExport={userRole === 'admin' || userRole === 'superadmin'}
+                                    onTransfer={draft.ready ? handleHeatmapTransfer : undefined}
                                 />
                             </div>
                         </div>

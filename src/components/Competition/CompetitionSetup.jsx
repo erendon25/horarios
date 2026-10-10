@@ -1,21 +1,21 @@
 import React, { useState } from "react";
+import { defaultChecklist } from '../../services/competitionChecklist';
 import {
-  INITIAL_TEAMS,
-  matchCompetitionStaff,
+  buildCompetitionTeamTemplate,
   competitionStaffName,
   competitionStaffUnavailable,
+  competitionStaffIsTrainer,
 } from "../../services/competitionRules";
 import { statusLabel } from "./CompetitionViews";
 
 const fullName = competitionStaffName;
-export function StaffSelect({ staff, ...props }) {
+export function StaffSelect({ staff, trainersOnly = false, ...props }) {
   return (
     <select required {...props}>
       <option value="">Seleccionar perfil existente…</option>
-      {staff.map((s) => (
-        <option key={s.id} value={s.id} disabled={Boolean(competitionStaffUnavailable(s))}>
+      {staff.filter((s) => !competitionStaffUnavailable(s) && (!trainersOnly || competitionStaffIsTrainer(s))).map((s) => (
+        <option key={s.id} value={s.id}>
           {fullName(s)}
-          {competitionStaffUnavailable(s) ? ` · ${competitionStaffUnavailable(s)}` : s.status === "pending" ? " · Perfil pendiente de completar" : ""}
           {s.cessation_date ? ` · cese ${s.cessation_date}` : ""}
         </option>
       ))}
@@ -29,50 +29,33 @@ const values = (event) => {
 
 export function Teams({ data, contest, staff, execute }) {
   const [template, setTemplate] = useState(false);
-  const [mapping, setMapping] = useState(() =>
-    INITIAL_TEAMS.map((t) => ({
-      trainer: matchCompetitionStaff(t.trainer, staff),
-      members: t.members.map((n) => matchCompetitionStaff(n, staff)),
-    })),
-  );
+  const teamTemplate = buildCompetitionTeamTemplate(staff);
   const [draw, setDraw] = useState([]);
   const editable = contest.status === "draft";
-  const setMatch = (ti, index, value) =>
-    setMapping((current) =>
-      current.map((m, i) =>
-        i !== ti
-          ? m
-          : index < 0
-            ? { ...m, trainer: value }
-            : {
-                ...m,
-                members: m.members.map((id, j) => (j === index ? value : id)),
-              },
-      ),
-    );
   const saveTemplate = async (event) => {
     event.preventDefault();
-    const all = mapping.flatMap((m) => [m.trainer, ...m.members]);
-    if (new Set(all).size !== all.length) {
+    const form = new FormData(event.currentTarget);
+    const teams = teamTemplate.map((team) => ({
+      ...team,
+      name: String(form.get(`name-${team.trainer_staff_id}`) || '').trim(),
+      trainer_staff_id: form.get(`trainer-${team.trainer_staff_id}`),
+    }));
+    if (!teams.length) return;
+    if (new Set(teams.map((team) => team.trainer_staff_id)).size !== teams.length) {
       window.alert(
-        "Cada persona debe estar asociada una sola vez. Revise trainers e integrantes.",
+        "Cada equipo debe tener un trainer distinto. Revise las asociaciones.",
       );
       return;
     }
-    await execute("roster", {
-      teams: INITIAL_TEAMS.map((t, i) => ({
-        name: t.name,
-        trainer_staff_id: mapping[i].trainer,
-        staff_ids: mapping[i].members,
-      })),
-    });
+    const result = await execute("roster", { teams });
+    if (result) setTemplate(false);
   };
   return (
     <>
       <h2>Equipos y trainers</h2>
       <p className="muted">
-        Los nombres se asocian a los perfiles existentes por UUID. El trainer
-        recibe automáticamente los puntos de su equipo.
+        Cada equipo puede tener distinta cantidad de integrantes. Los puntos
+        del trainer son el total del equipo dividido entre sus colaboradores.
       </p>
       <p className="notice">
         Las personas con cese futuro pueden participar hasta esa fecha (hora de
@@ -81,49 +64,41 @@ export function Teams({ data, contest, staff, execute }) {
         en el mismo equipo.
       </p>
       <p className="muted">
-        El selector incluye perfiles activos y pendientes de completar. Los
-        inactivos o con cese efectivo aparecen deshabilitados con el motivo.
-        La plantilla requiere coincidencia exacta; si el nombre difiere,
-        seleccione el perfil manualmente.
+        Solo aparecen colaboradores laboralmente vigentes, sin cese efectivo ni
+        entrenamiento finalizado. Un registro de cuenta pendiente no equivale
+        a un perfil inactivo ni impide integrar o liderar un equipo.
+        La plantilla prepara un equipo por cada trainer vigente de esta tienda.
       </p>
       {editable && data.teams.length === 0 && (
         <div className="card">
-          <button onClick={() => setTemplate(!template)}>
-            Asociar los cuatro equipos iniciales
+          <button disabled={!teamTemplate.length} onClick={() => setTemplate(!template)}>
+            Preparar equipos según trainers ({teamTemplate.length})
           </button>
+          {!teamTemplate.length && <p className="notice">No hay perfiles disponibles con puesto ENTRENADOR en esta tienda.</p>}
           {template && (
             <form onSubmit={saveTemplate}>
               <p className="notice">
-                Las coincidencias exactas se sugieren. Revise cada asociación;
-                los nombres ambiguos o diferentes requieren selección manual. No
-                se crean colaboradores.
+                Se crearán {teamTemplate.length} equipos, cada uno con un trainer
+                vigente. Revise los nombres y asociaciones. Después podrá añadir
+                o sortear integrantes sin límite por equipo.
               </p>
-              {INITIAL_TEAMS.map((t, ti) => (
-                <section key={t.name}>
-                  <h3>{t.name}</h3>
-                  {[t.trainer, ...t.members].map((name, index) => (
-                    <label className="template-row" key={name}>
-                      <span>
-                        {index === 0 ? "Trainer · " : ""}
-                        {name}
-                      </span>
-                      <StaffSelect
-                        staff={staff}
-                        value={
-                          index === 0
-                            ? mapping[ti].trainer
-                            : mapping[ti].members[index - 1]
-                        }
-                        onChange={(e) =>
-                          setMatch(ti, index - 1, e.target.value)
-                        }
-                      />
-                    </label>
-                  ))}
+              {teamTemplate.map((team) => (
+                <section key={team.trainer_staff_id}>
+                  <h3>{team.name}</h3>
+                  <label className="template-row">
+                    Nombre del equipo
+                    <input name={`name-${team.trainer_staff_id}`} defaultValue={team.name} required maxLength={100} />
+                  </label>
+                  <label className="template-row">
+                    Trainer del equipo
+                    <StaffSelect staff={staff} trainersOnly
+                      name={`trainer-${team.trainer_staff_id}`}
+                      defaultValue={team.trainer_staff_id} />
+                  </label>
                 </section>
               ))}
               <button className="primary" type="submit">
-                Guardar asociaciones revisadas
+                Crear {teamTemplate.length} equipos
               </button>
             </form>
           )}
@@ -143,7 +118,7 @@ export function Teams({ data, contest, staff, execute }) {
           </label>
           <label>
             Trainer
-            <StaffSelect name="trainer_staff_id" staff={staff} />
+            <StaffSelect name="trainer_staff_id" staff={staff} trainersOnly />
           </label>
           <button className="primary">Crear equipo</button>
         </form>
@@ -160,12 +135,12 @@ export function Teams({ data, contest, staff, execute }) {
               <p>
                 Trainer: <strong>{team.trainer_name}</strong>
               </p>
+              {!team.trainer_eligible && <p className="notice">Este equipo no tiene un trainer vigente. Solo los perfiles con puesto ENTRENADOR pueden liderarlo.</p>}
               <p className="badge">
-                Participaciones utilizadas {used} /{" "}
-                {contest.team_size * contest.max_areas_per_participant}
+                Participaciones utilizadas: {used}
               </p>
               <p className="muted">
-                {members.length} / {contest.team_size} integrantes
+                {members.length} integrantes · sin límite por equipo
               </p>
               <ul>
                 {members.map((m) => (
@@ -218,6 +193,7 @@ export function Teams({ data, contest, staff, execute }) {
                         <StaffSelect
                           name="trainer_staff_id"
                           staff={staff}
+                          trainersOnly
                           defaultValue={team.trainer_staff_id}
                         />
                       </label>
@@ -235,7 +211,7 @@ export function Teams({ data, contest, staff, execute }) {
           <h3>Sorteo de integrantes</h3>
           <p className="muted">
             Seleccione colaboradores. PostgreSQL distribuirá aleatoriamente,
-            respetando la capacidad de los equipos.
+            distribuyéndolos entre los equipos sin límite de integrantes.
           </p>
           <div className="grid">
             {staff
@@ -281,10 +257,10 @@ export function Participants({ data, contest, execute }) {
     <>
       <h2>Participantes y áreas</h2>
       <p className="muted">
-        Hasta {contest.max_areas_per_participant} áreas por colaborador.
+        Cada colaborador elige sus áreas desde Mi concurso, con un máximo de 2. Aquí puede consultar las inscripciones.
       </p>
       <p className="notice">
-        Máximo 2 integrantes de cada equipo por área. Se necesitan al menos
+        No hay límite de integrantes de cada equipo por área. Se necesitan al menos
         {" "}{contest.minimum_participants_per_area || 2} inscritos elegibles por
         área para activar. Los colaboradores pueden inscribirse desde su panel
         mientras el concurso está en borrador.
@@ -306,6 +282,7 @@ export function Participants({ data, contest, execute }) {
                 {data.teams.find((t) => t.id === m.team_id)?.name} ·{" "}
                 {entries.length} / {contest.max_areas_per_participant}
               </p>
+              {!entries.length && <p className="muted">Pendiente de elección del colaborador.</p>}
               {entries.map((x) => (
                 <div className="actions" key={x.id}>
                   <span>
@@ -314,13 +291,6 @@ export function Participants({ data, contest, execute }) {
                   <span className="badge">
                     {statusLabel(x.effective_status || x.status)}
                   </span>
-                  {contest.status === "draft" && (
-                    <button
-                      onClick={() => execute("remove_entry", { id: x.id })}
-                    >
-                      Retirar
-                    </button>
-                  )}
                   {contest.status === "active" &&
                     x.status === "eliminated" &&
                     x.eligible && (
@@ -338,42 +308,6 @@ export function Participants({ data, contest, execute }) {
                   )}
                 </div>
               ))}
-              {contest.status === "draft" && (
-                <form
-                  className="form"
-                  onSubmit={(e) =>
-                    execute("entry", { ...values(e), member_id: m.id })
-                  }
-                >
-                  <label>
-                    Área
-                    <select required name="area_id">
-                      <option value="">Seleccionar…</option>
-                      {data.areas
-                        .filter(
-                          (a) =>
-                            a.active &&
-                            !entries.some((x) => x.area_id === a.id) &&
-                            data.entries.filter((x) => x.area_id === a.id && x.team_id === m.team_id).length < 2,
-                        )
-                        .map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.name}
-                          </option>
-                        ))}
-                    </select>
-                  </label>
-                  <button
-                    disabled={
-                      entries.length >= contest.max_areas_per_participant ||
-                      data.individual.find((r) => r.member_id === m.id)
-                        ?.eligible === false
-                    }
-                  >
-                    Asignar área
-                  </button>
-                </form>
-              )}
             </section>
           );
         })}
@@ -392,7 +326,7 @@ function AreaEditor({ area, data, execute, editable }) {
     data.rubric
       .filter((r) => r.area_id === area.id)
       .sort((a, b) => a.sort_order - b.sort_order)
-      .map((r) => ({ label: r.label, max_score: r.max_score })),
+      .map((r) => ({ label: r.label, max_score: r.max_score, checklist: r.checklist || [] })),
   );
   const submit = (e) => {
     const p = values(e);
@@ -477,12 +411,14 @@ function AreaEditor({ area, data, execute, editable }) {
                 items: items.map((i) => ({
                   ...i,
                   max_score: Number(i.max_score),
+                  checklist: i.checklist.map(step=>({...step,points:Number(step.points)})),
                 })),
               });
             }}
           >
             {items.map((item, index) => (
-              <div className="score-row" key={index}>
+              <div className="card" key={index}>
+              <div className="score-row">
                 <label>
                   Criterio {index + 1}
                   <input
@@ -524,12 +460,25 @@ function AreaEditor({ area, data, execute, editable }) {
                   </button>
                 </label>
               </div>
+              <p className="muted">Defina acciones observables. Sus puntos deben sumar {item.max_score || 0}.</p>
+              {item.checklist.map((step,si)=><div className="score-row" key={step.id}>
+                <label>Acción {si+1}<textarea required maxLength={1000} value={step.label} onChange={event=>{const label=event.target.value;setItems(current=>current.map((r,j)=>j===index?{...r,checklist:r.checklist.map((s,k)=>k===si?{...s,label}:s)}:r));}}/></label>
+                <label>Puntos si cumple<input type="number" min="0.01" max="100" step="0.01" required value={step.points} onChange={event=>{const points=event.target.value;setItems(current=>current.map((r,j)=>j===index?{...r,checklist:r.checklist.map((s,k)=>k===si?{...s,points}:s)}:r));}}/></label>
+                <label>Comprobación<select value={step.automatic || 'manual'} onChange={event=>{const automatic=event.target.value;setItems(current=>current.map((r,j)=>j===index?{...r,checklist:r.checklist.map((s,k)=>k===si?{id:s.id,label:s.label,points:s.points,...(automatic==='time_limit'?{automatic}:{})}:s)}:r));}}><option value="manual">Observación del evaluador</option><option value="time_limit">Tiempo registrado ≤ máximo del área</option></select></label>
+                <button type="button" onClick={()=>setItems(current=>current.map((r,j)=>j===index?{...r,checklist:r.checklist.filter((_,k)=>k!==si)}:r))}>Quitar acción</button>
+              </div>)}
+              <p>Suma de acciones: {Math.round(item.checklist.reduce((sum,step)=>sum+Number(step.points || 0),0)*100)/100} / {item.max_score || 0}</p>
+              <div className="actions">
+                <button type="button" onClick={()=>setItems(current=>current.map((r,j)=>j===index?{...r,checklist:[...r.checklist,{id:crypto.randomUUID(),label:'',points:1}]}:r))}>Añadir acción</button>
+                <button type="button" onClick={()=>setItems(current=>current.map((r,j)=>j===index?{...r,checklist:defaultChecklist(area.name,r.label,r.max_score)}:r))}>Restaurar guía inicial</button>
+              </div>
+              </div>
             ))}
             <div className="actions">
               <button
                 type="button"
                 onClick={() =>
-                  setItems((v) => [...v, { label: "", max_score: 0 }])
+                  setItems((v) => [...v, { label: "", max_score: 0, checklist: [] }])
                 }
               >
                 Añadir criterio
@@ -589,6 +538,32 @@ export function Configuration({ data, contest, execute }) {
     <>
       <h2>Configuración</h2>
       <section className="card">
+        <h3>Publicación al equipo</h3>
+        <p className="notice">
+          {contest.published_at
+            ? 'Publicado: los colaboradores y trainers de esta tienda pueden ver el concurso.'
+            : 'Oculto: solo los administradores pueden preparar y consultar este concurso.'}
+        </p>
+        <p className="muted">
+          Publicar muestra Mi concurso a todo el equipo de la tienda. Las
+          inscripciones permanecen abiertas mientras el concurso esté en borrador.
+          Activarlo cierra las inscripciones y sortea el orden de competencia.
+        </p>
+        <button
+          className={contest.published_at ? undefined : 'primary'}
+          onClick={() => {
+            const published = !contest.published_at;
+            if (window.confirm(published
+              ? '¿Publicar el concurso para todo el equipo de esta tienda?'
+              : '¿Ocultar el concurso a colaboradores y trainers? Las inscripciones y resultados se conservarán.')) {
+              execute('publication', { published });
+            }
+          }}
+        >
+          {contest.published_at ? 'Ocultar al equipo' : 'Publicar al equipo'}
+        </button>
+      </section>
+      <section className="card">
         <fieldset disabled={!editable}>
           <form className="form" onSubmit={submit}>
             <label>
@@ -600,28 +575,7 @@ export function Configuration({ data, contest, execute }) {
                 maxLength={160}
               />
             </label>
-            <label>
-              Máximo de áreas por persona
-              <input
-                name="max_areas_per_participant"
-                type="number"
-                min="1"
-                max="20"
-                defaultValue={contest.max_areas_per_participant}
-                required
-              />
-            </label>
-            <label>
-              Integrantes por equipo
-              <input
-                name="team_size"
-                type="number"
-                min="1"
-                max="100"
-                defaultValue={contest.team_size}
-                required
-              />
-            </label>
+            <p className="notice">Cada colaborador puede elegir un máximo de 2 áreas desde su panel personal.</p>
             <label>
               Bonus campeón
               <input

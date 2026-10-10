@@ -22,6 +22,8 @@ export default defineConfig({
     }
   },
   build: {
-    outDir: 'build'  // ← AÑADE ESTA LÍNEA
+    outDir: 'build',
+    // Open tabs can still request lazy chunks from the previous release.
+    emptyOutDir: false,
   }
 });

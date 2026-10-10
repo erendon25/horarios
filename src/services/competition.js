@@ -1,5 +1,16 @@
 import { supabase } from "../lib/supabase/client";
 
+export async function hasPublishedCompetition(storeId) {
+  const { data, error } = await supabase
+    .from("competitions")
+    .select("id")
+    .eq("store_id", storeId)
+    .not("published_at", "is", null)
+    .limit(1);
+  if (error) throw error;
+  return data.length > 0;
+}
+
 export async function competitionCommand(competitionId, action, payload = {}) {
   const { data, error } = await supabase.rpc("competition_command", {
     p_competition_id: competitionId || null,
@@ -30,7 +41,7 @@ export async function readAll(table, filters = {}, order = "id") {
 
 export async function readCompetition(id, admin = false) {
   const tables = {
-    teams: "competition_teams",
+    teams: "competition_current_teams",
     members: "competition_team_members",
     areas: "competition_areas",
     phases: "competition_phases",
@@ -40,6 +51,7 @@ export async function readCompetition(id, admin = false) {
     scores: "competition_evaluation_scores",
     individual: "competition_individual_ranking",
     teamRanking: "competition_team_ranking",
+    trainerRanking: "competition_trainer_ranking",
   };
   const result = await Promise.all(
     Object.entries(tables).map(async ([key, table]) => [
@@ -49,7 +61,7 @@ export async function readCompetition(id, admin = false) {
         { competition_id: id },
         key === "individual"
           ? "member_id"
-          : key === "teamRanking"
+          : key === "teamRanking" || key === "trainerRanking"
             ? "team_id"
             : key === "scores"
               ? ["evaluation_id", "rubric_item_id"]
@@ -58,6 +70,15 @@ export async function readCompetition(id, admin = false) {
     ]),
   );
   const bundle = Object.fromEntries(result);
+  const currentTeams = new Map(bundle.teams.map((team) => [team.id, team]));
+  for (const key of ['entries', 'individual', 'teamRanking', 'trainerRanking']) {
+    bundle[key] = bundle[key].map((row) => {
+      const team = currentTeams.get(row.team_id);
+      return { ...row, trainer_staff_id: team?.trainer_staff_id ?? null,
+        trainer_name: team?.trainer_name ?? 'Sin trainer vigente',
+        trainer_eligible: team?.trainer_eligible === true };
+    });
+  }
   bundle.areas.sort((a, b) => a.sort_order - b.sort_order);
   bundle.phases.sort((a, b) => a.phase_order - b.phase_order);
   bundle.individual.sort(
@@ -66,6 +87,7 @@ export async function readCompetition(id, admin = false) {
       Number(b.average_quality) - Number(a.average_quality),
   );
   bundle.teamRanking.sort((a, b) => Number(b.points) - Number(a.points));
+  bundle.trainerRanking.sort((a, b) => Number(b.points) - Number(a.points));
   bundle.audit = admin
     ? await readAll(
         "audit_log",

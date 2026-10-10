@@ -8,6 +8,8 @@ function Register() {
   const emailRef = useRef();
   const passwordRef = useRef();
   const { currentUser, userRole, needsStaffLink, refreshAccess, register, logout } = useAuth();
+  const refreshAccessRef = useRef(refreshAccess);
+  refreshAccessRef.current = refreshAccess;
   const navigate = useNavigate();
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -28,9 +30,28 @@ function Register() {
     let active = true;
     setLoading(true);
     setError("");
-    supabase.functions.invoke("staff-account-admin", {
-      body: { operation: "list_registration_stores" },
-    }).then(({ data, error: requestError }) => {
+    const loadRegistration = async () => {
+      // Un vínculo vigente debe recuperarse antes de ofrecer un nuevo registro.
+      const { data: recovery, error: recoveryError } = await supabase.functions.invoke("staff-account-admin", {
+        body: { operation: "recover_existing_staff_link" },
+      });
+      if (!active) return;
+      if (recoveryError) {
+        const detail = await recoveryError.context?.json?.().catch(() => null);
+        if (!active) return;
+        // Un reingreso puede reclamar su nuevo perfil mediante DNI.
+        if (!["employment_ended", "training_ended", "inactive_store"].includes(detail?.error)) {
+          setError("No se pudo validar tu acceso existente. Intenta ingresar nuevamente o consulta al administrador.");
+          return;
+        }
+      }
+      if (recovery?.linked) {
+        await refreshAccessRef.current();
+        return;
+      }
+      const { data, error: requestError } = await supabase.functions.invoke("staff-account-admin", {
+        body: { operation: "list_registration_stores" },
+      });
       if (!active) return;
       if (requestError) {
         setError("No se pudieron consultar las tiendas disponibles. Intenta nuevamente.");
@@ -38,11 +59,14 @@ function Register() {
       }
       setStores(data?.stores ?? []);
       if ((data?.stores ?? []).length === 1) setStoreId(data.stores[0].id);
+    };
+    loadRegistration().catch(() => {
+      if (active) setError("No se pudo comprobar tu acceso. Intenta ingresar nuevamente.");
     }).finally(() => {
       if (active) setLoading(false);
     });
     return () => { active = false; };
-  }, [currentUser, needsStaffLink]);
+  }, [currentUser?.id, needsStaffLink]);
 
   useEffect(() => {
     if (!currentUser || !needsStaffLink || !storeId) {

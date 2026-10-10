@@ -22,6 +22,7 @@ import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import SuperAdminDashboard from './components/SuperAdminDashboard';
 import TrainingApp from './components/Training/TrainingApp';
+import CompetitionLoadBoundary from './components/Competition/CompetitionLoadBoundary';
 
 
 <ToastContainer />
@@ -41,7 +42,7 @@ function AppRouter() {
               : '/staff'
         } />
       } />
-      <Route path="/concurso" element={<PrivateRoute role="collaborator"><Suspense fallback={<p className="p-6">Cargando concurso…</p>}><CompetitionApp /></Suspense></PrivateRoute>} />
+      <Route path="/concurso" element={<PrivateRoute role="collaborator"><CompetitionLoadBoundary><Suspense fallback={<p className="p-6">Cargando concurso…</p>}><CompetitionApp /></Suspense></CompetitionLoadBoundary></PrivateRoute>} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/unauthorized" element={<h1>Acceso no autorizado</h1>} />
@@ -155,4 +156,3 @@ function App() {
 }
 
 export default App;
-

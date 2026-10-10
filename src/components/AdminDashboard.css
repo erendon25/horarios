@@ -1,0 +1,49 @@
+.admin-dashboard { min-width: 0; width: 100%; }
+.admin-dashboard .admin-navigation > div { flex-wrap: wrap; max-width: 100%; }
+.admin-dashboard .admin-navigation button { min-height: 44px; }
+.admin-dashboard .admin-staff-scroll { max-width: 100%; }
+.admin-dashboard .fixed.inset-0 > div { min-width: 0; max-height: calc(100dvh - 24px); }
+
+@media (max-width: 1023px) {
+  .admin-dashboard .admin-navigation { align-items: stretch; }
+  .admin-dashboard .admin-navigation > div { width: 100%; }
+  .admin-dashboard .admin-navigation > div > button { flex: 1 1 140px; justify-content: center; }
+  .admin-dashboard .admin-staff-scroll { overflow: visible; }
+  .admin-dashboard .admin-staff-table,
+  .admin-dashboard .admin-staff-table tbody { display: block; width: 100%; }
+  .admin-dashboard .admin-staff-table thead { display: none; }
+  .admin-dashboard .admin-staff-table tbody { padding: 12px; background: #f3f4f6; }
+  .admin-dashboard .admin-staff-table tr {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px; padding: 16px; margin-bottom: 12px;
+    background: white; border: 1px solid #e5e7eb; border-radius: 16px;
+  }
+  .admin-dashboard .admin-staff-table tr:last-child { margin-bottom: 0; }
+  .admin-dashboard .admin-staff-table td { display: block; min-width: 0; padding: 0; text-align: left; }
+  .admin-dashboard .admin-staff-table td::before {
+    content: attr(data-label); display: block; margin-bottom: 6px;
+    font-size: 11px; font-weight: 700; color: #6b7280;
+  }
+  .admin-dashboard .admin-staff-table td:first-child,
+  .admin-dashboard .admin-staff-table td[data-label="Carnet de sanidad"],
+  .admin-dashboard .admin-staff-table td[data-label="Acciones"] { grid-column: 1 / -1; }
+  .admin-dashboard .admin-staff-table td:first-child { overflow-wrap: anywhere; }
+  .admin-dashboard .admin-staff-table td:first-child > .absolute { display: none; }
+  .admin-dashboard .admin-staff-table td button { min-height: 44px; }
+  .admin-dashboard .admin-staff-table td[data-label="Acciones"] > div > div { flex-wrap: wrap; justify-content: flex-start; gap: 8px; }
+  .admin-dashboard .admin-staff-table td[data-label="Acceso a la app"] > div { align-items: flex-start; }
+}
+
+@media (max-width: 639px) {
+  .admin-dashboard > div > .max-w-7xl,
+  .admin-dashboard > .max-w-7xl { padding-left: 12px; padding-right: 12px; }
+  .admin-dashboard .admin-controls > * { min-width: 0; width: 100%; }
+  .admin-dashboard .admin-controls select { min-width: 0; }
+  .admin-dashboard .fixed.inset-0 { padding: 12px; }
+  .admin-dashboard .fixed.inset-0 > div { max-width: 100%; }
+  .admin-dashboard .fixed.inset-0 > div > [class*="px-8"],
+  .admin-dashboard .fixed.inset-0 > div > .p-8 { padding: 16px; }
+  .admin-dashboard .fixed.inset-0 h2,
+  .admin-dashboard .fixed.inset-0 h3 { min-width: 0; overflow-wrap: anywhere; }
+  .admin-dashboard .fixed.inset-0 button { flex-shrink: 0; }
+}

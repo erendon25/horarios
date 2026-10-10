@@ -67,11 +67,12 @@ export default function CompetitionApp() {
   };
   const loadContests = useCallback(async () => {
     try {
-      const all = await readAll(
+      const available = await readAll(
         "competitions",
         userRole === "superadmin" ? {} : { store_id: userData.storeId },
         "created_at",
       );
+      const all = available.filter((c) => admin || c.published_at);
       all.sort((a, b) => b.created_at.localeCompare(a.created_at));
       setContests(all);
       if (!competitionId && all.length)
@@ -82,7 +83,7 @@ export default function CompetitionApp() {
     } catch (e) {
       setError(e.message);
     }
-  }, [competitionId, setParams, userData.storeId, userRole]);
+  }, [competitionId, setParams, userData.storeId, userRole, admin]);
   useEffect(() => {
     void loadContests();
   }, [loadContests]);
@@ -107,8 +108,9 @@ export default function CompetitionApp() {
       .then(async ({ supabase }) => {
         const { data: rows, error } = await supabase
           .from("staff_profiles")
-          .select("id,first_name,last_name,status,cessation_date")
+          .select("id,first_name,last_name,position,status,cessation_date,is_trainee,training_end_date")
           .eq("store_id", contest.store_id)
+          .in("status", ["active", "pending"])
           .order("first_name");
         if (error) throw error;
         if (alive) setStaff(rows || []);
@@ -331,7 +333,7 @@ export default function CompetitionApp() {
           </details>
         )}
         {loading && <p role="status">Cargando concurso…</p>}
-        {!competitionId && !loading && (
+        {!contest && !loading && (
           <section className="card">
             <h2>No hay concursos disponibles</h2>
             <p>

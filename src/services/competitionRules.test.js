@@ -5,7 +5,21 @@ import {
   formatCompetitionTime,
   timerElapsed,
   matchCompetitionStaff,
+  buildCompetitionTeamTemplate,
+  competitionStaffUnavailable,
 } from "./competitionRules.js";
+test('three current trainers prepare exactly three teams without fixed names', () => {
+  const trainers = ['a', 'b', 'c'].map(id => ({ id, first_name: id, position: 'ENTRENADOR', status: 'active' }));
+  const staff = [...trainers,
+    { id: 'former', position: 'COLABORADOR', role: 'trainer', status: 'active' },
+    { id: 'inactive', position: 'ENTRENADOR', status: 'inactive' },
+    { id: 'ceased', position: 'ENTRENADOR', status: 'active', cessation_date: '2000-01-01' }];
+  assert.deepEqual(buildCompetitionTeamTemplate(staff), trainers.map((trainer, index) => ({
+    name: `Equipo ${index + 1}`, trainer_staff_id: trainer.id, staff_ids: [],
+  })));
+  assert.equal(buildCompetitionTeamTemplate(staff.slice(1)).length, 2);
+  assert.deepEqual(buildCompetitionTeamTemplate([]), []);
+});
 test("time formatting retains centiseconds and supports long durations", () => {
   assert.equal(formatCompetitionTime(42370), "00:42.37");
   assert.equal(formatCompetitionTime(60005), "01:00.00");
@@ -47,11 +61,25 @@ test("reload uses server anchor; paused and stopped clocks do not drift", () => 
   );
 });
 test("name matching suggests only unique normalized names", () => {
-  const staff = [{ id: "a", first_name: "Kiara", last_name: "Nuñez" }];
+  const staff = [{ id: "a", first_name: "Kiara", last_name: "Nuñez", status: "active" }];
   assert.equal(matchCompetitionStaff(" KIARA NUNEZ ", staff), "a");
   assert.equal(
     matchCompetitionStaff("Kiara Nuñez", [...staff, { ...staff[0], id: "b" }]),
     "",
   );
   assert.equal(matchCompetitionStaff("Kiara Torres", staff), "");
+});
+test('team selection uses employment, independent of pending registration, respecting the final day', () => {
+  const today = '2026-09-30';
+  const active = { status: 'active' };
+  assert.equal(competitionStaffUnavailable(active, today), '');
+  assert.equal(competitionStaffUnavailable({ status: 'pending' }, today), '');
+  assert.ok(competitionStaffUnavailable({ status: 'pending', is_trainee: true, training_end_date: '2026-09-29' }, today));
+  assert.ok(competitionStaffUnavailable({ status: 'inactive' }, today));
+  assert.ok(competitionStaffUnavailable({}, today));
+  assert.ok(competitionStaffUnavailable({ ...active, cessation_date: '2026-09-29' }, today));
+  assert.ok(competitionStaffUnavailable({ ...active, is_trainee: true, training_end_date: '2026-09-29' }, today));
+  assert.equal(competitionStaffUnavailable({ ...active, is_trainee: true, training_end_date: today }, today), '');
+  assert.equal(competitionStaffUnavailable({ ...active, is_trainee: true, training_end_date: '2026-10-01' }, today), '');
+  assert.equal(competitionStaffUnavailable({ ...active, is_trainee: false, training_end_date: '2026-09-29' }, today), '');
 });
