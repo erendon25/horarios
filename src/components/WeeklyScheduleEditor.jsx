@@ -2075,7 +2075,7 @@ export default function WeeklyScheduleEditor() {
                                                         {isCeased ? '--' : <input type="time" value={d.end || ''} onChange={e => handleChange(p.id, 'end', e.target.value)} disabled={d.feriado || d.off} title="Salida" className="w-full border-2 rounded-lg px-2 py-2 text-center font-bold" />}
                                                     </td>
                                                     </> : <>
-                                                    <td className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center">
+                                                    <td className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center align-top">
                                                         {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
                                                             <div className="flex flex-col gap-1.5">
                                                                 <input
@@ -2099,10 +2099,11 @@ export default function WeeklyScheduleEditor() {
                                                                         title="Entrada 2"
                                                                     />
                                                                 )}
+                                                                {requiresScheduleBreak(d, effModality) && <ScheduleBreakControl shift={d} modality={effModality} name={`${p.name} ${p.lastName || ''}`.trim()} onChange={value => handleChange(p.id, 'breakStart', value)} />}
                                                             </div>
                                                         )}
                                                     </td>
-                                                    <td className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center">
+                                                    <td className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center align-top">
                                                         {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
                                                             <div className="flex flex-col gap-1.5">
                                                                 <input

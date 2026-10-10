@@ -11,6 +11,13 @@ try {
  await page.getByRole('button',{name:'Excel GeoVictoria',exact:true}).waitFor();await page.getByRole('columnheader',{name:'Partido',exact:true}).waitFor();
  assert.deepEqual(await page.evaluate(()=>Object.fromEntries(Object.entries(localStorage).filter(([key])=>!key.startsWith('schedule_mode:')))),draft);
  await page.reload();await page.getByRole('button',{name:'Excel GeoVictoria',exact:true}).waitFor();assert.equal(await mode.inputValue(),'legacy');
+ const legacyRow=page.getByTitle('Entrada 1',{exact:true}).first().locator('xpath=ancestor::tr[1]');
+ const breakButton=legacyRow.getByRole('button',{name:/Asignar break de/});await breakButton.click();
+ const breakSelect=page.getByLabel('Inicio del break',{exact:true});
+ const breakStart=await breakSelect.locator('option').nth(1).getAttribute('value');
+ await breakSelect.selectOption(breakStart);await page.getByRole('button',{name:'Aplicar break',exact:true}).click();
+ assert.match(await breakButton.innerText(),new RegExp(breakStart));
+
  const input=page.getByTitle('Entrada 1',{exact:true}).first();const end=page.getByTitle('Salida 1',{exact:true}).first();assert.equal(await input.inputValue(),'06:45');await input.fill('07:00');assert.equal(await end.inputValue(),'15:30');
  await mode.selectOption('buk');await approved.waitFor();await row.getByTitle('Entrada',{exact:true}).fill('06:45');assert.equal(await row.getByTitle('Salida',{exact:true}).inputValue(),'15:30');
  assert.equal(await page.evaluate(()=>window.bukQaWrites?.length || 0),0);

@@ -100,3 +100,8 @@ Pruebas: `node scripts/test-buk-management-exemption.mjs`; editor aislado con
 
 Pruebas: firestoreCompat (guardado y recarga), positionCoverage, heatmapTransfers,
 weeklyScheduleExcel, heatmapExport y navegador con verify-heatmap-transfers.
+
+El control de break también está disponible debajo de la entrada en
+Anterior / GeoVictoria. La verificación del cambio de modalidad abre el selector,
+asigna un break y comprueba el botón con la hora elegida. Los breaks asignados
+siguen excluyendo sus tres bloques de 15 minutos en el heatmap.
