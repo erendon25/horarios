@@ -1,4 +1,3 @@
-import { clockFromMinutes } from '../services/scheduleExportData';
 // ScheduleHeatmapMatrix.jsx - Matriz operativa de 07:00 a 25:00
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
@@ -191,7 +190,7 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                                     key={hour}
                                     scope="col"
                                     className="sticky top-0 z-20 overflow-hidden bg-gradient-to-r from-gray-700 to-gray-800 border border-gray-500 p-0 text-[10px] font-bold text-white text-center shadow-md"
-                                    title={`${hour}–${clockFromMinutes(heatmapMinutes(hour) + 15)}`}
+                                    title={hour}
                                 >
                                     <div className="relative h-12 w-full">
                                         <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 -rotate-90 whitespace-nowrap leading-none">{hour}</span>

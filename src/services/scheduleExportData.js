@@ -87,7 +87,7 @@ export function getPositionSegments(shift) {
     const cuts = [...new Set([segment.start, segment.end, ...rotations.flatMap(item =>
       item.start >= segment.start && item.end <= segment.end ? [item.start, item.end] : [])])].sort((a, b) => a - b);
     return cuts.slice(0, -1).map((start, index) => ({
-      start, end: cuts[index + 1], endExclusive: true,
+      start, end: cuts[index + 1], endExclusive: cuts[index + 1] < segment.end,
       position: rotations.findLast(item => start >= item.start && start < item.end)?.position
         || (shift.positionRangesOnly ? '' : shift.position),
     }));

@@ -84,9 +84,12 @@ Pruebas: `node scripts/test-buk-management-exemption.mjs`; editor aislado con
 
 ## Correcciones de cobertura y feriados
 
-- Todos los bloques del mapa representan intervalos de 15 minutos con fin
-  exclusivo. Una salida a las 17:45 cubre el bloque 17:30–17:45; no el de
-  17:45–18:00. Se aplica tanto al turno base como a las reasignaciones y al Excel.
+- El mapa conserva la marca visual de la hora de salida: una salida a las 17:45
+  pinta también 17:45 y una salida a 01:00 pinta 25:00. Los turnos base y rangos
+  que terminan con el turno usan el mismo criterio. En un relevo exacto se cuenta
+  solo al colaborador que empieza. Los cambios internos tienen fin exclusivo
+  para que el puesto destino o el puesto base retomado sea el único que cubra
+  ese punto. Este pintado no añade minutos al horario ni a sus totales.
 - El exceso es una condición independiente del color. Los entrenadores conservan
   el naranja y pueden ser seleccionados para reasignación cuando están en exceso.
 - Guardar respeta `feriado` como estado principal y usa `holiday` solo como

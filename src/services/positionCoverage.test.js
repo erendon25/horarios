@@ -57,7 +57,7 @@ test('valida rangos y turnos partidos/nocturnos sin cubrir huecos',()=>{
   const night={start:'20:00',end:'01:00',positionRangesOnly:true,positionAssignments:[{start:1440,end:1500,position:'Salón'}]};
   assert.equal(color(night,'23:45'),'bg-yellow-300');
   assert.equal(color(night,'24:00'),'bg-blue-500');
-  assert.equal(color(night,'25:00'),'bg-yellow-300');
+  assert.equal(color(night,'25:00'),'bg-blue-500');
 });
 
 test('el guardado del borrador conserva el modo por rangos y sus intervalos',()=>{
@@ -75,21 +75,33 @@ test('el guardado del borrador conserva el modo por rangos y sus intervalos',()=
   assert.equal(color(reloaded.getSnapshot().schedules.a.monday,'11:00'),'bg-blue-500');
 });
 
-test('turno completo y reasignación hasta la salida cubren los mismos bloques finales',()=>{
+test('turno completo y reasignación hasta la salida conservan la marca final sin duplicar relevos',()=>{
   const plain={...base,end:'17:45'};
   const reassigned={...plain,positionAssignments:[{start:975,end:1065,position:'Cocina'}]};
   const plainRows=buildHeatmapRows(assignments(plain),requirements);
   const movedRows=buildHeatmapRows(assignments(reassigned),requirements);
   const cell=(rows,position,time)=>rows.find(row=>row.name===position).cells[HOURS.indexOf(time)];
   assert.equal(cell(plainRows,'Salón','17:30').color,'bg-blue-500');
-  assert.equal(cell(plainRows,'Salón','17:45').color,'bg-yellow-300');
+  assert.equal(cell(plainRows,'Salón','17:45').color,'bg-blue-500');
   assert.equal(cell(movedRows,'Cocina','17:30').color,'bg-blue-500');
-  assert.equal(cell(movedRows,'Cocina','17:45').color,'bg-yellow-300');
+  assert.equal(cell(movedRows,'Cocina','17:45').color,'bg-blue-500');
   const night={start:'20:00',end:'01:00',position:'Salón'};
-  assert.equal(color(night,'24:45'),'bg-blue-500');assert.equal(color(night,'25:00'),'bg-yellow-300');
+  assert.equal(color(night,'24:45'),'bg-blue-500');assert.equal(color(night,'25:00'),'bg-blue-500');
   const relays=getHeatmapAssignments([{id:'a',modality:'Part-Time'},{id:'b',modality:'Part-Time'}],{
     a:{monday:{start:'09:00',end:'12:00',position:'Salón'}},b:{monday:{start:'12:00',end:'16:00',position:'Salón'}},
   },'monday',requirements.positions,'2026-10-05');
   assert.equal(buildHeatmapRows(relays,requirements).find(row=>row.name==='Salón').cells[HOURS.indexOf('12:00')].color,'bg-blue-500');
   assert.equal(buildHeatmapRows(relays,requirements).filter(row=>row.name==='Salón').length,1);
+});
+
+
+test('trainer hasta 01:00 pinta 25:00, con puesto base o con rango hasta su salida',()=>{
+  const shift={start:'16:15',end:'01:00',position:'Salón'};
+  const ranged={...shift,positionRangesOnly:true,positionAssignments:[{start:975,end:1500,position:'Salón'}]};
+  for (const schedule of [shift,ranged]) {
+    assert.equal(color(schedule,'16:15','ENTRENADOR'),'bg-orange-500');
+    assert.equal(color(schedule,'24:45','ENTRENADOR'),'bg-orange-500');
+    assert.equal(color(schedule,'25:00','ENTRENADOR'),'bg-orange-500');
+    assert.deepEqual(calculateScheduleTotals({monday:schedule},'Full-Time'),calculateScheduleTotals({monday:shift},'Full-Time'));
+  }
 });

@@ -188,10 +188,13 @@ export function buildHeatmapRows(assigned = [], requirements = {}) {
                 return;
             }
 
-            // Each cell starts a 15-minute interval; an exact shift end never
-            // contributes coverage to the next cell, with or without rotations.
-            const coversBlock = currentBlockMin >= startMin && currentBlockMin < endMin;
-            if (coversBlock && !isOnBreak(p, currentBlockMin)) {
+            // Preserve the visual exit marker at the end of a real shift.
+            // Internal position changes remain exclusive, so the destination
+            // or resumed base position owns the exact handoff time.
+            const coversBlock = currentBlockMin >= startMin
+                && (p.endExclusive ? currentBlockMin < endMin : currentBlockMin <= endMin);
+            const relayAtExit = currentBlockMin === endMin && startMinsByPos[norm]?.has(endMin % 1440);
+            if (coversBlock && !relayAtExit && !isOnBreak(p, currentBlockMin)) {
                 assignedMap[norm][hourStr] = (assignedMap[norm][hourStr] || 0) + 1;
                 trainerMap[norm] = trainerMap[norm] || {};
                 trainerMap[norm][hourStr] = trainerMap[norm][hourStr] || [];

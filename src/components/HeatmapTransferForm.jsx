@@ -44,7 +44,7 @@ export default function HeatmapTransferForm({ selection, assigned, requirements,
                     </select>
                 </label>
             </div>
-            <p className="mt-2 text-xs">Cada recuadro cubre 15 minutos. El cambio termina a las {clockFromMinutes(end)}; el último bloque es {clockFromMinutes(end - 15)}–{clockFromMinutes(end)}.</p>
+            <p className="mt-2 text-xs">El cambio termina a las {clockFromMinutes(end)}. Al terminar vuelve al puesto base; si coincide con su salida, también se pinta la hora de salida.</p>
             <p className="mt-2 text-xs">Puedes agregar más tramos para este colaborador. Fuera de los tramos asignados mantiene su puesto base. Guarda el horario para publicarlos en su dashboard.</p>
             {(error || validation) && <p role="status" className="mt-2 text-amber-800">{error || validation}</p>}
             <div className="mt-2 flex gap-2">
