@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { addProfilePhotoTestSchema } from './profile-photo-test-schema.mjs';
-export async function createCompetitionTestDb({ includeSheetout = true, includeObservable = true, includeRecognition = true } = {}) {
+export async function createCompetitionTestDb({ includeSheetout = true, includeObservable = true, includeRecognition = true, includeTimeScoring = true } = {}) {
   const { PGlite } = await import(
     process.env.PGLITE_MODULE || "@electric-sql/pglite"
   );
@@ -71,5 +71,8 @@ create table public.staff_profiles(id uuid primary key default gen_random_uuid()
   );
   await addProfilePhotoTestSchema(db);
   if (includeRecognition) await db.exec(await readFile(new URL('../supabase/migrations/20261011063222_competition_profile_recognition.sql',import.meta.url),'utf8'));
+  if (includeObservable && includeTimeScoring) await db.exec(
+    await readFile(new URL('../supabase/migrations/20261011070918_score_time_in_all_competition_areas.sql', import.meta.url), 'utf8'),
+  );
   return db;
 }

@@ -42,6 +42,17 @@ Solo un perfil disponible cuyo puesto actual en RR. HH. sea `ENTRENADOR` puede l
 
 Los tiempos máximos NO se deducen de los ejemplos: deben configurarse antes de activar. Calidad mínima 90; fases 1/2/3/5; bonus campeón 3; máximo 2 áreas por persona y equipos sin límite de integrantes. Los nombres sugeridos requieren revisión y asociación por UUID.
 
+El tiempo aporta 15 puntos en las siete áreas. Landing, Landing Crazy, Vestido,
+Sheetout y Masa usan procedimiento 20, cantidades 20, presentación 15, técnica 15,
+orden/limpieza 10, seguridad/manipulación 5 y tiempo 15: total 100. Drive Thru y
+Servicio conservan sus distribuciones, que ya incluyen tiempo/rapidez 15.
+El servidor asigna 15 si la duración es menor o igual al máximo del área y 0
+si lo supera; no acepta que el evaluador altere ese resultado. Superar el máximo
+sigue impidiendo aprobar. El tiempo objetivo opcional no cambia esta puntuación.
+La migración `20261011070918_score_time_in_all_competition_areas.sql` actualiza
+las plantillas iniciales de borradores sin evaluaciones y la creación de nuevos
+concursos. Las rúbricas personalizadas y los concursos con historial se conservan.
+
 La inscripción personal está en **Inscripción**, con botón por área y retiro disponible mientras el concurso esté en borrador. Cada colaborador elige hasta 2 áreas entre Landing, Landing Crazy, Vestido, Sheetout, Masa, Drive Thru y Servicio. No hay cupo por equipo en cada área. En Participantes, el administrador consulta las elecciones sin formularios de asignación o retiro manual. El administrador debe formar los equipos primero. Para activar, cada área que tenga inscripciones necesita al menos 2 inscritos elegibles; las áreas vacías no compiten. Se valida nuevamente ese mínimo antes de iniciar la primera evaluación del área. Una vez que el área ya tuvo resultados, la eliminación deportiva puede dejar un único finalista sin incumplir el mínimo inicial.
 
 Solo pueden asociarse perfiles laboralmente vigentes (`active` o `pending`), sin cese efectivo ni entrenamiento finalizado. `pending` indica vinculación o registro de cuenta pendiente, no inactividad laboral; puede integrar o liderar equipos si cumple las condiciones de empleo y puesto. El selector y el sorteo ocultan inactivos, cesados y entrenamientos finalizados. La autorización de cuentas sigue requiriendo una sesión y un perfil de usuario activo; no se activa ninguna cuenta ni se modifica RR. HH. automáticamente. El último día de entrenamiento permanece válido, calculado en `America/Lima`; al día siguiente el perfil deja de ser elegible. El servidor valida estas reglas en asignaciones, plantillas y sorteos. Las cuentas que se inscriben requieren una sesión activa y un vínculo válido. No se activan ni modifican perfiles de RR. HH. automáticamente. Los líderes ven en **Mi concurso** las áreas y fases de todos los integrantes de su equipo.
@@ -121,6 +132,7 @@ Las pruebas SQL ejecutan PostgreSQL mediante PGlite y crean únicamente identida
 ```sh
 npm install --prefix /tmp/competition-test-runtime @electric-sql/pglite@0.3.16
 PGLITE_MODULE=/tmp/competition-test-runtime/node_modules/@electric-sql/pglite/dist/index.js node scripts/test-competition-db.mjs
+PGLITE_MODULE=/tmp/competition-test-runtime/node_modules/@electric-sql/pglite/dist/index.js node scripts/test-competition-all-area-time.mjs
 ```
 
 Para probar visualmente los componentes reales contra esas RPC en una base local desechable:
