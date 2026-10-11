@@ -16,7 +16,7 @@ El proyecto activo de Supabase ya fue creado y el esquema, la importación y el 
 
 Las futuras modificaciones deben aplicarse como migraciones y mantener estos archivos declarativos alineados con producción.
 
-Pendiente de instalar: `migrations/20261011061804_staff_profile_photos.sql`, para foto propia y bucket privado del fixture. Implementación, pruebas y verificación del despliegue en [Fotos de perfil](../docs/CONCURSO.md#fotos-de-perfil).
+Instalada el 11/10/2026 en `nwwnnnjppycdrbeuzhnf`: `migrations/20261011130351_staff_profile_photos.sql`, para foto propia y bucket privado del fixture. La versión local coincide con el historial remoto; no volver a aplicarla al mismo proyecto. Implementación, pruebas y verificación del despliegue en [Fotos de perfil](../docs/CONCURSO.md#fotos-de-perfil).
 
 Después instalar `migrations/20261011063222_competition_profile_recognition.sql`: laureles por campeonato y certificación al 100% por avance oficial, con recálculo ante correcciones y conservación de la capacitación independiente. Ver [Laureles y certificación automática](../docs/CONCURSO.md#laureles-y-certificación-automática). Ambas migraciones están probadas localmente; el acceso CLI disponible no incluye el proyecto de producción configurado.
 

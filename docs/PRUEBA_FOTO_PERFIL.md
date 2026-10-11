@@ -36,7 +36,21 @@ PostgreSQL aislado mediante PGlite. El transporte de Auth y Storage se adapta
 localmente; esta prueba no valida el servicio de Storage de producción.
 No modifica cuentas ni fotos reales.
 
-La comprobación de producción encontró pendientes la tabla
-`staff_profile_photos`, el RPC `set_own_profile_photo` y el bucket
-`profile-photos`. La funcionalidad requiere aplicar sus migraciones y publicar
-el frontend antes de comprobar una subida contra los servicios reales.
+La comprobación inicial encontró pendientes la tabla `staff_profile_photos`,
+el RPC `set_own_profile_photo` y el bucket `profile-photos`.
+Se habilitaron el 11/10/2026 mediante la migración
+`20261011130351_staff_profile_photos.sql`. Se verificaron RLS y permisos contra
+la base real y el rechazo de subidas y llamadas de guardado sin sesión a través
+de la API de producción. La prueba de navegador se repitió sin instalar la
+migración independiente de reconocimientos, con todos los casos aprobados.
+
+El frontend se compiló y se publicó primero en el canal Firebase `fotos-perfil`.
+Se comprobaron por HTTPS el índice y los 24 archivos JS/CSS, incluyendo los de
+la versión anterior para las pestañas abiertas. La publicación en producción
+promueve esa misma versión. Copia previa para restauración:
+`lc-scheduler:antes-fotos-perfil`.
+
+No se realizó una subida autenticada contra Storage real usando una cuenta
+de colaborador: esa parte del recorrido conserva el alcance local descrito
+arriba. Se puede comprobar desde **Información del Perfil → Foto de perfil**
+con una sesión propia.

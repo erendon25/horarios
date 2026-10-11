@@ -6,7 +6,9 @@ import { build } from "esbuild";
 import postcss from "postcss";
 import tailwindcss from "tailwindcss";
 import { createCompetitionTestDb } from "./competition-test-db.mjs";
-const db = await createCompetitionTestDb();
+const db = await createCompetitionTestDb({
+  includeRecognition: process.env.PROFILE_PHOTO_QA_WITHOUT_RECOGNITION !== '1',
+});
 const scalar = async (sql, params = []) =>
   Object.values((await db.query(sql, params)).rows[0])[0];
 const store = await scalar("insert into stores default values returning id");

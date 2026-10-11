@@ -41,6 +41,14 @@ try {
   const portrait = () => editor.getByRole('img', { name: 'Foto de Colaboradora Demo', exact: true });
   const fallback = () => editor.getByRole('img', { name: 'Imagen predeterminada de Colaboradora Demo', exact: true });
   await fallback().waitFor();
+  if (process.env.PROFILE_PHOTO_QA_WITHOUT_RECOGNITION === '1') {
+    const response = await page.request.post(`${base}/api`, { data: {
+      role: 'collaborator', table: 'staff_profiles', filters: {}, orders: [], start: 0, end: 999, columns: '*',
+    } });
+    const result = await response.json(); assert.equal(result.error, null);
+    assert.ok(result.data.every(profile => !Object.hasOwn(profile, 'competition_recognition')));
+    pass('Fotos disponibles sin instalar la migración independiente de reconocimientos');
+  }
 
   for (const [file, message] of [
     [{ name: 'invalid.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg/>') }, 'Elige una imagen JPG, PNG o WebP.'],

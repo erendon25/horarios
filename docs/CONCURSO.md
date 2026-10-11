@@ -100,9 +100,9 @@ Verificación del 11/10/2026: publicación desde el panel, inscripción, fixture
 
 El panel del colaborador permite elegir, previsualizar, guardar, cambiar y eliminar su foto desde **Información del Perfil → Foto de perfil**. Acepta JPG, PNG y WebP de hasta 10 MB; la aplicación recorta al centro y prepara una imagen JPEG cuadrada de 512 px. El fixture muestra la foto en cruces, fases y campeón. Si no hay foto o no se puede cargar, muestra una silueta de persona predeterminada, incorporada en el componente y sin solicitudes adicionales de red.
 
-La migración `20261011061804_staff_profile_photos.sql` crea el bucket privado `profile-photos` (2 MB por archivo), la tabla `staff_profile_photos` y la RPC `set_own_profile_photo`. La RPC obtiene el colaborador de la sesión; el cliente no elige qué perfil modificar. Las políticas permiten escritura únicamente en `<auth.uid()>/profile.jpg`. Las lecturas se permiten al propietario, responsables autorizados o participantes de la misma tienda cuando el perfil pertenece a un concurso visible. Los enlaces firmados duran una hora; enlaces ya emitidos conservan su vigencia hasta expirar. Los reemplazos mantienen el archivo y actualizan la versión del enlace para evitar fotos en caché o romper otras pestañas. Una incidencia de Storage no bloquea la lectura del concurso.
+La migración `20261011130351_staff_profile_photos.sql` crea el bucket privado `profile-photos` (2 MB por archivo), la tabla `staff_profile_photos` y la RPC `set_own_profile_photo`. La RPC obtiene el colaborador de la sesión; el cliente no elige qué perfil modificar. Las políticas permiten escritura únicamente en `<auth.uid()>/profile.jpg`. Las lecturas se permiten al propietario, responsables autorizados o participantes de la misma tienda cuando el perfil pertenece a un concurso visible. Los enlaces firmados duran una hora; enlaces ya emitidos conservan su vigencia hasta expirar. Los reemplazos mantienen el archivo y actualizan la versión del enlace para evitar fotos en caché o romper otras pestañas. Una incidencia de Storage no bloquea la lectura del concurso.
 
-**Pendiente en producción:** aplicar esta migración al proyecto configurado `nwwnnnjppycdrbeuzhnf`, verificarla y desplegar el frontend actualizado. La sesión de gestión disponible en esta máquina solo lista otro proyecto; no se modificó ninguno. El bucket y las políticas se probaron con PostgreSQL/PGlite y un transporte Storage aislado que sirve archivos reales, no contra el servidor Storage de producción.
+**Habilitado el 11/10/2026:** la migración está instalada en el proyecto `nwwnnnjppycdrbeuzhnf`. Se verificaron el bucket privado, RLS, permisos de lectura y guardado, y la denegación de escrituras directas o anónimas. El frontend permite desplegar fotos antes de la migración independiente de reconocimientos. Las pruebas de carga con archivos reales usan PostgreSQL/PGlite y un transporte Storage aislado; no se cambiaron fotos de colaboradores reales.
 
 Verificar después de aplicar la migración:
 
@@ -170,7 +170,7 @@ Corregir una final retira los laureles; las aprobaciones anteriores válidas man
 
 Validación: `scripts/test-competition-recognition.mjs` ejecuta la migración y las RPC reales en PostgreSQL aislado. `scripts/verify-competition-evaluation-ui.mjs` comprueba capacitación al 100%, foto real con laureles en fixture/perfil móvil, ausencia de laureles en otras áreas y retirada tras una corrección.
 
-**Pendiente en producción:** instalar primero `20261011061804_staff_profile_photos.sql`, después `20261011063222_competition_profile_recognition.sql` y desplegar el frontend. El proyecto configurado es `nwwnnnjppycdrbeuzhnf`; la sesión CLI disponible no tiene acceso a ese proyecto. Las pruebas son locales y no modifican concursos reales.
+**Pendiente en producción:** instalar `20261011063222_competition_profile_recognition.sql` si se habilitan las certificaciones y los reconocimientos del perfil. La migración de fotos `20261011130351_staff_profile_photos.sql` ya está instalada y funciona de manera independiente. Las pruebas de reconocimientos son locales y no modifican concursos reales.
 
 ## Límites y decisiones que importan
 

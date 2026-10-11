@@ -12,7 +12,8 @@ export default function ProfilePhotoEditor({staffId,name}) {
     const request=++generation.current;
     const [urls,recognition]=await Promise.all([
       profilePhotoUrls(supabase,[staffId]),
-      supabase.from('staff_profiles').select('competition_recognition').eq('id',staffId),
+      // Recognition is optional: photos can be deployed before that migration.
+      supabase.from('staff_profiles').select('*').eq('id',staffId),
     ]);
     if(request===generation.current){
       setPhoto(urls.get(staffId)||null);

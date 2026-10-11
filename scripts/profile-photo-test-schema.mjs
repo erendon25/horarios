@@ -12,5 +12,5 @@ export async function addProfilePhotoTestSchema(db) {
     grant select,insert,update,delete on storage.objects to authenticated;
     grant execute on function storage.foldername(text) to authenticated;
   `);
-  await db.exec(await readFile(new URL('../supabase/migrations/20261011061804_staff_profile_photos.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../supabase/migrations/20261011130351_staff_profile_photos.sql',import.meta.url),'utf8'));
 }

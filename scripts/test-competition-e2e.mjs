@@ -34,6 +34,7 @@ const suites = profilePhotoOnly ? [
 ];
 for(const [mode,port,script] of suites) {
   const suiteEnv={...env,COMPETITION_QA_MODE:mode,COMPETITION_QA_PORT:port};
+  if (profilePhotoOnly) suiteEnv.PROFILE_PHOTO_QA_WITHOUT_RECOGNITION = '1';
   delete suiteEnv.COMPETITION_QA_OUTPUT; // Keep separate evidence for the two suites.
   const server=spawn(process.execPath,['scripts/serve-competition-qa.mjs'],{cwd:root,env:suiteEnv,stdio:['ignore','pipe','inherit']});
   try {
