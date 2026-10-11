@@ -12,6 +12,7 @@ El proyecto activo de Supabase ya fue creado y el esquema, la importación y el 
 - `staff_management.sql`: alta y edición transaccional de colaboradores y vínculo interno con Auth.
 - `study_schedule_management.sql`: reemplazo atómico de disponibilidad con bloqueos de carnet y tienda.
 - `migrations/*_training_signatures_storage.sql`: bucket privado y políticas RLS para firmas de evaluaciones.
+- `migrations/20261011031701_scope_cessation_account_name_cleanup.sql`: corrige el borrado temporal de nombres al retirar cuentas por cese. Usa las cuentas eliminadas por la misma sentencia y mantiene la protección `safeupdate` activa.
 
 Las futuras modificaciones deben aplicarse como migraciones y mantener estos archivos declarativos alineados con producción.
 

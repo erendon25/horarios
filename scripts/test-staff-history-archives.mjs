@@ -19,13 +19,37 @@ try {
  await db.exec(await readFile('supabase/migrations/20261001004512_archive_historical_staff_without_accounts.sql','utf8'));
  assert.equal(Number(await scalar('select count(*) from staff_profiles where id=$1',[old])),0);assert.equal(Number(await scalar('select count(*) from auth.users where id=$1',[user])),0);
  const archive=(await db.query('select * from staff_history_archives')).rows[0];assert.equal(archive.records.schedule_shifts.length,1);assert.equal(archive.records.schedule_shifts[0].metadata.notes,'Texto conservado');assert.ok(!JSON.stringify(archive).includes(user));assert.ok(!JSON.stringify(archive).includes(old));assert.equal(Number(await scalar('select count(*) from schedule_weeks')),0);
+ await db.exec(await readFile('supabase/migrations/20261011031701_scope_cessation_account_name_cleanup.sql','utf8'));
+ // Statement cleanup must not erase names belonging to other deletions.
+ // Check zero-row, single-row and bulk DELETEs, and rollback behavior.
+ const unrelated=await scalar('select gen_random_uuid()');
+ await db.query('insert into private.removing_account_names values($1,$2)',[unrelated,'Otra eliminación']);
+ const scratch=await scalar('insert into auth.users values(gen_random_uuid()) returning id');
+ await db.query('delete from auth.users where id=$1',[unrelated]);
+ assert.equal(Number(await scalar('select count(*) from private.removing_account_names where user_id=$1',[unrelated])),1);
+ await db.exec('begin');
+ await db.query('delete from auth.users where id=$1',[scratch]);
+ assert.equal(Number(await scalar('select count(*) from private.removing_account_names')),1);
+ await db.exec('rollback');
+ assert.equal(Number(await scalar('select count(*) from auth.users where id=$1',[scratch])),1);
+ await db.query('delete from auth.users where id=$1',[scratch]);
+ const bulk=(await db.query('insert into auth.users values(gen_random_uuid()),(gen_random_uuid()) returning id')).rows.map(row=>row.id);
+ await db.query('delete from auth.users where id=any($1::uuid[])',[bulk]);
+ assert.equal(Number(await scalar('select count(*) from private.removing_account_names')),1);
+ assert.equal(Number(await scalar('select count(*) from auth.users where id=any($1::uuid[])',[bulk])),0);
+ await db.query('delete from private.removing_account_names where user_id=$1',[unrelated]);
  const trainer=await scalar('insert into auth.users values(gen_random_uuid()) returning id');
- const staff=await scalar("insert into staff_profiles(store_id,user_id,first_name,cessation_date) values($1,$2,'Trainer anterior','2020-01-01') returning id",[store,trainer]);
+ const staff=await scalar("insert into staff_profiles(store_id,user_id,first_name) values($1,$2,'Trainer anterior') returning id",[store,trainer]);
  await db.query("insert into user_profiles(id,staff_profile_id,store_id,role,first_name,last_name) values($1,$2,$3,'trainer','Trainer','Anterior')",[trainer,staff,store]);
  const evaluation=await scalar("insert into training_evaluations(trainer_id,status,score) values($1,'completed',100) returning id",[trainer]);
  await db.exec('create trigger training_evaluations_protect_completion before update or delete on training_evaluations for each row execute function private.protect_completed_training_evaluation()');
  await assert.rejects(()=>db.query('update training_evaluations set trainer_id=null where id=$1',[evaluation]),/inmutable/);
- assert.equal(Number(await scalar('select private.remove_ended_access_accounts($1)',[store])),1);
+ // Exercise the same cessation UPDATE and access-cleanup trigger as the RPC.
+ await db.query("update staff_profiles set cessation_date='2020-01-01' where id=$1",[staff]);
+ assert.equal(Number(await scalar('select count(*) from auth.users where id=$1',[trainer])),0);
+ assert.equal(await scalar('select status from staff_profiles where id=$1',[staff]),'inactive');
+ assert.equal(await scalar('select user_id from staff_profiles where id=$1',[staff]),null);
+ assert.equal(Number(await scalar('select private.remove_ended_access_accounts($1)',[store])),0);
  const evalRow=(await db.query('select * from training_evaluations where id=$1',[evaluation])).rows[0];assert.equal(evalRow.trainer_id,null);assert.equal(evalRow.trainer_name_snapshot,'Trainer Anterior');assert.equal(Number(evalRow.score),100);assert.equal(Number(await scalar('select count(*) from private.removing_account_names')),0);
  await assert.rejects(()=>db.query('update training_evaluations set score=0 where id=$1',[evaluation]),/inmutable/);await assert.rejects(()=>db.query('delete from training_evaluations where id=$1',[evaluation]),/no se elimina/);
  await db.query("insert into staff_history_archives(store_id,fingerprint,display_name,reason,staff_snapshot,records) values($1,'other','Otro archivo','historical_import','{}','{}')",[otherStore]);
