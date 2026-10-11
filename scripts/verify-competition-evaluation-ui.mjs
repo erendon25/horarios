@@ -102,7 +102,12 @@ try {
     if(checks.length) {
       const weights=[];
       for(const select of checks) weights.push(Math.round(Number(await select.getAttribute('data-points'))*100));
-      const target=quality*100, choices=new Map([[0,[]]]);
+      const evaluationId=new URL(admin.url()).searchParams.get('evaluation');
+      const evaluation=(await read('competition_evaluations',{id:evaluationId}))[0];
+      const rubric=await read('competition_evaluation_scores',{evaluation_id:evaluationId});
+      const automatic=rubric.flatMap(item=>item.checklist || []).reduce((sum,step)=>
+        sum+(step.automatic==='time_limit' && Number(evaluation.duration_ms)<=Number(evaluation.maximum_duration_ms) ? Number(step.points) : 0),0);
+      const target=Math.round((quality-automatic)*100), choices=new Map([[0,[]]]);
       for(let i=0;i<weights.length;i++) for(const [sum,indices] of [...choices]) if(sum+weights[i]<=target && !choices.has(sum+weights[i])) choices.set(sum+weights[i],[...indices,i]);
       assert.ok(choices.has(target),'Puntuación representable por acciones observadas');
       const selected=new Set(choices.get(target));
@@ -204,10 +209,14 @@ try {
   await admin.waitForTimeout(5400);
   await admin.getByRole('button',{name:'DETENER',exact:true}).click();
   await admin.getByText('TIEMPO REGISTRADO',{exact:true}).waitFor();
-  await fillQuality(100);
+  await fillQuality(85); // Perfect manual checks; exceeding time loses its 15 points.
   const overtime=await save(overtimeId,false);
   assert.ok(Number(overtime.duration_ms)>5000); assert.equal(overtime.points_awarded,0);
-  pass('Tiempo excedido rechaza calidad 100 y otorga cero puntos');
+  assert.equal(Number(overtime.quality_score),85);
+  const overtimeScores=await read('competition_evaluation_scores',{evaluation_id:overtimeId});
+  const timeScore=overtimeScores.find(item=>item.checklist.some(step=>step.automatic==='time_limit'));
+  assert.equal(Number(timeScore.score),0);
+  pass('Tiempo excedido pierde los 15 puntos automáticos, deja calidad 85 y otorga cero puntos de avance');
   await reopen();
   const canceledId=await open('Rival Demo','Clasificación');
   await admin.getByRole('button',{name:'REINICIAR',exact:true}).click();

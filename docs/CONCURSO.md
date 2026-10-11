@@ -67,6 +67,8 @@ Una fecha de cese futura permite inscribir y evaluar al colaborador hasta el fin
 
 ## Uso
 
+Los líderes de equipo solo hacen seguimiento de sus colaboradores: su vista contiene **Mi concurso**, **Fixture** y **Ranking**, sin **Inscripción**. El servidor también rechaza `register` para un perfil asignado como líder del concurso, aunque envíe otro ID en el payload o tenga un vínculo histórico como integrante. La migración `20261011131719_competition_leaders_followup_only.sql` refuerza esta regla sin borrar resultados ni cambiar equipos o puntos. Está aplicada en producción; el concurso de Porongoche no tenía inscripciones de líderes que retirar.
+
 El ranking de líderes usa el promedio de puntos por integrante: total del equipo dividido entre todos sus integrantes, incluidos quienes tienen cero puntos o están fuera de competencia. La plantilla no se puede editar mientras el concurso esté activo ni volver a borrador una vez registrados intentos; los ceses conservan la pertenencia al equipo. Un equipo sin integrantes muestra cero. El promedio se presenta con hasta dos decimales y se ordena sin redondear; los promedios iguales comparten posición. Los puntos individuales y el ranking de equipos siguen usando sus totales. Este cálculo se realiza en la vista del servidor incorporada por la migración de promedio por líder.
 
 Para igualar oportunidades, cada integrante debe tener acceso al mismo número de áreas y las áreas deben ofrecer los mismos puntos de fase y bono. El promedio corrige la diferencia de tamaño de plantilla; no corrige diferencias en oportunidades de inscripción.

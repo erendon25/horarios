@@ -386,6 +386,7 @@ export function MyCompetition({ data, staffId }) {
       <h2>Mi concurso</h2>
       <section className="card">
         <h3>{team.name}</h3>
+        {trainerTeam && <p className="notice">Como líder, solo haces seguimiento a tus colaboradores. No te inscribes en las áreas del concurso.</p>}
         {ranking?.eligible === false && (
           <p className="notice">
             Tu cese ya es efectivo o tu perfil está inactivo. Conservas tus

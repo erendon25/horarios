@@ -6,7 +6,7 @@ Verificado el 11/10/2026 sobre `codex/competition-registration`, actualizado des
 
 En **Concurso → Configuración → Publicar al equipo**, el concurso queda disponible para colaboradores y trainers de su tienda. En el encabezado del panel personal aparece el botón naranja **MI CONCURSO**, junto a **Cambiar contraseña**. El panel comprueba la publicación al abrirse, recuperar el foco y cada 15 segundos mientras está visible.
 
-Al entrar encuentra cuatro secciones:
+El colaborador encuentra cuatro secciones. El líder de equipo ve únicamente **Mi concurso**, **Fixture** y **Ranking**: hace seguimiento y no se inscribe.
 
 | Sección | Qué muestra / permite |
 | --- | --- |
@@ -25,14 +25,16 @@ El administrador debe asociar al colaborador a un equipo antes de que pueda insc
 
 - 114 pruebas JavaScript aprobadas y compilación de producción correcta, incluidas foto, certificación y conservación de las habilidades previas. La comprobación de tipos de Next.js también pasó.
 - Las ocho suites PostgreSQL del concurso pasaron: publicación/permisos, perfiles vigentes, trainers vigentes, promedio por líder, elección de áreas, rúbricas, ciclo deportivo y reconocimientos/certificación. También pasó la suite SQL de fotos.
-- E2E del colaborador: once comprobaciones aprobadas. Incluye el panel real, publicación, URL oculta, dos elecciones, tercera bloqueada, retiro/sustitución, recarga, cierre, fixture, avance a Fase 2, puntos, ranking, ocultación, subida/reemplazo/eliminación de foto y silueta de persona predeterminada cuando no hay foto.
-- E2E de evaluación: doce comprobaciones aprobadas. Incluye cronómetro, pausa, recuperación, confirmación, 90 aprobado/89 rechazado, error crítico, tiempo excedido, reinicio, cuatro fases, campeón, promedio, certificación de estación al 100%, foto con laureles y corrección auditada que retira los laureles.
+- E2E del colaborador: trece comprobaciones aprobadas. Incluye el panel real, publicación, URL oculta, dos elecciones, tercera bloqueada, retiro/sustitución, recarga, cierre, fixture, avance a Fase 2, puntos, ranking, ocultación, subida/reemplazo/eliminación de foto y silueta de persona predeterminada cuando no hay foto. El líder no tiene inscripción en escritorio, móvil ni al recargar; consulta las áreas de su equipo y su llamada directa de inscripción se rechaza.
+- E2E de evaluación: doce comprobaciones aprobadas. Incluye cronómetro, pausa, recuperación, confirmación, 90 aprobado/89 rechazado, error crítico, tiempo excedido, reinicio, cuatro fases, campeón, promedio, certificación de estación al 100%, foto con laureles y corrección auditada que retira los laureles. La selección de comprobaciones descuenta los puntos automáticos del cronómetro; superar el tiempo máximo deja 85/100 aunque se cumplan todas las comprobaciones manuales.
 - Prueba adicional de navegador de publicación/ocultación aprobada.
 - Sin excepciones de página, errores de consola ni errores de API en el recorrido del colaborador.
 
 Estas pruebas usan **los componentes React, las migraciones, las RPC y los permisos PostgreSQL reales**, sobre una base PGlite nueva y desechable. La autenticación y el transporte son adaptadores de prueba; el adaptador del perfil incorpora los reconocimientos persistidos y la misma función de lectura de capacitación del producto. Los widgets del panel ajenos al concurso se omiten. No prueban el inicio de sesión ni Realtime reales de Supabase o el recorrido con una cuenta de producción.
 
-La prueba de foto usa archivos reales, transformación JPEG en el navegador y políticas Storage de PostgreSQL; el transporte de archivos es de prueba. La suite `scripts/test-profile-photos.mjs` verifica propiedad, rutas, roles, publicación, otra tienda y reemplazo/eliminación. La migración de fotos todavía debe instalarse en producción: véase [Fotos de perfil](CONCURSO.md#fotos-de-perfil).
+La prueba de foto usa archivos reales, transformación JPEG en el navegador y políticas Storage de PostgreSQL; el transporte de archivos es de prueba. La suite `scripts/test-profile-photos.mjs` verifica propiedad, rutas, roles, publicación, otra tienda y reemplazo/eliminación. La migración de fotos ya está instalada en producción: véase [Fotos de perfil](CONCURSO.md#fotos-de-perfil).
+
+La suite `scripts/test-competition-leaders-followup.mjs` confirma el bloqueo de líderes por identidad y equipo, incluso con un rol de cuenta distinto o un vínculo histórico como integrante, conservando la inscripción de colaboradores y el promedio del líder. La captura `output/collaborator-e2e/14-lider-seguimiento.png` muestra la vista móvil del líder.
 
 La revisión remota de solo lectura confirmó que Firebase responde y sus archivos públicos contienen el botón MI CONCURSO, publicación, inscripción, Sheetout, rúbricas por comprobaciones y fixture. Supabase rechaza lecturas anónimas de las tablas/vistas consultadas. Esto no certifica todas las migraciones remotas ni los permisos de una sesión autenticada. No se publicó, activó ni modificó ningún concurso de producción.
 

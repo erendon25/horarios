@@ -44,6 +44,12 @@ export default function CompetitionApp() {
     connection,
     refresh,
   } = useCompetition(competitionId, admin);
+  const teamLeader = Boolean(data?.teams.some(
+    (team) => team.trainer_eligible && team.trainer_staff_id === userData.staffProfileId,
+  ));
+  useEffect(() => {
+    if (!admin && teamLeader && tab === "registration") setTab("mine");
+  }, [admin, teamLeader, tab]);
   const selectedEvaluation = data?.evaluations.find(
     (e) => e.id === evaluationId,
   );
@@ -223,6 +229,7 @@ export default function CompetitionApp() {
         ["fixture", "Fixture"],
         ["ranking", "Ranking"],
       ];
+  const visibleTabs = tabs.filter(([key]) => key !== "registration" || !teamLeader);
   return (
     <main className="competition">
       <div className="shell">
@@ -346,7 +353,7 @@ export default function CompetitionApp() {
         {contest && data && (
           <>
             <nav aria-label="Secciones del concurso">
-              {tabs.map(([key, label]) => (
+              {visibleTabs.map(([key, label]) => (
                 <button
                   key={key}
                   className={tab === key ? "active" : ""}
@@ -411,7 +418,7 @@ export default function CompetitionApp() {
               {tab === "mine" && (
                 <MyCompetition data={data} staffId={userData.staffProfileId} />
               )}
-              {tab === "registration" && !admin && (
+              {tab === "registration" && !admin && !teamLeader && (
                 <CompetitionRegistration {...{ data, contest, execute }} staffId={userData.staffProfileId} />
               )}
               {tab === "history" && admin && (

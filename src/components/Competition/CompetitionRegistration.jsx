@@ -3,6 +3,11 @@ import { statusLabel } from "./CompetitionViews";
 import { COMPETITION_AREAS } from '../../services/competitionRules';
 
 export default function CompetitionRegistration({ data, contest, staffId, execute }) {
+  const leaderTeam = data.teams.find((team) => team.trainer_eligible && team.trainer_staff_id === staffId);
+  if (leaderTeam) return <section className="card">
+    <h2>Seguimiento del equipo</h2>
+    <p>Como líder de {leaderTeam.name}, solo haces seguimiento a tus colaboradores. Consulta sus áreas y resultados en Mi concurso, Fixture y Ranking.</p>
+  </section>;
   const member = data.members.find((m) => m.staff_id === staffId);
   const ranking = data.individual.find((r) => r.staff_id === staffId);
   const mine = data.entries.filter((e) => e.member_id === member?.id);
@@ -16,7 +21,7 @@ export default function CompetitionRegistration({ data, contest, staffId, execut
         el servidor; al activar el concurso se cierran las inscripciones y se
         sortea el orden de competencia.
       </p>
-      {!member && <p className="notice">El administrador debe asociarte primero a un equipo. Los líderes consultan las áreas de sus integrantes en Mi concurso.</p>}
+      {!member && <p className="notice">El administrador debe asociarte primero a un equipo.</p>}
       {member && <p>{data.teams.find((t) => t.id === member.team_id)?.name} · {mine.length} / {contest.max_areas_per_participant} áreas elegidas</p>}
       {mine.length >= 2 && editable && <p className="notice">Ya elegiste tus 2 áreas. Para cambiar una, retira tu inscripción y elige otra antes de que se active el concurso.</p>}
       {ranking?.eligible === false && <p className="notice error">Tu perfil está inactivo o tu cese ya es efectivo. No puedes inscribirte.</p>}

@@ -23,7 +23,8 @@ try {
   const admin = await context.newPage();
   collaborator = await context.newPage();
   const rival = await context.newPage();
-  for(const page of [admin,collaborator,rival]) {
+  const trainer = await context.newPage();
+  for(const page of [admin,collaborator,rival,trainer]) {
     page.on('pageerror',e=>errors.push(e.message));
     page.on('console',m=>{if(m.type()==='error')errors.push(m.text())});
     page.on('dialog',d=>d.accept());
@@ -88,6 +89,21 @@ try {
   await collaborator.screenshot({path:`${output}/03-mi-concurso.png`,fullPage:true});
   pass('Publicar en borrador muestra el botón naranja MI CONCURSO y abre equipo, líder, compañeros y áreas sin controles administrativos');
 
+  await trainer.goto(`${base}/concurso?role=trainer&id=${id}`);
+  await trainer.getByText('Como líder, solo haces seguimiento a tus colaboradores.',{exact:false}).waitFor();
+  assert.equal(await trainer.getByRole('button',{name:'Inscripción',exact:true}).count(),0);
+  assert.equal(await trainer.getByRole('button',{name:'Inscribirme',exact:true}).count(),0);
+  for(const name of ['Mi concurso','Fixture','Ranking']) await trainer.getByRole('button',{name,exact:true}).waitFor();
+  const leaderAreas = await read('competition_areas',{competition_id:id});
+  const denied = await trainer.request.post(`${base}/api`,{data:{role:'trainer',rpc:'competition_command',args:{p_competition_id:id,p_action:'register',p_payload:{area_id:leaderAreas[0].id}}}});
+  assert.match((await denied.json()).error?.message || '',/Los líderes de equipo no se inscriben/);
+  await trainer.setViewportSize({width:390,height:844});
+  await trainer.screenshot({path:`${output}/14-lider-seguimiento.png`,fullPage:true});
+  await trainer.reload();
+  await trainer.getByText('Como líder, solo haces seguimiento a tus colaboradores.',{exact:false}).waitFor();
+  assert.equal(await trainer.getByRole('button',{name:'Inscripción',exact:true}).count(),0);
+  pass('Líder: sin inscripción en escritorio/móvil o al recargar, seguimiento disponible y RPC de inscripción denegada');
+
   await collaborator.getByRole('button',{name:'Inscripción',exact:true}).click();
   const card = (page,name) => page.locator('section.card').filter({has:page.getByRole('heading',{name,exact:true})});
   assert.equal(await collaborator.locator('section.card').filter({has:collaborator.getByRole('button',{name:'Inscribirme',exact:true})}).count(),7);
@@ -112,6 +128,14 @@ try {
   await collaborator.screenshot({path:`${output}/05-inscripcion-mobile.png`,fullPage:true});
   await collaborator.setViewportSize({width:1440,height:1000});
   pass('Inscripción en dos de siete áreas, tercera bloqueada, persistencia al recargar, retiro y sustitución en borrador; escritorio y móvil');
+
+  await trainer.getByRole('button',{name:'Actualizar',exact:true}).click();
+  const followed = trainer.locator('li').filter({hasText:'Colaboradora Demo'});
+  await until(async()=>{
+    const text=await followed.innerText();return text.includes('Landing')&&text.includes('Sheetout');
+  },'líder consulta las dos áreas elegidas por su colaboradora');
+  assert.equal(await trainer.getByRole('button',{name:'Inscripción',exact:true}).count(),0);
+  pass('El líder sigue las áreas elegidas por su equipo sin recibir controles de inscripción');
 
   await rival.goto(`${base}/concurso?role=rival&id=${id}`);
   await rival.getByRole('button',{name:'Inscripción',exact:true}).click();
