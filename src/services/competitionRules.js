@@ -1,4 +1,10 @@
 export const COMPETITION_AREAS = ['Landing', 'Landing Crazy', 'Vestido', 'Sheetout', 'Masa', 'Drive Thru', 'Servicio'];
+export function competitionStatusLabel(contest) {
+  if (contest.status === 'draft') {
+    return contest.published_at ? 'Inscripciones abiertas' : 'Borrador';
+  }
+  return contest.status === 'active' ? 'Activo' : 'Finalizado';
+}
 export function competitionLeaderRanking(teams) {
   return teams
     .map((team) => ({

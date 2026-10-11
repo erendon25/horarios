@@ -5,6 +5,7 @@ import {
   competitionStaffName,
   competitionStaffUnavailable,
   competitionStaffIsTrainer,
+  competitionStatusLabel,
 } from "../../services/competitionRules";
 import { statusLabel } from "./CompetitionViews";
 
@@ -546,7 +547,7 @@ export function Configuration({ data, contest, execute }) {
         </p>
         <p className="muted">
           Publicar muestra Mi concurso a todo el equipo de la tienda. Las
-          inscripciones permanecen abiertas mientras el concurso esté en borrador.
+          inscripciones permanecen abiertas hasta activar el concurso.
           Activarlo cierra las inscripciones y sortea el orden de competencia.
         </p>
         <button
@@ -698,15 +699,12 @@ export function Configuration({ data, contest, execute }) {
         <p>
           Estado actual:{" "}
           <strong>
-            {contest.status === "draft"
-              ? "Borrador"
-              : contest.status === "active"
-                ? "Activo"
-                : "Finalizado"}
+            {competitionStatusLabel(contest)}
           </strong>
         </p>
         <p className="muted">
-          Al activar se validan áreas, tiempos y rúbricas. Con intentos
+          Al activar se cierran las inscripciones y se habilitan las evaluaciones.
+          Se validan áreas, tiempos y rúbricas. Con intentos
           registrados, la configuración queda congelada para conservar
           resultados comparables.
         </p>
@@ -722,7 +720,7 @@ export function Configuration({ data, contest, execute }) {
           {contest.status === "active" && (
             <>
               <button onClick={() => execute("status", { status: "draft" })}>
-                Volver a borrador
+                {contest.published_at ? "Reabrir inscripciones" : "Volver a borrador"}
               </button>
               <button
                 onClick={() =>

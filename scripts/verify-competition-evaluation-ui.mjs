@@ -63,7 +63,7 @@ try {
   }
   pass('Inscripción propia en Sheetout y Landing, tercera área bloqueada y colaborador sin controles de evaluación');
   await admin.getByRole('button',{name:'Activar concurso',exact:true}).click();
-  await admin.getByRole('button',{name:'Volver a borrador',exact:true}).waitFor();
+  await admin.getByRole('button',{name:'Reabrir inscripciones',exact:true}).waitFor();
   const contest=(await read('competitions',{id}))[0];
   assert.equal(contest.status,'active'); assert.ok(contest.drawn_at);
   await collaborator.reload();

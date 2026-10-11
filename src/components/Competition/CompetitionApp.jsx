@@ -4,6 +4,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { registerCompetitionNavigationGuard } from "../../services/competitionNavigationGuard";
 import { useCompetition } from "../../hooks/useCompetition";
 import { competitionCommand, readAll } from "../../services/competition";
+import { competitionStatusLabel } from "../../services/competitionRules";
 import { Teams, Participants, Areas, Configuration } from "./CompetitionSetup";
 import CompetitionEvaluation from "./CompetitionEvaluation";
 import CompetitionRegistration from "./CompetitionRegistration";
@@ -262,7 +263,7 @@ export default function CompetitionApp() {
               <option value="">Seleccionar concurso</option>
               {contests.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.name} · {c.status}
+                  {c.name} · {competitionStatusLabel(c)}
                 </option>
               ))}
             </select>
@@ -271,11 +272,7 @@ export default function CompetitionApp() {
             <span className="badge">
               {stores.find((s) => s.id === contest.store_id)?.name || "Tienda"}{" "}
               ·{" "}
-              {contest.status === "draft"
-                ? "Borrador"
-                : contest.status === "active"
-                  ? "Activo"
-                  : "Finalizado"}
+              {competitionStatusLabel(contest)}
             </span>
           )}
           <button

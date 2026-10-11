@@ -147,7 +147,7 @@ try {
   await collaborator.getByRole('button',{name:'Fixture',exact:true}).click();
   await collaborator.getByText('El sorteo del orden y los cruces se genera al activar',{exact:false}).waitFor();
   await admin.getByRole('button',{name:'Activar concurso',exact:true}).click();
-  await admin.getByRole('button',{name:'Volver a borrador',exact:true}).waitFor();
+  await admin.getByRole('button',{name:'Reabrir inscripciones',exact:true}).waitFor();
   await until(async()=>await collaborator.getByRole('heading',{name:'Cruces y orden sorteado',exact:true}).count()>0,'fixture actualizado tras activar');
   await collaborator.getByRole('combobox',{name:'Área del fixture',exact:true}).selectOption({label:'Landing'});
   await collaborator.getByRole('heading',{name:'Cruce 1',exact:true}).waitFor();
