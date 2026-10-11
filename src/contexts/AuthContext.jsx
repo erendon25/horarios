@@ -1,5 +1,6 @@
 import React, { useContext, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase/client";
+import { loginWithLegacyRecovery } from "../lib/supabase/loginWithLegacyRecovery";
 
 const AuthContext = React.createContext();
 
@@ -114,8 +115,14 @@ export function AuthProvider({ children }) {
   };
 
   const login = async (email, password) => {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
+    const data = await loginWithLegacyRecovery(supabase, email, password);
+    if (data.legacyRecovered) {
+      // A partial Auth account may have loaded as unlinked before recovery.
+      // Wait for its updated profile before Login chooses a destination.
+      setNeedsStaffLink(false);
+      setUserRole(null);
+      setAccessVersion((version) => version + 1);
+    }
     return { user: compatibleUser(data.user), session: data.session };
   };
 
