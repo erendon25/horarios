@@ -1,8 +1,8 @@
-import { orderScheduleStaff, scheduleStaffRank, compareScheduleStaff } from '../services/scheduleStaffOrder.js';
+import { orderScheduleStaff, compareScheduleStaff } from '../services/scheduleStaffOrder.js';
 // PDFExport.jsx - Corregido para evitar errores con nombres indefinidos
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { isActiveOnDate } from '../services/scheduleExportData';
+import { isActiveOnDate, isManagement } from '../services/scheduleExportData';
 import { calculateScheduleTotals, formatScheduleMinutes, scheduleBreakLabel } from '../services/scheduleHours';
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
@@ -58,8 +58,8 @@ export const exportSchedulePDF = (staff, schedules, weekKey, excludeTrainees = f
     }
 
     const ordered = orderScheduleStaff(filteredStaff, dateStr);
-    const gerencial = ordered.filter(person => scheduleStaffRank(person, dateStr) < 3);
-    const personal = ordered.filter(person => scheduleStaffRank(person, dateStr) >= 3);
+    const gerencial = ordered.filter(isManagement);
+    const personal = ordered.filter(person => !isManagement(person));
 
     const buildRows = (list) => list.map(p => {
         const effModality = getEffectiveModality(p, dateStr);
