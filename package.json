@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "test:competition:e2e": "node scripts/test-competition-e2e.mjs",
+    "test:profile-photo:e2e": "node scripts/test-competition-e2e.mjs --profile-photo",
     "prebuild": "node scripts/verify-env.mjs",
     "build": "vite build",
     "preview": "vite preview"

@@ -25,10 +25,14 @@ if(!env.CHROMIUM_PATH && process.platform==='win32' && env.LOCALAPPDATA) {
   }
 } else if(!env.CHROMIUM_PATH && existsSync('/usr/bin/chromium')) env.CHROMIUM_PATH='/usr/bin/chromium';
 
-for(const [mode,port,script] of [
+const profilePhotoOnly = process.argv.includes('--profile-photo');
+const suites = profilePhotoOnly ? [
+  ['collaborator','4193','verify-profile-photo-ui.mjs'],
+] : [
   ['collaborator','4191','verify-competition-collaborator-ui.mjs'],
   ['evaluation','4192','verify-competition-evaluation-ui.mjs'],
-]) {
+];
+for(const [mode,port,script] of suites) {
   const suiteEnv={...env,COMPETITION_QA_MODE:mode,COMPETITION_QA_PORT:port};
   delete suiteEnv.COMPETITION_QA_OUTPUT; // Keep separate evidence for the two suites.
   const server=spawn(process.execPath,['scripts/serve-competition-qa.mjs'],{cwd:root,env:suiteEnv,stdio:['ignore','pipe','inherit']});
@@ -50,4 +54,6 @@ for(const [mode,port,script] of [
     server.kill();
   }
 }
-console.log('PASS: E2E de colaborador y evaluación. Capturas e informes en output/collaborator-e2e y output/evaluation-e2e.');
+console.log(profilePhotoOnly
+  ? 'PASS: E2E de fotos de perfil. Capturas e informe en output/profile-photo-qa.'
+  : 'PASS: E2E de colaborador y evaluación. Capturas e informes en output/collaborator-e2e y output/evaluation-e2e.');
