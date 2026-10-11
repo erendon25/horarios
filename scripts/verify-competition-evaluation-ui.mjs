@@ -2,11 +2,12 @@
 // Real React UI + real PostgreSQL commands; isolated test identities/transport.
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const output = process.env.COMPETITION_QA_OUTPUT || '/workspace/horarios/output/evaluation-e2e';
+const output = resolve(process.env.COMPETITION_QA_OUTPUT || 'output/evaluation-e2e');
 await mkdir(output, { recursive: true });
 const base = `http://127.0.0.1:${process.env.COMPETITION_QA_PORT || 4189}`;
-const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', args:['--no-sandbox'], env:{...process.env, XDG_CONFIG_HOME:'/tmp/horarios-playwright-config'} });
+const browser = await chromium.launch({ headless: true, ...(process.env.CHROMIUM_PATH ? {executablePath:process.env.CHROMIUM_PATH} : {}), args:['--no-sandbox'] });
 const context = await browser.newContext({ viewport:{width:1440,height:1000} });
 await context.tracing.start({screenshots:true,snapshots:true,sources:true});
 const errors = [], passed = [];
@@ -75,6 +76,12 @@ try {
   const mainEntry=entries.find(e=>e.display_name==='Colaboradora Demo');
   const rivalEntry=entries.find(e=>e.display_name==='Rival Demo');
   assert.ok(mainEntry); assert.ok(rivalEntry);
+  assert.deepEqual((await read('staff_profiles',{id:mainEntry.staff_id}))[0].competition_recognition.certifications,{});
+  const profilePage=await context.newPage(), trainingPage=await context.newPage();
+  for(const page of [profilePage,trainingPage]){
+    page.on('pageerror',e=>errors.push(e.message));
+    page.on('console',m=>{if(m.type()==='error')errors.push(m.text())});
+  }
   const open = async (name,phase) => {
     await admin.getByRole('button',{name:'Evaluar',exact:true}).click();
     await admin.getByRole('combobox',{name:'Área',exact:true}).selectOption({label:'Sheetout'});
@@ -160,6 +167,20 @@ try {
   await api({rpc:'competition_command',args:{p_competition_id:id,p_action:'finalize',p_payload:{evaluation_id:firstId,scores,critical_error:false}}});
   assert.equal(Number((await read('competition_individual_ranking',{member_id:mainEntry.member_id}))[0].points),1);
   pass('Cronómetro, pausa/reanudación, recuperación tras recarga, rúbrica válida, 90 aprobado, confirmación y guardado sin duplicar puntos');
+  const certified=(await read('staff_profiles',{id:mainEntry.staff_id}))[0];
+  assert.deepEqual(certified.competition_recognition.certifications,{SHEETOUT:100});
+  assert.deepEqual(certified.training_scores,{});
+  await trainingPage.goto(`${base}/training?role=admin`);
+  await trainingPage.getByText('SHEETOUT: certificado al 100% por avance en el concurso',{exact:true}).waitFor();
+  await trainingPage.screenshot({path:`${output}/certificacion-concurso.png`,fullPage:true});
+  await profilePage.goto(`${base}/staff?role=collaborator`);
+  await profilePage.getByText('SHEETOUT · 100% por concurso',{exact:false}).waitFor();
+  const photo=await profilePage.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=canvas.height=64;const ctx=canvas.getContext('2d');ctx.fillStyle='#2563eb';ctx.fillRect(0,0,64,64);return canvas.toDataURL('image/png').split(',')[1]});
+  await profilePage.getByLabel('Elegir foto de perfil',{exact:true}).setInputFiles({name:'campeona.png',mimeType:'image/png',buffer:Buffer.from(photo,'base64')});
+  await profilePage.getByRole('button',{name:'Guardar foto',exact:true}).click();
+  await profilePage.getByText('Foto de perfil guardada.',{exact:true}).waitFor();
+  assert.equal(await profilePage.getByRole('img',{name:'Laureles:',exact:false}).count(),0);
+  pass('Primer avance certifica Sheetout al 100% en capacitación y en el perfil, conserva notas normales y todavía no otorga laureles');
   const reopen = async () => {
     await admin.getByRole('button',{name:'Participantes',exact:true}).click();
     await admin.getByRole('button',{name:'Autorizar reintento',exact:true}).click();
@@ -171,6 +192,7 @@ try {
   assert.equal(await admin.getByRole('button',{name:'GUARDAR EVALUACIÓN',exact:true}).isDisabled(),true);
   await admin.getByLabel('Motivo obligatorio',{exact:true}).fill('Manipulación insegura: prueba E2E');
   assert.equal((await save(criticalId,false)).points_awarded,0);
+  assert.deepEqual((await read('staff_profiles',{id:rivalEntry.staff_id}))[0].competition_recognition.certifications,{});
   pass('Error crítico con motivo obligatorio rechaza calidad 100 y otorga cero puntos');
   await reopen();
   const lowId=await open('Rival Demo','Clasificación'); await stop(); await fillQuality(89);
@@ -206,6 +228,19 @@ try {
   await admin.getByRole('combobox',{name:'Área del fixture',exact:true}).selectOption({label:'Sheetout'});
   await admin.getByRole('button',{name:'Resolver final / declarar campeón',exact:true}).click();
   await until(async()=>(await read('competition_entries',{id:mainEntry.id}))[0].status==='champion','Campeón');
+  assert.deepEqual((await read('staff_profiles',{id:mainEntry.staff_id}))[0].competition_recognition.championships.map(x=>x.area_name),['Sheetout']);
+  await collaborator.getByRole('button',{name:'Fixture',exact:true}).click();
+  await collaborator.getByRole('combobox',{name:'Área del fixture',exact:true}).selectOption({label:'Sheetout'});
+  await collaborator.getByRole('img',{name:'Laureles: Campeón de Sheetout',exact:true}).first().waitFor();
+  await collaborator.locator('article.card.gold').getByRole('img',{name:'Foto de Colaboradora Demo',exact:true}).waitFor();
+  await collaborator.screenshot({path:`${output}/fixture-laureles.png`,fullPage:true});
+  await collaborator.getByRole('combobox',{name:'Área del fixture',exact:true}).selectOption({label:'Landing'});
+  assert.equal(await collaborator.getByRole('img',{name:'Laureles:',exact:false}).count(),0);
+  await profilePage.reload();
+  await profilePage.getByRole('img',{name:'Laureles: Campeón de Sheetout',exact:true}).waitFor();
+  await profilePage.setViewportSize({width:390,height:844});
+  await profilePage.screenshot({path:`${output}/perfil-campeona-mobile.png`,fullPage:true});
+  pass('Campeón muestra laureles sobre su foto en fixture, cruces y perfil móvil; otras áreas no reciben laureles');
   const verifyPoints = async (individual,trainer) => {
     assert.equal(Number((await read('competition_individual_ranking',{member_id:mainEntry.member_id}))[0].points),individual);
     assert.equal(Number((await read('competition_team_ranking',{team_id:mainEntry.team_id}))[0].points),individual);
@@ -229,6 +264,12 @@ try {
   await until(async()=>Number((await read('competition_individual_ranking',{member_id:mainEntry.member_id}))[0].points)===6,'Corrección recalcula puntos');
   await verifyPoints(6,3);
   assert.notEqual((await read('competition_entries',{id:mainEntry.id}))[0].status,'champion');
+  const corrected=(await read('staff_profiles',{id:mainEntry.staff_id}))[0].competition_recognition;
+  assert.equal(corrected.certifications.SHEETOUT,100);
+  assert.deepEqual(corrected.championships,[]);
+  await profilePage.reload();
+  await profilePage.getByRole('img',{name:'Foto de Colaboradora Demo',exact:true}).waitFor();
+  assert.equal(await profilePage.getByRole('img',{name:'Laureles:',exact:false}).count(),0);
   const correctedId=await open('Colaboradora Demo','Final'); await stop(); await fillQuality(100); await save(correctedId,true);
   await admin.getByRole('button',{name:'Fixture',exact:true}).click();
   await admin.getByRole('combobox',{name:'Área del fixture',exact:true}).selectOption({label:'Sheetout'});
@@ -238,16 +279,28 @@ try {
   const audits=await read('audit_log',{table_name:'competitions',record_id:id});
   assert.ok(audits.some(a=>a.new_data?.event==='correct'));
   pass('Corrección revoca resultado y campeón, recalcula puntos y permite repetir la final con auditoría');
+  await profilePage.reload();
+  await profilePage.getByRole('img',{name:'Laureles: Campeón de Sheetout',exact:true}).waitFor();
+  profilePage.once('dialog',dialog=>dialog.accept());
+  await profilePage.getByRole('button',{name:'Eliminar foto',exact:true}).click();
+  await profilePage.getByText('Foto eliminada.',{exact:true}).waitFor();
+  await profilePage.getByRole('img',{name:'Imagen predeterminada de Colaboradora Demo',exact:true}).waitFor();
+  assert.equal(await profilePage.getByRole('img',{name:'Laureles: Campeón de Sheetout',exact:true}).count(),1);
+  await profilePage.getByRole('region',{name:'Foto de perfil',exact:true}).screenshot({path:`${output}/perfil-campeona-sin-foto.png`});
+  await collaborator.getByRole('combobox',{name:'Área del fixture',exact:true}).selectOption({label:'Sheetout'});
+  await until(async()=>await collaborator.locator('article.card.gold').getByRole('img',{name:'Imagen predeterminada de Colaboradora Demo',exact:true}).count()===1,'Campeón sin foto conserva avatar predeterminado');
+  assert.equal(await collaborator.locator('article.card.gold').getByRole('img',{name:'Laureles: Campeón de Sheetout',exact:true}).count(),1);
   assert.deepEqual(errors,[]);
   pass('Sin errores de consola ni excepciones de la página');
   await writeFile(`${output}/resultado.json`,JSON.stringify({status:'PASS',scope:'React + PostgreSQL aislado; autenticación y transporte de prueba, sin mutaciones de producción',passed,errors},null,2));
   await writeFile(`${output}/informe.md`,[
     '# Evaluación del concurso — prueba E2E',
-    '', 'Resultado: **PASS**. Las 10 comprobaciones del navegador pasaron, sin errores de consola.',
+    '', `Resultado: **PASS**. Las ${passed.length} comprobaciones del navegador pasaron, sin errores de consola.`,
     '', 'Se usaron los componentes reales de React y las migraciones/comandos reales de PostgreSQL en PGlite. Las identidades, el transporte de Supabase y las notificaciones de actualización son adaptadores de prueba. Este resultado verifica el flujo de evaluación en un entorno aislado; no verifica el inicio de sesión real de Supabase ni la conexión y Realtime del despliegue de Firebase.',
     '', '## Comprobaciones', '', ...passed.map(name=>`- ${name}.`),
     '', '## Evidencia', '', '- [Evaluación en escritorio](evaluacion-desktop.png)',
     '- [Evaluación en móvil](evaluacion-mobile.png)', '- [Ranking del líder: 14 ÷ 2 = 7](ranking-lider.png)',
+    '- [Campeón sin foto: imagen predeterminada y laureles](perfil-campeona-sin-foto.png)',
     '- [Resultados estructurados](resultado.json)', '- [Traza de Playwright](trace.zip)', '',
   ].join('\n'));
   await context.tracing.stop({path:`${output}/trace.zip`});

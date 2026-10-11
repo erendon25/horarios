@@ -1,4 +1,5 @@
 import React from "react";
+import ProfileAvatar from '../ProfileAvatar';
 
 export default function CompetitionDraw({ entries, contest, statusLabel }) {
   const groups = new Map();
@@ -15,7 +16,7 @@ export default function CompetitionDraw({ entries, contest, statusLabel }) {
         {[...groups].map(([number, entrants]) => (
           <article className="card" key={number}>
             <h4>Cruce {number}</h4>
-            <ol>{entrants.map((e) => <li key={e.id}>Turno {e.seed_order}: <strong>{e.display_name}</strong> · {e.team_name} · {statusLabel(e.effective_status || e.status)}</li>)}</ol>
+            <ol>{entrants.map((e) => <li key={e.id} className="draw-person"><ProfileAvatar name={e.display_name} src={e.photo_url} size={40} championAreas={e.status==='champion'?[e.area_name]:[]}/><span>Turno {e.seed_order}: <strong>{e.display_name}</strong> · {e.team_name} · {statusLabel(e.effective_status || e.status)}</span></li>)}</ol>
           </article>
         ))}
       </div>

@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { MOTIVATIONAL_QUOTES } from "../constants/quotes";
 import ModalSelectorDePosiciones from "./ModalSelectorDePosiciones";
+import ProfilePhotoEditor from './ProfilePhotoEditor';
 
 const CollaboratorDashboard = () => {
   const { currentUser, logout, userRole, updatePassword } = useAuth();
@@ -550,6 +551,7 @@ const CollaboratorDashboard = () => {
             <User className="w-5 h-5 text-blue-600" />
             Información del Perfil
           </h2>
+          <ProfilePhotoEditor key={perfil.id} staffId={perfil.id} name={perfil.name || ''}/>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
               <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
@@ -800,7 +802,7 @@ const CollaboratorDashboard = () => {
               {perfil.skills && perfil.skills.length > 0 ? (
                 perfil.skills.map(s => (
                   <span key={s} className="px-4 py-2 bg-green-50 text-green-700 rounded-lg text-xs font-bold border border-green-200 flex items-center gap-2 shadow-sm">
-                    <CheckCircle className="w-4 h-4 text-green-500" /> {s}
+                    <CheckCircle className="w-4 h-4 text-green-500" /> {s}{perfil.competitionCertifications?.[s]===100?' · 100% por concurso':''}
                   </span>
                 ))
               ) : (

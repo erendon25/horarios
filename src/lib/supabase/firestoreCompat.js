@@ -1,5 +1,6 @@
 import { supabase } from "./client";
 import { mapSalesHistoryRow, salesHistoryDayPayload } from "./salesHistoryCompat";
+import { trainingRecognition } from '../../services/trainingRecognition';
 
 export const db = Object.freeze({ kind: "supabase-database" });
 export const getFirestore = () => db;
@@ -71,8 +72,7 @@ const mapStaff = (row) => ({
   lastEvaluationDate: row.last_evaluation_date,
   lastEvaluationScore: row.last_evaluation_score,
   lastStationEvaluated: row.last_station_evaluated,
-  trainingScores: row.training_scores ?? {},
-  skills: row.position_abilities ?? [],
+  ...trainingRecognition(row),
   positionAbilities: row.position_abilities ?? [],
   pendingHolidays: row.pending_holidays ?? [],
   linkedAt: row.linked_at,
@@ -512,6 +512,13 @@ async function persist(ref, data, merge) {
     }
   }
   let prepared = merge ? { ...previous, ...data } : { ...data };
+  if (root === 'staff_profiles' && merge) {
+    // A profile edit must not copy derived competition skills into manual training.
+    if (!Object.hasOwn(data, 'skills')) prepared.skills = previous.baseSkills ?? previous.skills;
+    if (!Object.hasOwn(data, 'trainingScores')) prepared.trainingScores = previous.baseTrainingScores ?? previous.trainingScores;
+    if (!Object.hasOwn(data, 'positionAbilities')) prepared.positionAbilities = prepared.skills;
+    for (const key of ['baseSkills','baseTrainingScores','competitionCertifications','championships']) delete prepared[key];
+  }
   if (["extra_hours", "feriados_trabajados", "schedule_requests"].includes(root)) {
     // staff_id y user_id son columnas uuid con FK. El identificador entrante
     // (staffId o uid) puede ser: el uuid del perfil, un user_id de auth, o un
@@ -550,7 +557,9 @@ async function persist(ref, data, merge) {
   }
   const isUuid = (value) => typeof value === "string"
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-  const columns = columnsFor(root, prepared, legacy(previous));
+  const columns = columnsFor(root, prepared, root === 'staff_profiles'
+    ? { ...legacy(previous), trainingScores: previous.baseTrainingScores ?? previous.trainingScores }
+    : legacy(previous));
   const entityWithUuid = ["staff_profiles", "stores", "users"].includes(root);
   let result;
   if (root === "users") {
@@ -640,7 +649,11 @@ export async function saveGeoVictoriaExtraHours(data) {
 export async function updateDoc(ref, data) {
   const current = await getDoc(ref);
   if (!current.exists()) throw new Error(`Documento no encontrado: ${ref.path}`);
-  return persist(ref, unwrapSpecialValues(data, current.data()), true);
+  const previous = current.data();
+  const base = ref.path.split('/')[0] === 'staff_profiles'
+    ? { ...previous, skills: previous.baseSkills ?? previous.skills, trainingScores: previous.baseTrainingScores ?? previous.trainingScores }
+    : previous;
+  return persist(ref, unwrapSpecialValues(data, base), true);
 }
 export async function addDoc(ref, data) {
   if (ref.path === "schedule_requests") {

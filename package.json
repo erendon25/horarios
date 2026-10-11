@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test:competition:e2e": "node scripts/test-competition-e2e.mjs",
     "prebuild": "node scripts/verify-env.mjs",
     "build": "vite build",
     "preview": "vite preview"

@@ -6,6 +6,10 @@
   font-family: inherit;
   padding: 24px;
 }
+.competition .fixture-person,
+.competition .draw-person { display: flex; align-items: center; gap: 10px; }
+.competition .fixture-person h3 { margin: 0; overflow-wrap: anywhere; }
+.competition .draw-person { margin: 10px 0; }
 .competition * {
   box-sizing: border-box;
 }

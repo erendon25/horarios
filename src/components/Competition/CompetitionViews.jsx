@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import CompetitionDraw from "./CompetitionDraw";
+import ProfileAvatar from '../ProfileAvatar';
 import {
   evaluationOutcome,
   formatCompetitionTime,
@@ -212,7 +213,7 @@ export function Fixture({ data, admin, contest, execute }) {
                   );
                 return (
                   <article className="card" key={entry.id}>
-                    <h3>{entry.display_name}</h3>
+                    <div className="fixture-person"><ProfileAvatar name={entry.display_name} src={entry.photo_url} championAreas={entry.status==='champion'?[entry.area_name]:[]}/><h3>{entry.display_name}</h3></div>
                     <p className="muted">{entry.team_name}</p>
                     {last ? (
                       <>
@@ -249,7 +250,7 @@ export function Fixture({ data, admin, contest, execute }) {
             .filter((x) => x.status === "champion")
             .map((x) => (
               <article className="card gold" key={x.id}>
-                <h3>★ {x.display_name}</h3>
+                <div className="fixture-person"><ProfileAvatar name={x.display_name} src={x.photo_url} championAreas={[x.area_name]}/><h3>★ {x.display_name}</h3></div>
                 <p>{x.team_name}</p>
                 <p>+{x.champion_points} puntos de campeón</p>
               </article>
@@ -287,7 +288,7 @@ export function Rankings({ data }) {
           </button>
         ))}
       </div>
-      {view === 'trainers' && <p className="notice">Puntos del líder = puntos totales del equipo ÷ cantidad de colaboradores asignados. El líder no se cuenta como integrante; un equipo vacío tiene 0 puntos.</p>}
+      {view === 'trainers' && <p className="notice">Puntos del líder = puntos totales del equipo ÷ cantidad de colaboradores asignados. Se incluyen integrantes con cero puntos y fuera de competencia. El líder no se cuenta como integrante; un equipo vacío tiene 0 puntos. El orden usa el promedio sin redondear y los promedios iguales comparten posición.</p>}
       <div className="card table-wrap">
         <table>
           <thead>
@@ -337,7 +338,9 @@ export function Rankings({ data }) {
                 ))
               : teamRows.map((r, i) => (
                   <tr key={r.team_id}>
-                    <td>{i + 1}</td>
+                    <td>{view === "trainers"
+                      ? teamRows.findIndex((leader) => Number(leader.points) === Number(r.points)) + 1
+                      : i + 1}</td>
                     <td>{view === "teams" ? r.team_name : r.trainer_name}</td>
                     <td>{view === "teams" ? r.trainer_name : r.team_name}</td>
                     {data.phases

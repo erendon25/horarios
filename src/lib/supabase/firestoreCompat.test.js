@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import { trainingRecognition } from '../../services/trainingRecognition.js';
 
 // Ejecutar con node --experimental-vm-modules --test. Se prueba la capa real
 // con un cliente aislado, sin crear solicitudes en la base de producción.
@@ -10,6 +11,9 @@ async function loadCompat(client) {
   const source = await readFile(new URL('./firestoreCompat.js', import.meta.url), 'utf8');
   const module = new vm.SourceTextModule(source, { context });
   await module.link((specifier) => {
+    if (specifier === '../../services/trainingRecognition') {
+      return new vm.SyntheticModule(['trainingRecognition'],function(){this.setExport('trainingRecognition',trainingRecognition)},{context});
+    }
     if (specifier === './client') {
       return new vm.SyntheticModule(['supabase'], function () {
         this.setExport('supabase', client);
@@ -34,6 +38,30 @@ const request = {
   date: '2026-09-19', shiftType: 'apertura',
   startTime: null, endTime: null, reason: 'Prueba aislada', status: 'pending',
 };
+
+test('guardar capacitación no convierte reconocimientos del concurso en habilidades manuales',async()=>{
+  let row={id:'22222222-2222-4222-8222-222222222222',store_id:'33333333-3333-4333-8333-333333333333',first_name:'Ana',position_abilities:['VESTIDO'],training_scores:{LANDING:72,VESTIDO:96},competition_recognition:{certifications:{LANDING:100},championships:[]}};
+  const compat=await loadCompat({
+    auth:{getSession:async()=>({data:{session:null}})},
+    from(table){
+      assert.equal(table,'staff_profiles');
+      const query={select(){return query},eq(){return query},then(resolve){return Promise.resolve({data:[row],error:null}).then(resolve)}};
+      return {...query,upsert(columns){row={...row,...JSON.parse(JSON.stringify(columns))};return {select(){return {single:async()=>({data:{id:row.id},error:null})}}}}};
+    },
+  });
+  const ref=compat.doc(compat.db,'staff_profiles',row.id);
+  await compat.updateDoc(ref,{'trainingScores.SHEETOUT':94,skills:compat.arrayUnion('SHEETOUT')});
+  assert.deepEqual(row.training_scores,{LANDING:72,VESTIDO:96,SHEETOUT:94});
+  assert.deepEqual(row.position_abilities,['VESTIDO','SHEETOUT']);
+  const mapped=(await compat.getDoc(ref)).data();
+  assert.equal(mapped.trainingScores.LANDING,100);
+  assert.ok(mapped.skills.includes('LANDING'));
+  await compat.updateDoc(ref,{lastEvaluationScore:94});
+  assert.deepEqual(row.training_scores,{LANDING:72,VESTIDO:96,SHEETOUT:94});
+  assert.deepEqual(row.position_abilities,['VESTIDO','SHEETOUT']);
+  row.competition_recognition={certifications:{},championships:[]};
+  assert.equal((await compat.getDoc(ref)).data().trainingScores.LANDING,72);
+});
 
 const extraHours = {
   ...request, uid: null, fecha: '2026-09-20',

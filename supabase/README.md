@@ -16,6 +16,10 @@ El proyecto activo de Supabase ya fue creado y el esquema, la importación y el 
 
 Las futuras modificaciones deben aplicarse como migraciones y mantener estos archivos declarativos alineados con producción.
 
+Pendiente de instalar: `migrations/20261011061804_staff_profile_photos.sql`, para foto propia y bucket privado del fixture. Implementación, pruebas y verificación del despliegue en [Fotos de perfil](../docs/CONCURSO.md#fotos-de-perfil).
+
+Después instalar `migrations/20261011063222_competition_profile_recognition.sql`: laureles por campeonato y certificación al 100% por avance oficial, con recálculo ante correcciones y conservación de la capacitación independiente. Ver [Laureles y certificación automática](../docs/CONCURSO.md#laureles-y-certificación-automática). Ambas migraciones están probadas localmente; el acceso CLI disponible no incluye el proyecto de producción configurado.
+
 El procedimiento de rate limiting, alertas, backup y recuperación se mantiene en `operations/PRODUCTION_RUNBOOK.md`; la verificación posterior a una restauración está en `operations/recovery/verify_restore.sql`.
 
 La Edge Function `staff-account-admin` requiere el secreto `APP_URL` con la URL pública de Next.js. Hasta configurarlo no enviará invitaciones, evitando enlaces que redirijan por error a la aplicación Firebase anterior.

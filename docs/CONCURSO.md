@@ -56,6 +56,10 @@ Una fecha de cese futura permite inscribir y evaluar al colaborador hasta el fin
 
 ## Uso
 
+El ranking de líderes usa el promedio de puntos por integrante: total del equipo dividido entre todos sus integrantes, incluidos quienes tienen cero puntos o están fuera de competencia. La plantilla no se puede editar mientras el concurso esté activo ni volver a borrador una vez registrados intentos; los ceses conservan la pertenencia al equipo. Un equipo sin integrantes muestra cero. El promedio se presenta con hasta dos decimales y se ordena sin redondear; los promedios iguales comparten posición. Los puntos individuales y el ranking de equipos siguen usando sus totales. Este cálculo se realiza en la vista del servidor incorporada por la migración de promedio por líder.
+
+Para igualar oportunidades, cada integrante debe tener acceso al mismo número de áreas y las áreas deben ofrecer los mismos puntos de fase y bono. El promedio corrige la diferencia de tamaño de plantilla; no corrige diferencias en oportunidades de inscripción.
+
 1. Entrar en **CONCURSO** desde el panel administrativo, o **MI CONCURSO** desde el panel personal. Ruta: `/concurso`.
 2. Crear concurso y seleccionar su tienda. En Equipos, preparar un equipo por cada trainer vigente o crear equipos y sortear integrantes seleccionados. Las asociaciones se guardan juntas en una transacción.
 3. Publicar el concurso al equipo para que cada colaborador elija hasta 2 áreas desde Inscripción. Consultar las elecciones en Participantes. Configurar tiempos máximos y rúbricas en Áreas, y calendario, pausas y fases en Configuración.
@@ -78,6 +82,32 @@ Actualizaciones del 30/09/2026: inscripción y sorteo (`20260930000609`), public
 La configuración de Firebase Hosting permanece igual. El frontend se compila con `npm run build` y se publica mediante el procedimiento existente: `firebase deploy --only hosting:lc-scheduler`. Esta implementación no publica automáticamente el frontend.
 
 ## Verificación reproducible
+
+Verificación del 11/10/2026: publicación desde el panel, inscripción, fixture, resultados y ocultación aprobados en navegador con datos aislados. Véase [Prueba del recorrido del colaborador](PRUEBA_CONCURSO_COLABORADOR.md) para resultados, capturas y el comando `npm run test:competition:e2e`.
+
+### Fotos de perfil
+
+El panel del colaborador permite elegir, previsualizar, guardar, cambiar y eliminar su foto desde **Información del Perfil → Foto de perfil**. Acepta JPG, PNG y WebP de hasta 10 MB; la aplicación recorta al centro y prepara una imagen JPEG cuadrada de 512 px. El fixture muestra la foto en cruces, fases y campeón. Si no hay foto o no se puede cargar, muestra una silueta de persona predeterminada, incorporada en el componente y sin solicitudes adicionales de red.
+
+La migración `20261011061804_staff_profile_photos.sql` crea el bucket privado `profile-photos` (2 MB por archivo), la tabla `staff_profile_photos` y la RPC `set_own_profile_photo`. La RPC obtiene el colaborador de la sesión; el cliente no elige qué perfil modificar. Las políticas permiten escritura únicamente en `<auth.uid()>/profile.jpg`. Las lecturas se permiten al propietario, responsables autorizados o participantes de la misma tienda cuando el perfil pertenece a un concurso visible. Los enlaces firmados duran una hora; enlaces ya emitidos conservan su vigencia hasta expirar. Los reemplazos mantienen el archivo y actualizan la versión del enlace para evitar fotos en caché o romper otras pestañas. Una incidencia de Storage no bloquea la lectura del concurso.
+
+**Pendiente en producción:** aplicar esta migración al proyecto configurado `nwwnnnjppycdrbeuzhnf`, verificarla y desplegar el frontend actualizado. La sesión de gestión disponible en esta máquina solo lista otro proyecto; no se modificó ninguno. El bucket y las políticas se probaron con PostgreSQL/PGlite y un transporte Storage aislado que sirve archivos reales, no contra el servidor Storage de producción.
+
+Verificar después de aplicar la migración:
+
+```sql
+select id, public, file_size_limit, allowed_mime_types
+from storage.buckets where id = 'profile-photos';
+select relrowsecurity from pg_class
+where oid = 'public.staff_profile_photos'::regclass;
+select has_table_privilege('authenticated', 'public.staff_profile_photos', 'SELECT') as can_read,
+       has_table_privilege('authenticated', 'public.staff_profile_photos', 'INSERT,UPDATE,DELETE') as direct_writes;
+select policyname, cmd from pg_policies
+where (schemaname = 'public' and tablename = 'staff_profile_photos')
+   or (schemaname = 'storage' and tablename = 'objects' and policyname like 'profile_photos_%');
+```
+
+Prueba de permisos y RPC: `node scripts/test-profile-photos.mjs` con `PGLITE_MODULE`. Pruebas de validación y fallos de red: `node --test src/services/profilePhoto.test.js`. E2E: `npm run test:competition:e2e`. Capturas de la foto: `output/collaborator-e2e/11-panel-foto.png` y `12-fixture-foto.png`.
 
 Pruebas JS, incluidas las existentes que usan módulos VM:
 
@@ -104,6 +134,31 @@ Abrir `http://127.0.0.1:4178/concurso`; una pestaña con `?role=collaborator` us
 Pruebas SQL: permisos por rol y tienda, denegación de escritura directa, límite de áreas, calidad 89/90/100/101, error crítico, tiempo excedido, recuperación del cronómetro, rechazo de segundo inicio, pausa/reanudación, cancelación, idempotencia, total de 14 puntos, corrección y recálculo, empate exacto, desempate fallido y nueva ronda, exclusión de no empatados y ausencia de puntos repetidos en desempates.
 
 Verificación en navegador local: recarga durante cronómetro, segunda pestaña recuperando el mismo intento sin botón de inicio duplicado, bloqueo de navegación con evaluación pendiente, parada y guardado de 96/100 con +1 punto, avance de Clasificación a Fase 2 en fixture, ranking y panel de colaborador sin controles administrativos. La prueba funcional usa RPC PostgreSQL reales en PGlite; no demuestra una sesión Auth/Realtime real de producción. En remoto se verificaron RLS, grants, wrappers invoker, funciones privadas, vistas invoker y publicación Realtime. Una prueba que pretendía usar una identidad administrativa real fue rechazada por revisión automática y no se ejecutó; se sustituyó por verificación remota de solo lectura.
+
+## Laureles y certificación automática
+
+La migración `20261011063222_competition_profile_recognition.sql` registra reconocimientos derivados de los resultados oficiales. Al guardar una evaluación aprobada que permite avanzar (incluida la clasificación), el colaborador obtiene certificación al **100% en esa estación**. No basta con inscribirse, iniciar el cronómetro o tener una evaluación pendiente. Un rechazo, error crítico o tiempo excedido no certifica.
+
+El sistema de evaluación distingue estaciones dentro de Servicio/Producción; no certifica automáticamente las demás estaciones del grupo. La correspondencia con las siete áreas del concurso es:
+
+| Área del concurso | Estación de capacitación |
+| --- | --- |
+| Landing / Landing Crazy | LANDING |
+| Vestido | VESTIDO |
+| Sheetout | SHEETOUT |
+| Masa | PREPARACION |
+| Drive Thru | TRAFICO |
+| Servicio | SERVICIO |
+
+Capacitación y el panel personal combinan la certificación del concurso con las habilidades normales. Las notas y evaluaciones firmadas originales se conservan: el concurso no inventa firmas ni modifica sus resultados. La implementación de Next.js también reconoce estas estaciones en su módulo de capacitación.
+
+Al **declarar campeón del área**, aparecen laureles dorados alrededor de su foto (o de la silueta predeterminada si no tiene foto) en el fixture, los cruces y el perfil. El perfil indica las áreas ganadas; el fixture muestra laureles únicamente en el área correspondiente. Llegar a la final certifica, pero no otorga laureles hasta declarar el campeón.
+
+Corregir una final retira los laureles; las aprobaciones anteriores válidas mantienen la certificación. Si se invalidan todas las aprobaciones oficiales de esa estación, se retira únicamente la certificación procedente del concurso y vuelven a verse las notas y habilidades independientes. Una aprobación válida de otro concurso también conserva el 100%. La migración incluye los avances y campeones ya existentes y protege el campo derivado contra valores inventados por clientes.
+
+Validación: `scripts/test-competition-recognition.mjs` ejecuta la migración y las RPC reales en PostgreSQL aislado. `scripts/verify-competition-evaluation-ui.mjs` comprueba capacitación al 100%, foto real con laureles en fixture/perfil móvil, ausencia de laureles en otras áreas y retirada tras una corrección.
+
+**Pendiente en producción:** instalar primero `20261011061804_staff_profile_photos.sql`, después `20261011063222_competition_profile_recognition.sql` y desplegar el frontend. El proyecto configurado es `nwwnnnjppycdrbeuzhnf`; la sesión CLI disponible no tiene acceso a ese proyecto. Las pruebas son locales y no modifican concursos reales.
 
 ## Límites y decisiones que importan
 

@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabase/client";
+import { profilePhotoUrls } from './profilePhoto';
 
 export async function hasPublishedCompetition(storeId) {
   const { data, error } = await supabase
@@ -70,6 +71,9 @@ export async function readCompetition(id, admin = false) {
     ]),
   );
   const bundle = Object.fromEntries(result);
+  // Photos are optional; a storage failure must not block the competition.
+  const photos = await profilePhotoUrls(supabase,bundle.entries.map(e=>e.staff_id)).catch(()=>new Map());
+  bundle.entries = bundle.entries.map(entry=>({...entry,photo_url:photos.get(entry.staff_id)||null}));
   const currentTeams = new Map(bundle.teams.map((team) => [team.id, team]));
   for (const key of ['entries', 'individual', 'teamRanking', 'trainerRanking']) {
     bundle[key] = bundle[key].map((row) => {

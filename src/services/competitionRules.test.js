@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  competitionLeaderRanking,
   evaluationOutcome,
   formatCompetitionTime,
   timerElapsed,
@@ -19,6 +20,19 @@ test('three current trainers prepare exactly three teams without fixed names', (
   })));
   assert.equal(buildCompetitionTeamTemplate(staff.slice(1)).length, 2);
   assert.deepEqual(buildCompetitionTeamTemplate([]), []);
+});
+test("leaders rank by average including zero scorers, rather than team total", () => {
+  const teams = [
+    { team_id: "a", members: 6, points: 60 },
+    { team_id: "b", members: 4, points: 44 },
+    { team_id: "c", members: 0, points: 0 },
+    { team_id: "d", members: 2, points: 20 },
+  ];
+  const ranking = competitionLeaderRanking(teams);
+  assert.deepEqual(ranking.map((r) => r.team_id), ["b", "a", "d", "c"]);
+  assert.deepEqual(ranking.map((r) => r.average_points), [11, 10, 10, 0]);
+  assert.equal(teams[0].average_points, undefined);
+  assert.equal(competitionLeaderRanking([{ team_id: "z", members: "6", points: "14" }])[0].average_points, 14 / 6);
 });
 test("time formatting retains centiseconds and supports long durations", () => {
   assert.equal(formatCompetitionTime(42370), "00:42.37");

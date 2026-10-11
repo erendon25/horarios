@@ -31,12 +31,19 @@ async function loadStores() {
 async function loadData(storeId: string) {
   const supabase = createClient();
   const [people, evaluations] = await Promise.all([
-    supabase.from("staff_profiles").select("id,store_id,first_name,last_name,position,status,cessation_date,staff_skills(skill_code)").eq("store_id", storeId).order("first_name"),
+    supabase.from("staff_profiles").select("id,store_id,first_name,last_name,position,status,cessation_date,competition_recognition,staff_skills(skill_code)").eq("store_id", storeId).order("first_name"),
     supabase.from("training_evaluations").select("id,staff_id,store_id,trainer_id,evaluation_date,area,station_code,station_name,score,responses,feedback,general_findings,status,current_step,collaborator_signature_path,trainer_signature_path,is_edited,created_at,updated_at").eq("store_id", storeId).order("evaluation_date", { ascending: false }).order("id", { ascending: false }),
   ]);
   if (people.error) throw people.error;
   if (evaluations.error) throw evaluations.error;
-  const allStaff = (people.data ?? []).map((person) => ({ ...person, skills: (person.staff_skills ?? []).map((skill) => skill.skill_code) })) as Staff[];
+  const allStaff = (people.data ?? []).map((person) => {
+    const recognition=record<Json>(person.competition_recognition);
+    const certifications=record<number>(recognition.certifications ?? null);
+    return { ...person, skills: [...new Set([
+      ...(person.staff_skills ?? []).map((skill) => skill.skill_code),
+      ...Object.keys(certifications).filter(key=>certifications[key]===100),
+    ])] };
+  }) as Staff[];
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
   return { staff: allStaff.filter((person) => isCurrentStaff({ ...person, modality: null }, today)), allStaff, evaluations: (evaluations.data ?? []) as Evaluation[] };
 }

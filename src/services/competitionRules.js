@@ -1,4 +1,16 @@
 export const COMPETITION_AREAS = ['Landing', 'Landing Crazy', 'Vestido', 'Sheetout', 'Masa', 'Drive Thru', 'Servicio'];
+export function competitionLeaderRanking(teams) {
+  return teams
+    .map((team) => ({
+      ...team,
+      average_points: Number(team.members) > 0
+        ? Number(team.points) / Number(team.members)
+        : 0,
+    }))
+    .sort((a, b) => b.average_points - a.average_points ||
+      String(a.team_id).localeCompare(String(b.team_id)));
+}
+
 export function formatCompetitionTime(ms) {
   const value = Math.max(0, Math.floor(Number(ms) || 0));
   return `${String(Math.floor(value / 60000)).padStart(2, "0")}:${String(Math.floor(value / 1000) % 60).padStart(2, "0")}.${String(Math.floor(value / 10) % 100).padStart(2, "0")}`;
