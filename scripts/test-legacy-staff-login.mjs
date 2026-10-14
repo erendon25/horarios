@@ -9,6 +9,7 @@ const compiled = (await transform(source, { loader: 'ts', format: 'esm' })).code
 async function run(options = {}) {
   let handler;
   const calls = [];
+  const logs = [];
   const approval = { approval_id: 'approval', staff_id: 'staff', firebase_uid: 'legacy', email: 'person@example.test', user_id: options.resumable ? 'created' : null };
   let preparations = 0;
   const service = {
@@ -28,15 +29,17 @@ async function run(options = {}) {
   };
   vm.runInNewContext(compiled, {
     Deno: { env: { get: () => 'configured' }, serve: fn => { handler = fn; } },
+    console: { warn: message => logs.push(message) },
     createClient: () => service, Response, AbortSignal,
     async fetch(url, init) {
       calls.push({ name: 'firebase', url, body: JSON.parse(init.body) });
       if (options.network) throw Error('network');
+      if (options.providerCode) return new Response(JSON.stringify({ error: { message: options.providerCode } }), { status: options.providerStatus || 400 });
       return new Response(JSON.stringify({ localId: options.otherUid ? 'someone-else' : 'legacy', email: options.otherEmail ? 'else@example.test' : 'person@example.test' }), { status: options.invalid || options.disabled ? 400 : 200 });
     },
   });
   const response = await handler(new Request('https://example.test', { method: options.method || 'POST', body: options.method ? undefined : options.raw || JSON.stringify({ email: ' Person@Example.Test ', password: 'Only a synthetic test password' }) }));
-  return { status: response.status, body: response.status === 204 ? null : await response.json(), calls };
+  return { status: response.status, body: response.status === 204 ? null : await response.json(), calls, logs };
 }
 for (const options of [{}, { resumable: true }, { concurrent: true }]) {
   const result = await run(options);
@@ -60,6 +63,21 @@ for (const options of [{ invalid: true }, { disabled: true }, { otherUid: true }
   if (options.limited || options.unapproved || options.prepareError || options.limitError) assert.equal(result.calls.some(c => c.name === 'firebase'), false);
 }
 for (const options of [{ createError: true }, { completeError: true }]) assert.equal((await run(options)).status, 503);
+for (const [code, status] of [['INVALID_LOGIN_CREDENTIALS',401], ['USER_DISABLED',401], ['TOO_MANY_ATTEMPTS_TRY_LATER',429], ['OPERATION_NOT_ALLOWED',503], ['API_KEY_INVALID',503]]) {
+  const result = await run({ providerCode: code });
+  assert.equal(result.status,status);
+  assert.equal(result.calls.some(c => ['createUser','complete_approved_legacy_staff_login'].includes(c.name)),false);
+  assert.deepEqual(JSON.parse(result.logs[0]),{event:'legacy_staff_login_denied',stage:'legacy_password_verification',approval_id:'approval',provider_code:code});
+}
+assert.equal((await run({providerStatus:403,providerCode:'UNRECOGNIZED'})).status,503);
+assert.equal((await run({providerStatus:500,providerCode:'UNRECOGNIZED'})).status,503);
+for(const options of [{providerCode:'Sensitive synthetic provider text'}, {otherUid:true}, {otherEmail:true}, {unapproved:true}]) {
+  const result=await run(options);
+  assert.equal(result.status,401);
+  const log=result.logs.join('\n');
+  assert.ok(!log.includes('Synthetic') && !log.includes('synthetic') && !log.includes('person@example.test'));
+  assert.equal(JSON.parse(result.logs[0]).stage,options.providerCode?'legacy_password_verification':options.unapproved?'approval_not_ready':'legacy_identity_mismatch');
+}
 assert.equal((await run({ method: 'GET' })).status, 405);
 assert.equal((await run({ method: 'OPTIONS' })).status, 204);
 assert.equal((await run({ raw: JSON.stringify({ email: 'person@example.test', password: '123' }) })).status, 400);

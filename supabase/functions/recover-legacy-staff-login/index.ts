@@ -12,6 +12,17 @@ const reply = (status: number, recovered = false) => new Response(JSON.stringify
 // Firebase Web SDK public configuration for lc-scheduler; this is not an admin key.
 const firebaseKey = "AIzaSyDumwsFqGDE4esA-kB_51yrhTl38DeqDTs";
 const normalizeEmail = (value: unknown) => typeof value === "string" ? value.trim().toLowerCase() : "";
+const providerCodes = new Set([
+  "INVALID_LOGIN_CREDENTIALS", "INVALID_PASSWORD", "EMAIL_NOT_FOUND", "USER_DISABLED",
+  "TOO_MANY_ATTEMPTS_TRY_LATER", "OPERATION_NOT_ALLOWED", "API_KEY_INVALID",
+  "INVALID_API_KEY", "PROJECT_NOT_FOUND", "CREDENTIAL_MISMATCH",
+]);
+const diagnose = (stage: string, approvalId: string | null, providerCode?: string) => {
+  // Only operational categories and the private approval reference. Never log
+  // request bodies, passwords, email addresses, Firebase responses or tokens.
+  console.warn(JSON.stringify({ event: "legacy_staff_login_denied", stage,
+    approval_id: approvalId, ...(providerCode ? { provider_code: providerCode } : {}) }));
+};
 
 // Custom authentication: prove the approved legacy identity with its actual password.
 // No signup by arbitrary email, password resets, emails, or password/token logging.
@@ -32,7 +43,10 @@ Deno.serve(async (req: Request) => {
     const prepared = await service.rpc("prepare_approved_legacy_staff_login", { p_email: email });
     if (prepared.error) return reply(503);
     const approval = prepared.data;
-    if (!approval) return reply(401);
+    if (!approval) {
+      diagnose("approval_not_ready", null);
+      return reply(401);
+    }
     const limit = await service.rpc("consume_rate_limit", {
       p_bucket_key: `legacy-staff-login:${approval.approval_id}`,
       p_max_requests: 5,
@@ -45,9 +59,22 @@ Deno.serve(async (req: Request) => {
       body: JSON.stringify({ email, password, returnSecureToken: true }),
       signal: AbortSignal.timeout(10000),
     });
-    if (!verified.ok) return reply(401);
+    if (!verified.ok) {
+      const failure = await verified.json().catch(() => null);
+      const message = typeof failure?.error?.message === "string" ? failure.error.message.split(" : ")[0] : "";
+      const code = providerCodes.has(message) ? message : "UPSTREAM_REJECTED";
+      diagnose("legacy_password_verification", approval.approval_id, code);
+      if (verified.status >= 500 || verified.status === 403
+        || ["OPERATION_NOT_ALLOWED", "API_KEY_INVALID", "INVALID_API_KEY", "PROJECT_NOT_FOUND", "CREDENTIAL_MISMATCH"].includes(code)) {
+        return reply(503);
+      }
+      return reply(code === "TOO_MANY_ATTEMPTS_TRY_LATER" ? 429 : 401);
+    }
     const legacy = await verified.json();
-    if (legacy.localId !== approval.firebase_uid || normalizeEmail(legacy.email) !== email) return reply(401);
+    if (legacy.localId !== approval.firebase_uid || normalizeEmail(legacy.email) !== email) {
+      diagnose("legacy_identity_mismatch", approval.approval_id);
+      return reply(401);
+    }
     let userId = approval.user_id;
     if (!userId) {
       const created = await service.auth.admin.createUser({
