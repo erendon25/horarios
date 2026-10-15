@@ -52,7 +52,7 @@ try {
   await login(admin);
   await command(contest.id,'status',{status:'active'});
   await login(leader.account);
-  await assert.rejects(()=>command(contest.id,'register',{area_id:area}),/inscripciones están cerradas/);
+  await assert.rejects(()=>command(contest.id,'register',{area_id:area}),/Los líderes de equipo no se inscriben/);
   await assert.rejects(()=>scalar("select private.competition_command_before_publication($1,'register',$2::jsonb)",[contest.id,JSON.stringify({area_id:area})]),/permission denied/);
-  console.log('PASS: líderes sin inscripción ni suplantación, incluso con rol distinto o vínculo histórico; seguimiento, colaboradores, ranking y cierre al activar conservados.');
+  console.log('PASS: líderes sin inscripción ni suplantación, incluso con rol distinto o vínculo histórico; seguimiento, colaboradores, ranking y exclusión de líderes durante el concurso activo conservados.');
 } finally { await db.close(); }

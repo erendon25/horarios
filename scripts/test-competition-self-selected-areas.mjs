@@ -52,7 +52,7 @@ try {
   await login(admin);
   await cmd(c.id,'status',{status:'active'});
   await login(people[0].account);
-  await assert.rejects(()=>cmd(c.id,'withdraw',{area_id:areas[1].id}),/inscripciones están cerradas/);
-  await assert.rejects(()=>cmd(c.id,'register',{area_id:areas[0].id}),/inscripciones están cerradas/);
-  console.log('PASS: siete áreas incluyendo Sheetout, elección por sesión propia, máximo dos, sin duplicados, cambio de elección en borrador, publicación y cierre al activar.');
+  await assert.rejects(()=>cmd(c.id,'withdraw',{area_id:areas[1].id}),/no se pueden retirar/);
+  await assert.rejects(()=>cmd(c.id,'register',{area_id:areas[0].id}),/Límite de áreas/);
+  console.log('PASS: siete áreas incluyendo Sheetout, elección por sesión propia, máximo dos, sin duplicados, cambio de elección en preparación, publicación y límite durante la competencia.');
 } finally { await db.close(); }

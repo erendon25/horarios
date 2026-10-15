@@ -75,5 +75,6 @@ create table public.staff_profiles(id uuid primary key default gen_random_uuid()
     await readFile(new URL('../supabase/migrations/20261011070918_score_time_in_all_competition_areas.sql', import.meta.url), 'utf8'),
   );
   await db.exec(await readFile(new URL('../supabase/migrations/20261011131719_competition_leaders_followup_only.sql', import.meta.url), 'utf8'));
+  await db.exec(await readFile(new URL('../supabase/migrations/20261015214140_competition_active_area_registration.sql', import.meta.url), 'utf8'));
   return db;
 }

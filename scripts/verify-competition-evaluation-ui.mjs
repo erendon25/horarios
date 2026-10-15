@@ -63,14 +63,14 @@ try {
   }
   pass('Inscripción propia en Sheetout y Landing, tercera área bloqueada y colaborador sin controles de evaluación');
   await admin.getByRole('button',{name:'Activar concurso',exact:true}).click();
-  await admin.getByRole('button',{name:'Reabrir inscripciones',exact:true}).waitFor();
+  await admin.getByRole('button',{name:'Volver a preparación',exact:true}).waitFor();
   const contest=(await read('competitions',{id}))[0];
   assert.equal(contest.status,'active'); assert.ok(contest.drawn_at);
   await collaborator.reload();
   await collaborator.getByRole('button',{name:'Inscripción',exact:true}).click();
-  await collaborator.getByText('Inscripciones cerradas.',{exact:false}).waitFor();
+  await collaborator.getByText('El concurso está activo.',{exact:false}).waitFor();
   assert.equal(await collaborator.getByRole('button',{name:'Retirar mi inscripción'}).count(),0);
-  pass('Activación, sorteo persistido y cierre de inscripción');
+  pass('Activación, sorteo persistido e inscripciones confirmadas protegidas');
   const sheetout=(await read('competition_areas',{competition_id:id,name:'Sheetout'}))[0];
   const entries=await read('competition_fixture_view',{competition_id:id,area_id:sheetout.id});
   const mainEntry=entries.find(e=>e.display_name==='Colaboradora Demo');

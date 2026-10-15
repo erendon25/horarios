@@ -7,11 +7,11 @@ export default function CompetitionDraw({ entries, contest, statusLabel }) {
     if (!groups.has(e.draw_group)) groups.set(e.draw_group, []);
     groups.get(e.draw_group).push(e);
   });
-  if (!groups.size) return <p className="notice">El sorteo del orden y los cruces se genera al activar el concurso, después de cerrar las inscripciones. Mínimo {contest.minimum_participants_per_area || 2} inscritos elegibles por área.</p>;
+  if (!groups.size) return <p className="notice">El sorteo del orden y los cruces se genera al activar el concurso. Las inscripciones posteriores se añaden al final del orden. Mínimo {contest.minimum_participants_per_area || 2} inscritos elegibles por área.</p>;
   return (
     <section className="card">
       <h3>Cruces y orden sorteado</h3>
-      <p className="muted">Los cruces organizan las evaluaciones. Cada persona avanza al cumplir calidad y tiempo; la comparación final decide el campeón. Si el total es impar, el último cruce reúne tres personas.</p>
+      <p className="muted">Los cruces organizan las evaluaciones. Cada persona avanza al cumplir calidad y tiempo; la comparación final decide el campeón. Los nuevos inscritos se añaden al final sin reordenar a los participantes anteriores.</p>
       <div className="grid">
         {[...groups].map(([number, entrants]) => (
           <article className="card" key={number}>

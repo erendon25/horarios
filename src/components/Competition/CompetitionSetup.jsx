@@ -264,7 +264,7 @@ export function Participants({ data, contest, execute }) {
         No hay límite de integrantes de cada equipo por área. Se necesitan al menos
         {" "}{contest.minimum_participants_per_area || 2} inscritos elegibles por
         área para activar. Los colaboradores pueden inscribirse desde su panel
-        mientras el concurso está en borrador.
+        también durante el concurso, si el área sigue en su fase inicial.
       </p>
       <div className="grid">
         {data.members.map((m) => {
@@ -547,8 +547,9 @@ export function Configuration({ data, contest, execute }) {
         </p>
         <p className="muted">
           Publicar muestra Mi concurso a todo el equipo de la tienda. Las
-          inscripciones permanecen abiertas hasta activar el concurso.
-          Activarlo cierra las inscripciones y sortea el orden de competencia.
+          inscripciones se permiten en preparación y durante la competencia,
+          mientras el área siga en su fase inicial. Al activar se sortea el orden;
+          las nuevas inscripciones se añaden al final.
         </p>
         <button
           className={contest.published_at ? undefined : 'primary'}
@@ -703,7 +704,8 @@ export function Configuration({ data, contest, execute }) {
           </strong>
         </p>
         <p className="muted">
-          Al activar se cierran las inscripciones y se habilitan las evaluaciones.
+          Al activar se habilitan las evaluaciones. Las nuevas inscripciones siguen
+          disponibles en áreas que no hayan avanzado de fase.
           Se validan áreas, tiempos y rúbricas. Con intentos
           registrados, la configuración queda congelada para conservar
           resultados comparables.
@@ -720,7 +722,7 @@ export function Configuration({ data, contest, execute }) {
           {contest.status === "active" && (
             <>
               <button onClick={() => execute("status", { status: "draft" })}>
-                {contest.published_at ? "Reabrir inscripciones" : "Volver a borrador"}
+                Volver a preparación
               </button>
               <button
                 onClick={() =>

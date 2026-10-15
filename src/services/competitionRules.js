@@ -5,6 +5,20 @@ export function competitionStatusLabel(contest) {
   }
   return contest.status === 'active' ? 'Activo' : 'Finalizado';
 }
+export function competitionAreaRegistrationIssue(contest, area, data) {
+  if (!['draft', 'active'].includes(contest.status)) return 'Las inscripciones están cerradas.';
+  if (!area.active) return 'Área no disponible.';
+  if (contest.status === 'draft') return '';
+  const firstPhase = data.phases.filter((phase) => phase.active)
+    .sort((a, b) => a.phase_order - b.phase_order)[0];
+  if (!firstPhase) return 'No hay una fase activa.';
+  if (area.status !== 'open' || data.entries.some((entry) => entry.area_id === area.id
+    && (entry.current_phase_id !== firstPhase.id
+      || ['finalist', 'champion'].includes(entry.status) || entry.tiebreak_candidate))) {
+    return 'Esta área ya avanzó de fase y no admite nuevas inscripciones.';
+  }
+  return '';
+}
 export function competitionLeaderRanking(teams) {
   return teams
     .map((team) => ({

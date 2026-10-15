@@ -147,7 +147,7 @@ try {
   await collaborator.getByRole('button',{name:'Fixture',exact:true}).click();
   await collaborator.getByText('El sorteo del orden y los cruces se genera al activar',{exact:false}).waitFor();
   await admin.getByRole('button',{name:'Activar concurso',exact:true}).click();
-  await admin.getByRole('button',{name:'Reabrir inscripciones',exact:true}).waitFor();
+  await admin.getByRole('button',{name:'Volver a preparación',exact:true}).waitFor();
   await until(async()=>await collaborator.getByRole('heading',{name:'Cruces y orden sorteado',exact:true}).count()>0,'fixture actualizado tras activar');
   await collaborator.getByRole('combobox',{name:'Área del fixture',exact:true}).selectOption({label:'Landing'});
   await collaborator.getByRole('heading',{name:'Cruce 1',exact:true}).waitFor();
@@ -164,10 +164,10 @@ try {
   await collaborator.screenshot({path:`${output}/07-fixture-mobile.png`,fullPage:true});
   await collaborator.setViewportSize({width:1440,height:1000});
   await collaborator.getByRole('button',{name:'Inscripción',exact:true}).click();
-  await collaborator.getByText('Inscripciones cerradas.',{exact:false}).waitFor();
+  await collaborator.getByText('El concurso está activo.',{exact:false}).waitFor();
   assert.equal(await collaborator.getByRole('button',{name:'Retirar mi inscripción'}).count(),0);
   for(const button of await collaborator.getByRole('button',{name:'Inscribirme',exact:true}).all()) assert.equal(await button.isDisabled(),true);
-  pass('Activación cierra las inscripciones y muestra cruces, turnos y fases por área; el sorteo persiste al recargar');
+  pass('Activación conserva el límite de áreas y muestra cruces, turnos y fases por área; el sorteo persiste al recargar');
   pass('La foto aparece en cruces y fases del fixture; los competidores sin foto muestran una silueta de persona');
 
   const photoPanel=await context.newPage();

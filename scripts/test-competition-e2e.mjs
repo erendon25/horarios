@@ -31,6 +31,7 @@ const suites = profilePhotoOnly ? [
 ] : [
   ['collaborator','4191','verify-competition-collaborator-ui.mjs'],
   ['evaluation','4192','verify-competition-evaluation-ui.mjs'],
+  ['evaluation','4194','verify-competition-active-registration-ui.mjs'],
 ];
 for(const [mode,port,script] of suites) {
   const suiteEnv={...env,COMPETITION_QA_MODE:mode,COMPETITION_QA_PORT:port};
@@ -57,4 +58,4 @@ for(const [mode,port,script] of suites) {
 }
 console.log(profilePhotoOnly
   ? 'PASS: E2E de fotos de perfil. Capturas e informe en output/profile-photo-qa.'
-  : 'PASS: E2E de colaborador y evaluación. Capturas e informes en output/collaborator-e2e y output/evaluation-e2e.');
+  : 'PASS: E2E de colaborador, evaluación e inscripción activa. Evidencia en output/collaborator-e2e, output/evaluation-e2e y output/active-registration-e2e.');
