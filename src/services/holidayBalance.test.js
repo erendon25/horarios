@@ -10,7 +10,17 @@ test('suma movimientos, excluye boleta y descuenta compensaciones sin duplicar s
     { balance_type: 'compensado', payment_method: 'descanso', balance_delta: -1 },
     { balance_type: 'ganado', payment_method: 'descanso', balance_delta: 0, is_future: true },
   ];
-  assert.deepEqual(summarizeHolidayLedger(rows), { balance: 1, earned: 2, compensated: 1, payroll: 1, scheduled: 1 });
+  assert.deepEqual(summarizeHolidayLedger(rows), { balance: 1, earned: 2, compensated: 1, payroll: 1, scheduled: 1, scheduledCompensations: 0 });
+});
+test('siete ganados y cuatro compensaciones futuras dejan tres disponibles; no adelanta créditos futuros', () => {
+  const earned = Array.from({length:7}, () => ({balance_type:'ganado',payment_method:'descanso',balance_delta:1,is_future:false}));
+  const scheduled = Array.from({length:4}, () => ({balance_type:'compensado',payment_method:'descanso',balance_delta:-1,is_future:true}));
+  const futureEarned = {balance_type:'ganado',payment_method:'descanso',balance_delta:0,is_future:true};
+  const rows = [...earned,...scheduled,futureEarned];
+  assert.deepEqual(summarizeHolidayLedger(rows), {balance:3,earned:7,compensated:0,payroll:0,scheduled:5,scheduledCompensations:4});
+  assert.equal(holidayMovementLabel(scheduled[0]),'Compensación programada · ya descontada');
+  assert.equal(summarizeHolidayLedger([...earned,...scheduled.map(row=>({...row,is_future:false}))]).balance,3,'La fecha no genera un segundo descuento');
+  assert.equal(summarizeHolidayLedger(rows.filter(row=>row!==scheduled[0])).balance,4,'Eliminar una compensación recupera un día');
 });
 test('no oculta balances negativos ni confunde destino a boleta con pago realizado', () => {
   assert.equal(summarizeHolidayLedger([{ balance_type: 'compensado', balance_delta: -1 }]).balance, -1);

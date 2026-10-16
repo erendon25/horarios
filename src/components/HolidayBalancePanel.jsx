@@ -36,12 +36,13 @@ export default function HolidayBalancePanel({ staffId, previousBalance, refreshK
     </div>
     {actionError && <p role="alert" className="mb-3 text-red-700">{actionError}</p>}
     {loading ? <p role="status">Consultando movimientos…</p> : state.error ? <p role="alert" className="text-red-700">{state.error}</p> : <>
-      <p className="text-3xl font-bold text-purple-900">{totals.balance} días <span className="text-base font-normal">de saldo calculado</span></p>
-      <p className="mt-2 text-sm text-gray-600">{totals.earned} acumulados para descanso − {totals.compensated} compensados. {totals.payroll} destinados a boleta: no suman días.</p>
-      <p className="mt-2 text-xs text-gray-500">Se calcula con los movimientos registrados hasta hoy. «Destinado a boleta» indica la decisión de la empresa, no confirma que el pago ya se haya realizado.</p>
-      {totals.scheduled > 0 && <p className="mt-2 text-sm text-blue-800">{totals.scheduled} movimientos futuros: todavía no afectan el saldo.</p>}
+      <p className="text-3xl font-bold text-purple-900">{totals.balance} días <span className="text-base font-normal">de saldo disponible</span></p>
+      <p className="mt-2 text-sm text-gray-600">{totals.earned} acumulados para descanso − {totals.compensated} compensados − {totals.scheduledCompensations} compensaciones programadas. {totals.payroll} destinados a boleta: no suman días.</p>
+      <p className="mt-2 text-xs text-gray-500">Cada compensación descuenta 1 día desde que se registra, aunque su fecha sea futura. Al llegar esa fecha no se descuenta otra vez. «Destinado a boleta» indica la decisión de la empresa, no confirma que el pago ya se haya realizado.</p>
+      {totals.scheduledCompensations > 0 && <p className="mt-2 text-sm text-blue-800">{totals.scheduledCompensations} compensaciones futuras ya descontadas del saldo disponible.</p>}
+      {totals.scheduled > totals.scheduledCompensations && <p className="mt-2 text-sm text-blue-800">{totals.scheduled - totals.scheduledCompensations} feriados futuros por trabajar: todavía no suman saldo.</p>}
       {previousBalance != null && Number(previousBalance) !== totals.balance && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Pendiente de revisión: el saldo anterior del perfil ({Number(previousBalance)} días) no coincide con estos movimientos. Administración debe validar si faltan compensaciones o pagos históricos. No se ha borrado el saldo anterior.</p>}
-      {totals.balance < 0 && <p className="mt-2 text-sm text-red-700">El historial registra más descansos compensados que días acumulados. Solicita su revisión.</p>}
+      {totals.balance < 0 && <p className="mt-2 text-sm text-red-700">Las compensaciones realizadas o programadas superan los días acumulados. Solicita su revisión.</p>}
       <details className="mt-4">
         <summary className="cursor-pointer font-semibold text-purple-900">Ver historial ({state.rows.length})</summary>
         {state.rows.length === 0 ? <p className="mt-3 text-sm text-gray-600">No hay movimientos registrados.</p> : <ul className="mt-3 max-h-96 overflow-y-auto divide-y divide-gray-100">
