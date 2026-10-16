@@ -1,9 +1,9 @@
 import { orderScheduleStaff, isBukScheduleExempt } from './scheduleStaffOrder.js';
 import * as XLSX from 'xlsx';
-import approved from '../data/bukApprovedShifts.js';
+import approved from './bukApprovedPlans.js';
 import defaultCatalog from '../data/bukShiftCatalog.js';
 import { SCHEDULE_DAYS, SCHEDULE_DAY_LABELS, getWeekDates, effectiveModality, isActiveOnDate, getExportShiftSegments } from './scheduleExportData.js';
-import { calculateScheduleTotals, formatScheduleMinutes } from './scheduleHours.js';
+import { calculateScheduleTotals, formatScheduleMinutes, getScheduleBreakPolicy, getScheduleBreak } from './scheduleHours.js';
 
 export const BUK_HEADERS = ['Nombre del Colaborador', 'RUT', 'Área', 'Supervisor'];
 export const approvedBukShifts = approved;
@@ -59,7 +59,8 @@ export function applyBukSchedulePatch(schedule = {}, day, patch) {
 
 const bukDurationLabel = minutes => `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
 export function approvedBukShiftLabel(shift) {
-  const net = shift.breakMinutes ? ` (${bukDurationLabel(shift.duration - shift.breakMinutes)} netas)` : '';
+  const net = shift.breakIncludedInHours ? ' (break de 45 min incluido)'
+    : shift.breakMinutes ? ` (${bukDurationLabel(shift.duration - shift.breakMinutes)} netas)` : '';
   return `${shift.start} → ${shift.end} · ${bukDurationLabel(shift.duration)}${net}`;
 }
 export function findApprovedBukShiftByStart(modality, restDays, start) {
@@ -73,6 +74,7 @@ export function makeApprovedBukPatch(option, current = {}, day = 'monday', catal
   return { start: shift.start, end: shift.end, off: false,
     splitShift: false, start2: '', end2: '',
     bukRestDays: Number(shift.group.slice(2)), bukApprovedShiftId: shift.id, bukBreakMinutes: shift.breakMinutes,
+    bukBreakIncludedInHours: Boolean(shift.breakIncludedInHours),
     breakStart: shift.breakMinutes ? clock(match?.breakStart) : '' };
 }
 
@@ -133,7 +135,11 @@ export function buildBukRows({ staff, schedules, weekStart, identities, storeNam
       const codes = [...new Set(matches.map(item => item.code))];
       if (codes.length !== 1) { errors.push(`${prefix}: turno ${shift.start || '?'} A ${shift.end || '?'} ${codes.length ? 'ambiguo' : 'no disponible'} en BUK.`); return ''; }
       const match = matches[0];
-      if (shift.breakStart && clock(shift.breakStart) !== clock(match.breakStart)) errors.push(`${prefix}: el refrigerio BUK es ${match.breakStart || 'sin refrigerio'}; en el editor es ${shift.breakStart}.`);
+      // A paid PT2 break is internal coverage planning. It does not alter the
+      // BUK shift code or attendance hours, whose range includes that break.
+      const includedBreak = getScheduleBreakPolicy(shift, effectiveModality(person, dates[index])).includedInHours;
+      if (includedBreak && shift.breakStart && !getScheduleBreak(shift, effectiveModality(person, dates[index]))) errors.push(`${prefix}: el break debe durar 45 minutos y quedar dentro del turno.`);
+      if (shift.breakStart && !includedBreak && clock(shift.breakStart) !== clock(match.breakStart)) errors.push(`${prefix}: el refrigerio BUK es ${match.breakStart || 'sin refrigerio'}; en el editor es ${shift.breakStart}.`);
       return codes[0];
     });
     return [identity.name, identity.dni, identity.area, identity.supervisor, ...values];
@@ -198,6 +204,6 @@ export function createBukPlanningWorkbook({ staff, schedules, weekStart, identit
   const dates = getWeekDates(weekStart);
   const rows = [['N°', 'NOMBRE DEL COLABORADOR', 'MODALIDAD', 'DESCANSO', ...dates.flatMap((date, i) => [`${SCHEDULE_DAY_LABELS[i]} ${date} · INGRESO`, 'SALIDA', 'POSICIÓN']), 'HORAS NETAS', 'CONTROL'], ...planningBukRows(staff, schedules, weekStart)];
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'PLANIFICACIÓN');
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Plan', 'Ingreso', 'Salida', 'Refrigerio (min)'], ...approved.map(item => [item.group, item.start, item.end, item.breakMinutes])]), 'HORARIOS APROBADOS');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Plan', 'Ingreso', 'Salida', 'Refrigerio (min)', 'Break incluido en horas'], ...approved.map(item => [item.group, item.start, item.end, item.breakMinutes, item.breakIncludedInHours ? 'Sí' : 'No'])]), 'HORARIOS APROBADOS');
   return workbook;
 }

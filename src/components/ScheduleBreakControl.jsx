@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Coffee, X } from 'lucide-react';
-import { getScheduleBreak, getScheduleBreakOptions } from '../services/scheduleHours';
+import { getScheduleBreak, getScheduleBreakOptions, getScheduleBreakPolicy } from '../services/scheduleHours';
 
 export default function ScheduleBreakControl({ shift, modality, name, onChange }) {
     const [open, setOpen] = useState(false);
@@ -9,6 +9,7 @@ export default function ScheduleBreakControl({ shift, modality, name, onChange }
     const dialog = useRef(null);
     const trigger = useRef(null);
     const rest = getScheduleBreak(shift, modality);
+    const policy = getScheduleBreakPolicy(shift, modality);
     const options = getScheduleBreakOptions(shift, modality);
     const preview = getScheduleBreak({ ...shift, breakStart: start }, modality);
     useEffect(() => {
@@ -32,6 +33,7 @@ export default function ScheduleBreakControl({ shift, modality, name, onChange }
                         <button type="button" aria-label="Cerrar break" onClick={() => setOpen(false)} className="rounded p-1 hover:bg-gray-100"><X size={18} /></button>
                     </div>
                     <p className="mt-1 text-sm text-gray-600">{name}</p>
+                    {policy.includedInHours && <p className="mt-2 text-sm text-blue-800">El break está incluido en las 4 h 45 min del turno. No resta horas al total; durante este intervalo no cuenta como cobertura en la posición.</p>}
                     <label className="mt-4 block text-sm font-medium text-gray-700">Inicio del break
                         <select aria-label="Inicio del break" autoFocus value={start} onChange={event => setStart(event.target.value)} className="mt-1 block w-full rounded-lg border border-gray-300 p-2">
                             <option value="">Pendiente de asignar</option>

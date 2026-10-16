@@ -72,7 +72,7 @@ test('el plan semanal sobrevive a borrador, guardado y recarga sin afectar otra 
 
 test('los rangos muestran su duración real al cruzar medianoche y distinguen el refrigerio', () => {
   const option=(group,start,duration)=>approvedBukShifts.find(item=>item.group===group && item.start===start && (!duration || item.duration===duration));
-  assert.equal(approvedBukShiftLabel(option('PT2','20:15')),'20:15 → 01:00 · 4 h 45 min');
+  assert.equal(approvedBukShiftLabel(option('PT2','20:15')),'20:15 → 01:00 · 4 h 45 min (break de 45 min incluido)');
   assert.equal(approvedBukShiftLabel(option('PT1','21:00')),'21:00 → 01:00 · 4 h');
   assert.match(approvedBukShiftLabel(option('FT1','06:15')),/8 h 45 min \(8 h netas\)$/);
   assert.match(approvedBukShiftLabel(approvedBukShifts.find(item=>item.group==='PT3' && item.duration===405)),/6 h 45 min \(6 h netas\)$/);

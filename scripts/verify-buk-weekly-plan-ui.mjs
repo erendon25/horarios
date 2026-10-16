@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
+import * as XLSX from 'xlsx';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const port=process.env.BUK_QA_PORT || '4186';
 const base=`http://127.0.0.1:${port}`;
@@ -23,6 +24,7 @@ try {
   const context=await browser.newContext({viewport:{width:1440,height:1000},timezoneId:'America/Lima'});
   page=await context.newPage();
   page.on('pageerror',error=>errors.push(error.message));
+  page.on('console',message=>{if(message.type()==='error')errors.push(message.text())});
   page.on('dialog',dialog=>dialog.accept());
   await page.goto(base);
   const day=page.locator('select').filter({has:page.locator('option[value="monday"]')});
@@ -40,12 +42,25 @@ try {
   }
   pass('Plan de dos descansos uniforme en los siete días; turnos originales conservados');
   await day.selectOption('monday');
-  assert.equal(await approved.locator('option[value="PT2-33"]').innerText(),'20:15 → 01:00 · 4 h 45 min');
+  assert.equal(await approved.locator('option[value="PT2-33"]').innerText(),'20:15 → 01:00 · 4 h 45 min (break de 45 min incluido)');
+  assert.ok((await approved.locator('option').evaluateAll(options=>options.filter(option=>option.value).map(option=>option.value))).every(value=>value.startsWith('PT2-')));
   const ft=page.getByLabel('Horario aprobado BUK de Prueba FT1',{exact:true});
   assert.match(await ft.locator('option[value="FT1-5"]').innerText(),/8 h 45 min \(8 h netas\)/);
   await approved.selectOption('PT2-33');
   assert.equal(await row.getByTitle('Entrada',{exact:true}).inputValue(),'20:15');
   assert.equal(await row.getByTitle('Salida',{exact:true}).inputValue(),'01:00');
+  const breakButton=row.getByRole('button',{name:'Asignar break de Prueba PT1 BUK',exact:true});
+  await breakButton.click();
+  await page.getByText('El break está incluido en las 4 h 45 min del turno.',{exact:false}).waitFor();
+  await page.getByRole('combobox',{name:'Inicio del break',exact:true}).selectOption('23:45');
+  await page.getByText('Descanso: 23:45–00:30',{exact:true}).waitFor();
+  await page.getByRole('dialog',{name:'Break de Prueba PT1 BUK',exact:true}).screenshot({path:`${output}/break-incluido-modal.png`});
+  await page.getByRole('button',{name:'Aplicar break',exact:true}).click();
+  assert.equal(await breakButton.innerText(),'23:45');
+  assert.equal(await row.locator('td').nth(6).innerText(),'4:45');
+  const pt2row=page.getByLabel('Horario aprobado BUK de Prueba PT2',{exact:true}).locator('xpath=ancestor::tr[1]');
+  assert.match(await pt2row.locator('td').nth(7).innerText(),/23:45/);
+  pass('Dos descansos filtra solo PT2; break incluido de 45 minutos, 4:45 diarias y 23:45 semanales');
   await day.selectOption('tuesday');
   await row.getByTitle('Entrada',{exact:true}).fill('20:15');
   assert.equal(await row.getByTitle('Salida',{exact:true}).inputValue(),'01:00');
@@ -65,6 +80,7 @@ try {
   assert.ok(saved);
   for(const key of ['monday','tuesday','wednesday','thursday','friday','saturday','sunday']) assert.equal(saved[key].bukRestDays,2,key);
   assert.equal(saved.saturday.off,true);assert.equal(saved.sunday.off,true);
+  assert.equal(saved.monday.breakStart,'23:45');assert.equal(saved.monday.bukBreakIncludedInHours,true);
   assert.equal(saved.monday.position,fixture.schedules.PT1.monday.position);
   assert.equal(saved.wednesday.start,fixture.schedules.PT1.wednesday.start);
   assert.equal(saved.wednesday.extraHoursPost,fixture.schedules.PT1.wednesday.extraHoursPost);
@@ -75,6 +91,17 @@ try {
   assert.equal(await rests.inputValue(),'2','Read weekly preference back from the saved document, without a local draft');
   await day.selectOption('sunday');assert.equal(await rests.inputValue(),'2');
   await day.selectOption('monday');assert.equal(await approved.inputValue(),'PT2-33');
+  assert.equal(await breakButton.innerText(),'23:45','Paid break survives saving and reloading');
+  for(const [name,file] of [['Excel BUK','buk-break-incluido.xls'],['Excel planificación','planificacion-break-incluido.xls']]) {
+    const pending=page.waitForEvent('download');await page.getByRole('button',{name,exact:true}).click();
+    await (await pending).saveAs(`${output}/${file}`);
+  }
+  const buk=XLSX.read(await readFile(`${output}/buk-break-incluido.xls`),{type:'buffer'});
+  const bukRows=XLSX.utils.sheet_to_json(buk.Sheets.turnosColaboradores,{header:1,defval:''});
+  assert.equal(bukRows.find(r=>r[1]===fixture.staff[1].dni)[4],'20:15 A 01:00');
+  const planning=XLSX.read(await readFile(`${output}/planificacion-break-incluido.xls`),{type:'buffer'});
+  assert.equal(XLSX.utils.sheet_to_json(planning.Sheets['PLANIFICACIÓN'],{header:1}).find(r=>r[1]==='Prueba PT2 BUK').at(-2),'23:45');
+  pass('Break persiste y ambos Excel se descargan con código BUK válido y 23:45 en planificación');
   pass('Guardar y recargar conserva el plan completo y afecta solo al colaborador editado');
   await day.selectOption('saturday');
   await row.locator('td').nth(restColumn).getByRole('checkbox').uncheck();assert.equal(await rests.inputValue(),'1');

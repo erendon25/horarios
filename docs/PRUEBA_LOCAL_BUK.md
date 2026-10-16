@@ -26,7 +26,9 @@ Prueba seleccionar un ingreso aprobado, comprobar la salida calculada, conservar
 
 El plan de descansos se comparte entre los siete días de la semana de cada colaborador y se conserva en el borrador y al guardar. Las selecciones antiguas que difieran entre días se interpretan con los descansos reales de la semana. Los rangos aprobados muestran su duración, incluso al cruzar medianoche; si incluyen refrigerio, también muestran las horas netas. Cambiar el plan conserva los horarios, posiciones, extras y breaks ya escritos; los turnos que queden fuera del nuevo plan se señalan para revisión.
 
-Regresión de selección semanal: `node --test src/services/bukWeeklyPlan.test.js`. Recorrido del editor con persistencia HTTP aislada: ejecutar primero `node scripts/test-buk-schedule.mjs` para crear los datos ficticios y después `node scripts/verify-buk-weekly-plan-ui.mjs` (requiere Playwright y Chromium). La prueba comprueba los siete días, entrada manual, borrador, guardado, recarga sin borrador, descansos marcados y desmarcados, móvil y cambio al modo anterior, sin escribir en producción.
+En el plan Part-Time de **dos descansos**, los únicos rangos ofrecidos duran **4:45 e incluyen un break de 45 minutos computable dentro de esas horas**. Cinco turnos mantienen 23:45 semanales. El break se asigna desde el mismo control de Full-Time, se conserva al guardar y excluye cobertura durante sus tres bloques de 15 minutos. No se amplía la salida ni se descuenta otra vez el descanso. El código de turno BUK permanece igual; el break incluido es una asignación interna de cobertura, no una colación descontada en asistencia. Las reglas de refrigerio de los demás planes se conservan.
+
+Regresión de selección semanal y break incluido: `node --test src/services/bukWeeklyPlan.test.js src/services/bukPaidBreak.test.js`. Recorrido del editor con persistencia HTTP aislada: ejecutar primero `node scripts/test-buk-schedule.mjs` para crear los datos ficticios y después `node scripts/verify-buk-weekly-plan-ui.mjs` (requiere Playwright y Chromium). La prueba comprueba los siete días, entrada manual, borrador, guardado, recarga sin borrador, descansos marcados y desmarcados, break incluido, descarga de ambos Excel, móvil y cambio al modo anterior, sin escribir en producción.
 
 ## Validaciones realizadas
 
@@ -42,7 +44,7 @@ Regresión de selección semanal: `node --test src/services/bukWeeklyPlan.test.j
 
 Un descanso explícito se exporta como `D`; un feriado explícito como `F`. Un día vacío o posterior al cese queda vacío: en BUK esto significa no modificar su asignación existente. No se convierte un vacío en descanso ni se genera `BASE` automáticamente.
 
-Los turnos se resuelven contra el catálogo activo cargado. Si faltan DNI o turnos, existen duplicados, hay turnos partidos sin equivalente o un refrigerio difiere del de BUK, la exportación se detiene y muestra el detalle. Las extras permanecen en el editor; el importador BUK recibe el turno base. Los nuevos refrigerios Part-Time se descuentan únicamente para horarios seleccionados del catálogo aprobado; los horarios antiguos conservan su comportamiento.
+Los turnos se resuelven contra el catálogo activo cargado. Si faltan DNI o turnos, existen duplicados, hay turnos partidos sin equivalente o un refrigerio descontado difiere del de BUK, la exportación se detiene y muestra el detalle. Las extras permanecen en el editor; el importador BUK recibe el turno base. El break incluido del plan de dos descansos puede asignarse internamente sin cambiar el código BUK y debe quedar íntegramente dentro del turno. Los refrigerios descontados de los otros planes conservan su comportamiento.
 
 La configuración de una plantilla cargada desde la aplicación normal se guarda por tienda. La prueba de localhost no usa esa conexión. La aceptación final del archivo por el importador real de BUK queda por comprobar con una importación controlada por el gerente.
 

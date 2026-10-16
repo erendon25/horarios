@@ -29,6 +29,7 @@ export default function BukApprovedShiftControl({ person, shift, schedule, day, 
       </select>
     </label>
     {full && <span>Plan de 1 descanso</span>}
+    {!full && rests === 2 && <p className="text-blue-800">5 turnos de 4 h 45 min = 23 h 45 min por semana. Break de 45 min incluido.</p>}
     {manual && <p className="text-amber-700">Fuera del plan aprobado: revisa ingreso y salida.</p>}
     {error && <p role="alert">{error}</p>}
   </div>;
