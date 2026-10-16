@@ -24,6 +24,10 @@ node scripts/serve-buk-qa.mjs
 
 Prueba seleccionar un ingreso aprobado, comprobar la salida calculada, conservar o cambiar una posición y guardar. Descarga después Excel BUK, Excel planificación y PDF planificación. El selector Part-Time permite elegir un plan de uno a cuatro descansos; los descansos concretos se marcan con los controles existentes del editor. Seleccionar un plan no borra ni redistribuye días automáticamente.
 
+El plan de descansos se comparte entre los siete días de la semana de cada colaborador y se conserva en el borrador y al guardar. Las selecciones antiguas que difieran entre días se interpretan con los descansos reales de la semana. Los rangos aprobados muestran su duración, incluso al cruzar medianoche; si incluyen refrigerio, también muestran las horas netas. Cambiar el plan conserva los horarios, posiciones, extras y breaks ya escritos; los turnos que queden fuera del nuevo plan se señalan para revisión.
+
+Regresión de selección semanal: `node --test src/services/bukWeeklyPlan.test.js`. Recorrido del editor con persistencia HTTP aislada: ejecutar primero `node scripts/test-buk-schedule.mjs` para crear los datos ficticios y después `node scripts/verify-buk-weekly-plan-ui.mjs` (requiere Playwright y Chromium). La prueba comprueba los siete días, entrada manual, borrador, guardado, recarga sin borrador, descansos marcados y desmarcados, móvil y cambio al modo anterior, sin escribir en producción.
+
 ## Validaciones realizadas
 
 - El reporte original tiene cuatro hojas, 29 identidades y 1.644 filas de catálogo semanal. Los nombres, DNI, área y supervisor se toman de la plantilla cargada; la asociación con el sistema se realiza por DNI.

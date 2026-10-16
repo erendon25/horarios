@@ -20,6 +20,48 @@ const clock = value => {
 };
 export const bukGroup = (modality, restDays) => normalize(modality).startsWith('FULL') ? 'FT1' : `PT${restDays}`;
 export const getApprovedBukOptions = (modality, restDays) => approved.filter(shift => shift.group === bukGroup(modality, restDays));
+const validRestDays = value => Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 4;
+const weeklyRestPlan = schedule => {
+  const values = SCHEDULE_DAYS.map(day => schedule[day]?.bukRestDays);
+  return values.every(validRestDays) && new Set(values.map(Number)).size === 1 ? Number(values[0]) : null;
+};
+const countRestDays = schedule => SCHEDULE_DAYS.filter(day => schedule[day]?.off).length;
+const clampRestDays = value => Math.min(4, Math.max(1, value));
+
+// New selections are stored on all seven days so the existing draft and server
+// metadata round-trip the weekly plan. Older, mixed daily selections use the
+// week's actual rest count before falling back to a deterministic saved choice.
+export function getBukRestDays(modality, schedule = {}) {
+  if (normalize(modality).startsWith('FULL')) return 1;
+  const weekly = weeklyRestPlan(schedule);
+  if (weekly !== null) return weekly;
+  const actual = countRestDays(schedule);
+  if (actual) return clampRestDays(actual);
+  const saved = SCHEDULE_DAYS.map(day => schedule[day]?.bukRestDays).find(validRestDays);
+  if (saved !== undefined) return Number(saved);
+  const fromShift = SCHEDULE_DAYS.map(day => Number(schedule[day]?.bukApprovedShiftId?.match(/^PT([1-4])-/)?.[1])).find(validRestDays);
+  return fromShift ?? 1;
+}
+
+export function applyBukSchedulePatch(schedule = {}, day, patch) {
+  const next = { ...schedule, [day]: { ...schedule[day], ...patch } };
+  let rests = validRestDays(patch.bukRestDays) ? Number(patch.bukRestDays) : null;
+  if (rests === null && Object.hasOwn(patch, 'off') && Boolean(patch.off) !== Boolean(schedule[day]?.off)) {
+    // Follow checkbox changes when the current plan matches the completed week;
+    // keep an explicitly chosen target while its rest days are still being set.
+    if (weeklyRestPlan(schedule) === null || getBukRestDays('Part-Time', schedule) === countRestDays(schedule)) {
+      rests = clampRestDays(countRestDays(next));
+    }
+  }
+  if (rests !== null) for (const key of SCHEDULE_DAYS) next[key] = { ...next[key], bukRestDays: rests };
+  return next;
+}
+
+const bukDurationLabel = minutes => `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
+export function approvedBukShiftLabel(shift) {
+  const net = shift.breakMinutes ? ` (${bukDurationLabel(shift.duration - shift.breakMinutes)} netas)` : '';
+  return `${shift.start} → ${shift.end} · ${bukDurationLabel(shift.duration)}${net}`;
+}
 export function findApprovedBukShiftByStart(modality, restDays, start) {
   const matches = getApprovedBukOptions(modality, restDays).filter(item => item.start === clock(start));
   return matches.length && new Set(matches.map(item => item.end)).size === 1 ? matches[0] : null;

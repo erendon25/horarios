@@ -16,7 +16,7 @@ import { calculateScheduleTotals, calculateScheduleDay, formatScheduleMinutes, g
 import ScheduleBreakControl from './ScheduleBreakControl';
 import BukScheduleTools from './BukScheduleTools';
 import BukApprovedShiftControl from './BukApprovedShiftControl';
-import { getApprovedBukOptions, makeApprovedBukPatch, findApprovedBukShiftByStart } from '../services/bukSchedule';
+import { getApprovedBukOptions, makeApprovedBukPatch, findApprovedBukShiftByStart, getBukRestDays, applyBukSchedulePatch } from '../services/bukSchedule';
 import { FaInfoCircle, FaExclamationTriangle, FaExclamationCircle } from 'react-icons/fa';
 import {
     Calendar,
@@ -478,10 +478,9 @@ export default function WeeklyScheduleEditor() {
             updates = { ...updates, bukApprovedShiftId: '', bukBreakMinutes: 0 };
         }
         if (bukMode && !isBukScheduleExempt(person) && field === 'start') {
-            const restDays = current.bukRestDays
-                || Number(current.bukApprovedShiftId?.match(/^PT([1-4])-/)?.[1])
-                || Math.min(4, Math.max(1, weekdays.filter(day => schedules[staffId]?.[day]?.off).length));
-            const approved = findApprovedBukShiftByStart(getEffectiveModality(person, dateStr), restDays, value);
+            const modality = getEffectiveModality(person, dateStr);
+            const restDays = getBukRestDays(modality, schedules[staffId]);
+            const approved = findApprovedBukShiftByStart(modality, restDays, value);
             updates = approved
                 ? makeApprovedBukPatch(approved.id, current, selectedDay)
                 : { start: finalValue, bukApprovedShiftId: '', bukBreakMinutes: 0 };
@@ -498,7 +497,7 @@ export default function WeeklyScheduleEditor() {
         }
         if (bukMode && !isBukScheduleExempt(person) && field === 'feriado' && value === true) {
             const modality = getEffectiveModality(person, dateStr);
-            const restDays = Math.min(4, Math.max(1, weekdays.filter(day => schedules[staffId]?.[day]?.off).length));
+            const restDays = getBukRestDays(modality, schedules[staffId]);
             const first = getApprovedBukOptions(modality, restDays)[0];
             if (!first) return;
             updates = { ...makeApprovedBukPatch(first.id, current, selectedDay), feriado: true, off: false };
@@ -549,12 +548,12 @@ export default function WeeklyScheduleEditor() {
 
         // Si se desmarca feriado → limpiar solo feriado
         if (field === 'feriado' && value === false) {
-            updates = { ...current, feriado: false };
+            updates = { feriado: false };
         }
 
         // Si se desmarca off → limpiar solo off
         if (field === 'off' && value === false) {
-            updates = { ...current, off: false };
+            updates = { off: false };
         }
 
         // Keep the legacy alias synchronized with the checkbox's canonical state.
@@ -570,7 +569,7 @@ export default function WeeklyScheduleEditor() {
 
         draftController.edit(prev => ({
             ...prev,
-            [staffId]: {
+            [staffId]: bukMode ? applyBukSchedulePatch(prev[staffId], selectedDay, updates) : {
                 ...prev[staffId],
                 [selectedDay]: { ...prev[staffId]?.[selectedDay], ...updates }
             }
@@ -2053,7 +2052,7 @@ export default function WeeklyScheduleEditor() {
                                                                         shift={d} schedule={schedules[p.id]} day={selectedDay}
                                                                         onApply={patch => draftController.edit(prev => ({
                                                                             ...prev,
-                                                                            [p.id]: { ...prev[p.id], [selectedDay]: { ...prev[p.id]?.[selectedDay], ...patch } }
+                                                                            [p.id]: applyBukSchedulePatch(prev[p.id], selectedDay, patch)
                                                                         }))} />}
                                                                     {isChangeDay && (
                                                                         <span className="text-[9px] font-bold text-blue-600 animate-pulse mt-1">
