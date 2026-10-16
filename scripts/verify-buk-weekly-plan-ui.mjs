@@ -74,6 +74,13 @@ try {
   const restColumn=await page.getByRole('columnheader',{name:'Libre',exact:true}).evaluate(element=>element.cellIndex);
   await row.locator('td').nth(restColumn).getByRole('checkbox').check();
   assert.equal(await rests.inputValue(),'2');
+  assert.equal(await approved.isDisabled(),true,'Day off locks the approved-shift selector');
+  assert.equal(await approved.locator('option:checked').innerText(),'Día libre');
+  await approved.evaluate(select=>{select.value='PT2-33';select.dispatchEvent(new Event('change',{bubbles:true}))});
+  assert.equal(await row.locator('td').nth(restColumn).getByRole('checkbox').isChecked(),true,'A stale selection cannot remove the rest day');
+  assert.equal(await row.getByTitle('Entrada',{exact:true}).inputValue(),'');
+  assert.equal(await row.getByTitle('Salida',{exact:true}).inputValue(),'');
+  pass('Día libre bloquea el selector y no puede desmarcarse asignando un turno');
   await page.getByRole('button',{name:/^Guardar/}).click();
   await page.getByRole('button',{name:/^Guardado/}).waitFor();
   const saved=(await (await page.request.get(`${base}/qa-document?path=schedules%2FPT1_2026-10-12_to_2026-10-18`)).json()).data;
@@ -89,7 +96,7 @@ try {
   await page.evaluate(()=>{for(const key of Object.keys(localStorage))if(key.startsWith('schedule_draft_v2:'))localStorage.removeItem(key)});
   await page.reload();await rests.waitFor();
   assert.equal(await rests.inputValue(),'2','Read weekly preference back from the saved document, without a local draft');
-  await day.selectOption('sunday');assert.equal(await rests.inputValue(),'2');
+  await day.selectOption('sunday');assert.equal(await rests.inputValue(),'2');assert.equal(await approved.isDisabled(),true);
   await day.selectOption('monday');assert.equal(await approved.inputValue(),'PT2-33');
   assert.equal(await breakButton.innerText(),'23:45','Paid break survives saving and reloading');
   for(const [name,file] of [['Excel BUK','buk-break-incluido.xls'],['Excel planificación','planificacion-break-incluido.xls']]) {
@@ -104,8 +111,11 @@ try {
   pass('Break persiste y ambos Excel se descargan con código BUK válido y 23:45 en planificación');
   pass('Guardar y recargar conserva el plan completo y afecta solo al colaborador editado');
   await day.selectOption('saturday');
+  assert.equal(await approved.isDisabled(),true);
   await row.locator('td').nth(restColumn).getByRole('checkbox').uncheck();assert.equal(await rests.inputValue(),'1');
+  assert.equal(await approved.isEnabled(),true,'Removing the rest day unlocks the selector');
   await row.locator('td').nth(restColumn).getByRole('checkbox').check();assert.equal(await rests.inputValue(),'2');
+  assert.equal(await approved.isDisabled(),true);
   await day.selectOption('monday');
   pass('Marcar y desmarcar descansos reales actualiza el mismo plan para toda la semana');
   await row.screenshot({path:`output/buk-weekly-plan/fila-desktop.png`});
