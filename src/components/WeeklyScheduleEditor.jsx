@@ -16,7 +16,7 @@ import { calculateScheduleTotals, calculateScheduleDay, formatScheduleMinutes, g
 import ScheduleBreakControl from './ScheduleBreakControl';
 import BukScheduleTools from './BukScheduleTools';
 import BukApprovedShiftControl from './BukApprovedShiftControl';
-import { getApprovedBukOptions, makeApprovedBukPatch, findApprovedBukShiftByStart, getBukRestDays, applyBukSchedulePatch } from '../services/bukSchedule';
+import { getAvailableApprovedBukOptions, makeApprovedBukPatch, findApprovedBukShiftByStart, getBukRestDays, applyBukSchedulePatch } from '../services/bukSchedule';
 import { FaInfoCircle, FaExclamationTriangle, FaExclamationCircle } from 'react-icons/fa';
 import {
     Calendar,
@@ -480,7 +480,7 @@ export default function WeeklyScheduleEditor() {
         if (bukMode && !isBukScheduleExempt(person) && field === 'start') {
             const modality = getEffectiveModality(person, dateStr);
             const restDays = getBukRestDays(modality, schedules[staffId]);
-            const approved = findApprovedBukShiftByStart(modality, restDays, value);
+            const approved = findApprovedBukShiftByStart(modality, restDays, value, schedules[staffId], selectedDay);
             updates = approved
                 ? makeApprovedBukPatch(approved.id, current, selectedDay)
                 : { start: finalValue, bukApprovedShiftId: '', bukBreakMinutes: 0 };
@@ -498,7 +498,7 @@ export default function WeeklyScheduleEditor() {
         if (bukMode && !isBukScheduleExempt(person) && field === 'feriado' && value === true) {
             const modality = getEffectiveModality(person, dateStr);
             const restDays = getBukRestDays(modality, schedules[staffId]);
-            const first = getApprovedBukOptions(modality, restDays)[0];
+            const first = getAvailableApprovedBukOptions(modality, restDays, schedules[staffId], selectedDay)[0];
             if (!first) return;
             updates = { ...makeApprovedBukPatch(first.id, current, selectedDay), feriado: true, off: false };
         }

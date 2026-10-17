@@ -54,8 +54,10 @@ try {
   const thirdApproved=page.getByLabel('Horario aprobado BUK de Prueba PT3',{exact:true});
   const thirdRow=thirdApproved.locator('xpath=ancestor::tr[1]');
   const thirdBreak=thirdRow.getByRole('button',{name:'Asignar break de Prueba PT3 BUK',exact:true});
-  await thirdApproved.selectOption('PT3-5');
+  assert.equal(await thirdApproved.locator('option[value="PT3-5"]').count(),0,'The short PT3 slot is already used on Thursday');
+  await day.selectOption('thursday');
   assert.equal(await thirdBreak.count(),0,'PT3 short 5:45 has no break');
+  await day.selectOption('monday');
   await thirdApproved.selectOption('PT3-62');
   await thirdBreak.click();
   await page.getByRole('combobox',{name:'Inicio del break',exact:true}).selectOption('23:00');

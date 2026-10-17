@@ -57,13 +57,49 @@ export function applyBukSchedulePatch(schedule = {}, day, patch) {
   return next;
 }
 
+// Counts and gross durations from HORARIOS APROBADOS (D2, G2, J2, M2).
+// Extras and break metadata do not change which daily slot a base shift uses.
+const partTimePlanSlots = {
+  1: [[240, 5], [225, 1]],
+  2: [[285, 5]],
+  3: [[405, 3], [345, 1]],
+  4: [[525, 2], [510, 1]],
+};
+const baseShiftDuration = shift => {
+  if (!shift || shift.off || shift.splitShift) return 0;
+  const start = clock(shift.start), end = clock(shift.end);
+  if (!start || !end) return 0;
+  const minutes = time => Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
+  return (minutes(end) - minutes(start) + 1440) % 1440;
+};
+
+export function getBukWeeklyShiftQuota(modality, restDays, schedule = {}, editingDay) {
+  if (normalize(modality) !== 'PART-TIME') return [];
+  return (partTimePlanSlots[restDays] ?? []).map(([duration, total]) => {
+    // Excluding the edited day allows changing an assigned shift without using
+    // its slot twice. Compensated holidays retain their credited base range.
+    const used = SCHEDULE_DAYS.filter(day => day !== editingDay && baseShiftDuration(schedule?.[day]) === duration).length;
+    return { duration, total, used, remaining: Math.max(0, total - used) };
+  });
+}
+
+export function getAvailableApprovedBukOptions(modality, restDays, schedule = {}, editingDay) {
+  const options = getApprovedBukOptions(modality, restDays);
+  if (normalize(modality) !== 'PART-TIME') return options;
+  const remaining = new Set(getBukWeeklyShiftQuota(modality, restDays, schedule, editingDay)
+    .filter(slot => slot.remaining > 0).map(slot => slot.duration));
+  return options.filter(option => remaining.has(option.duration));
+}
+
 const bukDurationLabel = minutes => `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
 export function approvedBukShiftLabel(shift) {
   const net = shift.breakMinutes ? ` (${bukDurationLabel(shift.duration - shift.breakMinutes)} netas; break de ${shift.breakMinutes} min)` : ' (sin break)';
   return `${shift.start} → ${shift.end} · ${bukDurationLabel(shift.duration)}${net}`;
 }
-export function findApprovedBukShiftByStart(modality, restDays, start) {
-  const matches = getApprovedBukOptions(modality, restDays).filter(item => item.start === clock(start));
+export function findApprovedBukShiftByStart(modality, restDays, start, schedule, editingDay) {
+  const options = schedule === undefined ? getApprovedBukOptions(modality, restDays)
+    : getAvailableApprovedBukOptions(modality, restDays, schedule, editingDay);
+  const matches = options.filter(item => item.start === clock(start));
   return matches.length && new Set(matches.map(item => item.end)).size === 1 ? matches[0] : null;
 }
 export function makeApprovedBukPatch(option, current = {}, day = 'monday', catalog = defaultCatalog) {

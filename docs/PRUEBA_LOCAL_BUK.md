@@ -35,6 +35,10 @@ La pestaña **HORARIOS APROBADOS** del archivo «Planificación de horarios(1).x
 | PT3 · 3 descansos | 3 turnos de 6:45 y 1 de 5:45 | 45 minutos solo en los de 6:45 |
 | PT4 · 4 descansos | 2 turnos de 8:45 y 1 de 8:30 | 45 minutos en los tres |
 
+El selector calcula las duraciones disponibles contando los otros seis días del colaborador. Después de cinco jornadas de 4:00 en PT1, solo ofrece 3:45; después de asignar la jornada corta, los demás días solo ofrecen las largas. PT3 y PT4 aplican el mismo límite por duración y PT2 admite cinco turnos de 4:45. El día que se está editando no consume su propio cupo. Las extras no cambian esta distribución; una compensación ocupa su rango base acreditado y un día libre no lo ocupa. El ingreso manual aprobado usa este mismo filtro para autocompletar la salida.
+
+Los turnos ya guardados se conservan: si alguno supera la cantidad permitida, aparece seleccionado con un aviso y se ofrecen las duraciones disponibles para corregirlo. Para redistribuir la jornada corta, primero se libera su día actual. Pruebas: `node --test src/services/bukWeeklyQuota.test.js`; navegador: `node scripts/verify-buk-weekly-quota-ui.mjs` con la misma preparación de datos ficticios.
+
 Full-Time conserva seis turnos de 8:45 con 45 minutos de refrigerio y 48:00 netas semanales. Los breaks aplicables se asignan desde el control del editor, se descuentan una sola vez del total y excluyen sus tres bloques del mapa de cobertura. La antigua excepción de break incluido en PT2 se retira: los horarios guardados se conservan y sus metadatos obsoletos de break no alteran el cálculo ni bloquean la exportación.
 
 Comparación directa con el archivo: `node scripts/verify-buk-approved-workbook.mjs "ruta/al/archivo.xlsm"`. El script lee los encabezados y rangos sin ejecutar macros y guarda un informe en `output/buk-workbook/approved-audit.json`, sin extraer información del personal.
