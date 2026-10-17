@@ -26,9 +26,20 @@ Prueba seleccionar un ingreso aprobado, comprobar la salida calculada, conservar
 
 El plan de descansos se comparte entre los siete días de la semana de cada colaborador y se conserva en el borrador y al guardar. Las selecciones antiguas que difieran entre días se interpretan con los descansos reales de la semana. Los rangos aprobados muestran su duración, incluso al cruzar medianoche; si incluyen refrigerio, también muestran las horas netas. Cambiar el plan conserva los horarios, posiciones, extras y breaks ya escritos; los turnos que queden fuera del nuevo plan se señalan para revisión.
 
-En el plan Part-Time de **dos descansos**, los únicos rangos ofrecidos duran **4:45 e incluyen un break de 45 minutos computable dentro de esas horas**. Cinco turnos mantienen 23:45 semanales. El break se asigna desde el mismo control de Full-Time, se conserva al guardar y excluye cobertura durante sus tres bloques de 15 minutos. No se amplía la salida ni se descuenta otra vez el descanso. El código de turno BUK permanece igual; el break incluido es una asignación interna de cobertura, no una colación descontada en asistencia. Las reglas de refrigerio de los demás planes se conservan.
+La pestaña **HORARIOS APROBADOS** del archivo «Planificación de horarios(1).xlsm» es la referencia para los refrigerios. Se comprobaron sus 261 rangos y las reglas de A2, D2, G2, J2 y M2 contra el catálogo del programa. Las cuatro opciones Part-Time completan 23:45 semanales:
 
-Regresión de selección semanal y break incluido: `node --test src/services/bukWeeklyPlan.test.js src/services/bukPaidBreak.test.js`. Recorrido del editor con persistencia HTTP aislada: ejecutar primero `node scripts/test-buk-schedule.mjs` para crear los datos ficticios y después `node scripts/verify-buk-weekly-plan-ui.mjs` (requiere Playwright y Chromium). La prueba comprueba los siete días, entrada manual, borrador, guardado, recarga sin borrador, descansos marcados y desmarcados, break incluido, descarga de ambos Excel, móvil y cambio al modo anterior, sin escribir en producción.
+| Opción | Distribución | Refrigerio |
+| --- | --- | --- |
+| PT1 · 1 descanso | 5 turnos de 4:00 y 1 de 3:45 | Sin break |
+| PT2 · 2 descansos | 5 turnos de 4:45 | Sin break |
+| PT3 · 3 descansos | 3 turnos de 6:45 y 1 de 5:45 | 45 minutos solo en los de 6:45 |
+| PT4 · 4 descansos | 2 turnos de 8:45 y 1 de 8:30 | 45 minutos en los tres |
+
+Full-Time conserva seis turnos de 8:45 con 45 minutos de refrigerio y 48:00 netas semanales. Los breaks aplicables se asignan desde el control del editor, se descuentan una sola vez del total y excluyen sus tres bloques del mapa de cobertura. La antigua excepción de break incluido en PT2 se retira: los horarios guardados se conservan y sus metadatos obsoletos de break no alteran el cálculo ni bloquean la exportación.
+
+Comparación directa con el archivo: `node scripts/verify-buk-approved-workbook.mjs "ruta/al/archivo.xlsm"`. El script lee los encabezados y rangos sin ejecutar macros y guarda un informe en `output/buk-workbook/approved-audit.json`, sin extraer información del personal.
+
+Regresión de selección semanal y refrigerios: `node --test src/services/bukWeeklyPlan.test.js src/services/bukApprovedRules.test.js`. Recorrido del editor con persistencia HTTP aislada: ejecutar primero `node scripts/test-buk-schedule.mjs` para crear los datos ficticios y después `node scripts/verify-buk-weekly-plan-ui.mjs` (requiere Playwright y Chromium). La prueba comprueba los siete días, entrada manual, borrador, guardado, recarga sin borrador, descansos marcados y desmarcados, breaks según la opción, descarga de ambos Excel, móvil y cambio al modo anterior, sin escribir en producción.
 
 ## Validaciones realizadas
 
@@ -44,7 +55,7 @@ Regresión de selección semanal y break incluido: `node --test src/services/buk
 
 Un descanso explícito se exporta como `D`; un feriado explícito como `F`. Un día vacío o posterior al cese queda vacío: en BUK esto significa no modificar su asignación existente. No se convierte un vacío en descanso ni se genera `BASE` automáticamente.
 
-Los turnos se resuelven contra el catálogo activo cargado. Si faltan DNI o turnos, existen duplicados, hay turnos partidos sin equivalente o un refrigerio descontado difiere del de BUK, la exportación se detiene y muestra el detalle. Las extras permanecen en el editor; el importador BUK recibe el turno base. El break incluido del plan de dos descansos puede asignarse internamente sin cambiar el código BUK y debe quedar íntegramente dentro del turno. Los refrigerios descontados de los otros planes conservan su comportamiento.
+Los turnos se resuelven contra el catálogo activo cargado. Si faltan DNI o turnos, existen duplicados, hay turnos partidos sin equivalente o un refrigerio aplicable difiere del de BUK, la exportación se detiene y muestra el detalle. Las extras permanecen en el editor; el importador BUK recibe el turno base. En los rangos sin refrigerio se ignoran campos antiguos de break para preservar los horarios y permitir una exportación coherente con el catálogo.
 
 La configuración de una plantilla cargada desde la aplicación normal se guarda por tienda. La prueba de localhost no usa esa conexión. La aceptación final del archivo por el importador real de BUK queda por comprobar con una importación controlada por el gerente.
 
