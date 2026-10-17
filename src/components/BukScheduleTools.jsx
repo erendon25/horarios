@@ -2,17 +2,18 @@ import React, { useEffect, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { getFirestore, doc, getDoc } from '../lib/supabase/firestoreCompat';
 import { useAuth } from '../contexts/AuthContext';
-import { createBukWorkbook, createBukPlanningWorkbook } from '../services/bukSchedule';
+import { createBukWorkbook, createBukPlanningWorkbook, bukRefrigerioRows } from '../services/bukSchedule';
 
 export default function BukScheduleTools({ storeId, staff, schedules, weekStart }) {
   const { currentUser } = useAuth();
   const [storeName, setStoreName] = useState('');
   const [managerName, setManagerName] = useState('');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let active = true;
-    setStoreName(''); setManagerName(''); setError('');
+    setStoreName(''); setManagerName(''); setError(''); setNotice('');
     if (!storeId) return;
     Promise.all([
       getDoc(doc(getFirestore(), 'stores', storeId)),
@@ -29,12 +30,18 @@ export default function BukScheduleTools({ storeId, staff, schedules, weekStart 
   }, [storeId, currentUser?.uid, staff]);
   const data = { staff, schedules, weekStart, storeName, supervisorName: managerName };
   const perform = async action => {
-    setError(''); setBusy(true);
+    setError(''); setNotice(''); setBusy(true);
     try {
       if (action === 'pdf') {
         const { exportBukPlanningPDF } = await import('../services/bukPlanningPDF');
         exportBukPlanningPDF(data);
-      } else XLSX.writeFile(action === 'buk' ? createBukWorkbook(data) : createBukPlanningWorkbook(data), `${action === 'buk' ? 'BUK' : 'Planificacion'}_${weekStart}.xls`, { bookType: 'biff8' });
+      } else {
+        XLSX.writeFile(action === 'buk' ? createBukWorkbook(data) : createBukPlanningWorkbook(data), `${action === 'buk' ? 'BUK' : 'Planificacion'}_${weekStart}.xls`, { bookType: 'biff8' });
+        if (action === 'buk') {
+          const differences = bukRefrigerioRows(data).filter(row => row.at(-1) === 'Diferencia de refrigerio').length;
+          if (differences) setNotice(`Excel BUK usa el refrigerio de su catálogo. ${differences} ${differences === 1 ? 'break de cobertura difiere y se conserva' : 'breaks de cobertura difieren y se conservan'}. Consulta Excel planificación → REFRIGERIOS para ver ambas horas.`);
+        }
+      }
     } catch (cause) { setError(cause.message); }
     finally { setBusy(false); }
   };
@@ -43,6 +50,7 @@ export default function BukScheduleTools({ storeId, staff, schedules, weekStart 
     <button type="button" className={`${button} bg-teal-600`} disabled={busy || !weekStart || !storeName || !managerName} onClick={() => perform('buk')}>Excel BUK</button>
     <button type="button" className={`${button} bg-blue-700`} disabled={busy || !weekStart} onClick={() => perform('planning')}>Excel planificación</button>
     <button type="button" className={`${button} bg-green-600`} disabled={busy || !weekStart} onClick={() => perform('pdf')}>PDF</button>
+    {notice && <p role="status" className="w-full text-xs text-blue-800">{notice}</p>}
     {error && <p role="alert" className="w-full whitespace-pre-line text-xs text-red-700">{error}</p>}
   </div>;
 }

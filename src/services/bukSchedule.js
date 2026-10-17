@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx';
 import approved from '../data/bukApprovedShifts.js';
 import defaultCatalog from '../data/bukShiftCatalog.js';
 import { SCHEDULE_DAYS, SCHEDULE_DAY_LABELS, getWeekDates, effectiveModality, isActiveOnDate, getExportShiftSegments } from './scheduleExportData.js';
-import { calculateScheduleTotals, formatScheduleMinutes, requiresScheduleBreak } from './scheduleHours.js';
+import { calculateScheduleTotals, formatScheduleMinutes, requiresScheduleBreak, getScheduleBreak } from './scheduleHours.js';
 
 export const BUK_HEADERS = ['Nombre del Colaborador', 'RUT', 'Área', 'Supervisor'];
 export const approvedBukShifts = approved;
@@ -113,6 +113,43 @@ export function makeApprovedBukPatch(option, current = {}, day = 'monday', catal
     breakStart: shift.breakMinutes ? clock(match?.breakStart) : '' };
 }
 
+export function getBukCatalogShift(shift, day, catalog = defaultCatalog) {
+  if (!shift || shift.off || (shift.feriado ?? shift.holiday) || shift.splitShift || !clock(shift.start) || !clock(shift.end)) return null;
+  const label = SCHEDULE_DAY_LABELS[SCHEDULE_DAYS.indexOf(day)];
+  const matches = catalog.filter(item => normalize(item.day) === normalize(label)
+    && clock(item.start) === clock(shift.start) && clock(item.end) === clock(shift.end));
+  const definitions = new Set(matches.map(item => [item.code, clock(item.breakStart), clock(item.breakEnd)].join('|')));
+  if (definitions.size !== 1) return null;
+  const match = matches[0];
+  return { code: match.code, start: clock(match.start), end: clock(match.end), breakStart: clock(match.breakStart), breakEnd: clock(match.breakEnd) };
+}
+
+export function bukRefrigerioRows({ staff, schedules, weekStart, catalog = defaultCatalog }) {
+  const dates = getWeekDates(weekStart);
+  return orderScheduleStaff(staff.filter(person => person.status !== 'inactive'), weekStart).flatMap(person =>
+    SCHEDULE_DAYS.map((day, index) => {
+      const shift = schedules[person.id]?.[day];
+      const modality = effectiveModality(person, dates[index]);
+      const buk = getBukCatalogShift(shift, day, catalog);
+      const rest = getScheduleBreak(shift, modality);
+      let state = 'Coincide';
+      if (!isActiveOnDate(person, dates[index])) state = 'Cese';
+      else if (isBukScheduleExempt(person)) state = 'No se envía a BUK';
+      else if (shift?.off) state = 'Descanso';
+      else if (shift?.feriado ?? shift?.holiday) state = 'Feriado compensado';
+      else if (!shift?.start && !shift?.end) state = 'Sin turno';
+      else if (!buk) state = 'Revisar turno BUK';
+      else if (requiresScheduleBreak(shift, modality) && !rest) state = 'Break de cobertura pendiente';
+      else if ((rest?.start || '') !== buk.breakStart || (rest?.end || '') !== buk.breakEnd) state = 'Diferencia de refrigerio';
+      else if (!buk.breakStart) state = 'Sin refrigerio';
+      const applies = ['Coincide', 'Break de cobertura pendiente', 'Diferencia de refrigerio', 'Sin refrigerio'].includes(state);
+      return [`${person.name || ''} ${person.lastName || ''}`.trim(), modality, dates[index], SCHEDULE_DAY_LABELS[index],
+        shift?.start || '', shift?.end || '', applies ? buk.code : '',
+        applies ? (buk.breakStart ? `${buk.breakStart}–${buk.breakEnd}` : 'Sin refrigerio') : '',
+        applies ? (rest ? `${rest.start}–${rest.end}` : requiresScheduleBreak(shift, modality) ? 'Pendiente' : 'Sin break') : '', state];
+    }));
+}
+
 export function parseBukTemplate(workbook) {
   const sheet = workbook.Sheets.turnosColaboradores;
   if (!sheet) throw new Error('El archivo debe contener la hoja turnosColaboradores de BUK.');
@@ -169,10 +206,8 @@ export function buildBukRows({ staff, schedules, weekStart, identities, storeNam
       const matches = catalog.filter(item => normalize(item.day) === normalize(SCHEDULE_DAY_LABELS[index]) && clock(item.start) === clock(shift.start) && clock(item.end) === clock(shift.end) && item.start && item.end);
       const codes = [...new Set(matches.map(item => item.code))];
       if (codes.length !== 1) { errors.push(`${prefix}: turno ${shift.start || '?'} A ${shift.end || '?'} ${codes.length ? 'ambiguo' : 'no disponible'} en BUK.`); return ''; }
-      const match = matches[0];
-      // Ignore obsolete break metadata on plans that the approved workbook marks
-      // without a break. Preserve saved shifts; do not invent a BUK collation.
-      if (shift.breakStart && requiresScheduleBreak(shift, effectiveModality(person, dates[index])) && clock(shift.breakStart) !== clock(match.breakStart)) errors.push(`${prefix}: el refrigerio BUK es ${match.breakStart || 'sin refrigerio'}; en el editor es ${shift.breakStart}.`);
+      // Breaks chosen in the editor organize store coverage. BUK keeps the
+      // collation already defined by this active shift code; neither is moved.
       return codes[0];
     });
     return [identity.name, identity.dni, identity.area, identity.supervisor, ...values];
@@ -188,7 +223,9 @@ export function createBukWorkbook(data) {
   sheet['!cols'] = [{ wch: 46 }, { wch: 13 }, { wch: 24 }, { wch: 46 }, ...Array(7).fill({ wch: 20 })];
   XLSX.utils.book_append_sheet(workbook, sheet, 'turnosColaboradores');
   const catalog = data.catalog ?? defaultCatalog;
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Nombre del turno', 'Siglas', 'Nombre del día', 'Entrada del turno', 'Salida del turno', 'Entrada de colación', 'Salida de colación'], ...catalog.map(item => [item.code, item.code, item.day, item.start || '-', item.end || '-', item.breakStart || '-', item.breakEnd || '-'])]), 'turnosSemanales');
+  const weeklyCatalog = XLSX.utils.aoa_to_sheet([['Nombre del turno', 'Siglas', 'Nombre del día', 'Entrada del turno', 'Salida del turno', 'Entrada de colación', 'Salida de colación'], ...catalog.map(item => [item.code, item.code, item.day, item.start || '-', item.end || '-', item.breakStart || '-', item.breakEnd || '-'])]);
+  weeklyCatalog['!cols'] = [24, 24, 16, 20, 20, 24, 24].map(wch => ({ wch }));
+  XLSX.utils.book_append_sheet(workbook, weeklyCatalog, 'turnosSemanales');
   for (const name of ['turnosFlexibles', 'turnosTransitorios']) XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Nombre del turno', 'Sigla']]), name);
   for (const [name, values] of Object.entries(data.auxiliarySheets || {})) workbook.Sheets[name] = XLSX.utils.aoa_to_sheet(values);
   return workbook;
@@ -238,5 +275,12 @@ export function createBukPlanningWorkbook({ staff, schedules, weekStart, identit
   const rows = [['N°', 'NOMBRE DEL COLABORADOR', 'MODALIDAD', 'DESCANSO', ...dates.flatMap((date, i) => [`${SCHEDULE_DAY_LABELS[i]} ${date} · INGRESO`, 'SALIDA', 'POSICIÓN']), 'HORAS NETAS', 'CONTROL'], ...planningBukRows(staff, schedules, weekStart)];
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'PLANIFICACIÓN');
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Plan', 'Ingreso', 'Salida', 'Refrigerio (min)'], ...approved.map(item => [item.group, item.start, item.end, item.breakMinutes])]), 'HORARIOS APROBADOS');
+  const refrigerios = XLSX.utils.aoa_to_sheet([
+    ['Colaborador', 'Modalidad', 'Fecha', 'Día', 'Ingreso base', 'Salida base', 'Turno BUK', 'Refrigerio BUK', 'Break de cobertura', 'Revisión'],
+    ...bukRefrigerioRows({ staff, schedules, weekStart, catalog }),
+  ]);
+  refrigerios['!cols'] = [46, 14, 14, 16, 16, 16, 24, 24, 24, 32].map(wch => ({ wch }));
+  refrigerios['!autofilter'] = { ref: refrigerios['!ref'] };
+  XLSX.utils.book_append_sheet(workbook, refrigerios, 'REFRIGERIOS');
   return workbook;
 }
