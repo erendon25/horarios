@@ -43,7 +43,7 @@ Full-Time conserva seis turnos de 8:45 con 45 minutos de refrigerio y 48:00 neta
 
 Comparación directa con el archivo: `node scripts/verify-buk-approved-workbook.mjs "ruta/al/archivo.xlsm"`. El script lee los encabezados y rangos sin ejecutar macros y guarda un informe en `output/buk-workbook/approved-audit.json`, sin extraer información del personal.
 
-Regresión de selección semanal y refrigerios: `node --test src/services/bukWeeklyPlan.test.js src/services/bukApprovedRules.test.js`. Recorrido del editor con persistencia HTTP aislada: ejecutar primero `node scripts/test-buk-schedule.mjs` para crear los datos ficticios y después `node scripts/verify-buk-weekly-plan-ui.mjs` (requiere Playwright y Chromium). La prueba comprueba los siete días, entrada manual, borrador, guardado, recarga sin borrador, descansos marcados y desmarcados, breaks según la opción, descarga de ambos Excel, móvil y cambio al modo anterior, sin escribir en producción.
+Regresión de selección semanal y refrigerios: `node --test src/services/bukWeeklyPlan.test.js src/services/bukApprovedRules.test.js`. Recorrido del editor con persistencia HTTP aislada: ejecutar primero `node scripts/test-buk-schedule.mjs` para crear los datos ficticios y después `node scripts/verify-buk-weekly-plan-ui.mjs` (requiere Playwright y Chromium). La prueba comprueba los siete días, entrada manual, borrador, guardado, recarga sin borrador, descansos marcados y desmarcados, breaks según la opción, descarga de ambos Excel y móvil; también verifica que una preferencia antigua no reactive el modo anterior. No escribe en producción.
 
 ## Validaciones realizadas
 
@@ -69,31 +69,38 @@ La configuración de una plantilla cargada desde la aplicación normal se guarda
 
 Los archivos de ejemplo están en `artifacts/buk/`; contienen personal ficticio. El archivo `recalculado/PLANTILLA_ORIGINAL_PRUEBA.xlsx` conserva las fórmulas originales, sin macros, para revisar el cálculo.
 
-## Producción: cambio reversible entre modos
+## Editor: BUK como único modo
 
-El editor incluye «Modalidad de planificación»: BUK o Anterior / GeoVictoria.
-BUK es la opción inicial. La preferencia se guarda por cuenta y tienda en el navegador
-(`schedule_mode:<uid>:<storeId>`). No cambia los turnos ni descarta el borrador;
-los cambios de horarios siguen requiriendo Guardar. En otro navegador se debe
-seleccionar de nuevo la modalidad deseada.
+El editor utiliza BUK siempre. Se retiraron «Modalidad de planificación», la vista
+Anterior / GeoVictoria, su exportación y la consulta de su catálogo. Una preferencia
+antigua `schedule_mode:<uid>:<storeId>` se ignora aunque contenga `legacy`.
+Excel planificación sigue disponible como reporte complementario de BUK para
+revisar horarios, cobertura y refrigerios; no es otro modo de edición.
 
-Anterior recupera entrada/salida manuales (sin autocompletar BUK), horario partido,
-PDF anterior y Excel GeoVictoria (requiere su catálogo de turnos existente).
-BUK recupera turnos aprobados, autocompletado y exportaciones BUK/planificación.
-Los descansos/breaks de horarios ya guardados se conservan: cambiar la vista no
-reescribe el horario ni elimina metadatos BUK.
+Abrir el editor no convierte ni guarda horarios. Los borradores mantienen sus
+claves por cuenta, tienda y semana, y los cambios continúan requiriendo Guardar.
+Los horarios manuales históricos siguen visibles. Si un turno antiguo es partido,
+se conservan y muestran sus dos tramos, y editar la entrada no reemplaza el segundo
+tramo. El selector lo identifica como un turno pendiente de adaptar a BUK.
+Elegir explícitamente un horario aprobado sustituye ambos tramos; conserva la
+posición, las extras y los horarios de los demás días. La exportación BUK informa
+los turnos partidos que todavía requieren revisión.
 
-Verificación: `node scripts/verify-buk-mode-switch.mjs` con el editor aislado en
-4179 prueba alternancia en ambos sentidos, persistencia tras recargar, conservación
-del borrador y ausencia de escrituras remotas. Los 30 controles de horarios y las
-pruebas de Excel BUK también pasan.
+Verificación aislada, después de generar los datos ficticios:
 
-Antes del despliegue se clonó la versión de producción al canal Firebase
-`antes-buk`: https://lc-scheduler--antes-buk-vgke227b.web.app . Este respaldo de
-Hosting tiene caducidad; no constituye un respaldo de la base de datos.
-Para revertir todo el frontend durante su vigencia:
-`firebase hosting:clone lc-scheduler:antes-buk lc-scheduler:live --project lc-scheduler`.
-La reversión de Hosting no modifica los datos de horarios.
+```sh
+node scripts/test-buk-schedule.mjs
+node scripts/verify-buk-mode-switch.mjs
+node scripts/verify-buk-weekly-plan-ui.mjs
+```
+
+Ambos recorridos requieren Playwright y Chromium. Aceptan `PLAYWRIGHT_MODULE` para
+la ruta del módulo y `CHROMIUM_PATH` para el ejecutable. Cada script inicia y cierra
+su servidor aislado: 4187 para BUK único y 4186 para el plan semanal, configurables
+con `BUK_QA_PORT`. La prueba BUK único comprueba una preferencia `legacy`, un turno
+partido histórico y un borrador recuperado, edición, guardado, recarga y reemplazo
+explícito por un turno BUK. Los documentos de prueba solo se guardan en memoria
+local; no se consulta ni modifica Supabase.
 
 ### Gerentes y asistentes: horarios libres
 
@@ -126,7 +133,7 @@ Pruebas: `node scripts/test-buk-management-exemption.mjs`; editor aislado con
 Pruebas: firestoreCompat (guardado y recarga), positionCoverage, heatmapTransfers,
 weeklyScheduleExcel, heatmapExport y navegador con verify-heatmap-transfers.
 
-El control de break también está disponible debajo de la entrada en
-Anterior / GeoVictoria. La verificación del cambio de modalidad abre el selector,
-asigna un break y comprueba el botón con la hora elegida. Los breaks asignados
-siguen excluyendo sus tres bloques de 15 minutos en el heatmap.
+El control de break está disponible debajo de la entrada del editor BUK.
+La verificación del plan semanal abre el selector, asigna un break y comprueba
+el botón con la hora elegida. Los breaks asignados siguen excluyendo sus tres
+bloques de 15 minutos en el heatmap.

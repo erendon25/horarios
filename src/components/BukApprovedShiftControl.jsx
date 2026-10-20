@@ -12,7 +12,7 @@ export default function BukApprovedShiftControl({ person, shift, schedule, day, 
   const allOptions = getApprovedBukOptions(person.modality, full ? 1 : rests);
   const options = getAvailableApprovedBukOptions(person.modality, full ? 1 : rests, schedule, day);
   const quota = getBukWeeklyShiftQuota(person.modality, rests, schedule, day);
-  const selected = allOptions.find(item => item.start === shift?.start && item.end === shift?.end);
+  const selected = !shift?.splitShift && allOptions.find(item => item.start === shift?.start && item.end === shift?.end);
   const overQuota = selected && !options.some(item => item.id === selected.id);
   const buk = getBukCatalogShift(shift, day);
   const manual = !locked && !selected && Boolean(shift?.start || shift?.end);
@@ -47,7 +47,7 @@ export default function BukApprovedShiftControl({ person, shift, schedule, day, 
     {!full && !locked && options.length > 0 && <p className="text-blue-800">Por completar, sin contar este día: {quota.filter(slot => slot.remaining > 0).map(slot => `${slot.remaining} de ${formatScheduleMinutes(slot.duration)} h`).join(' y ')}.</p>}
     {!full && !locked && !options.length && <p className="text-amber-700">Los turnos del plan ya están asignados en los otros días. Revisa los descansos o modifica otro día.</p>}
     {!locked && overQuota && <p className="text-amber-700">Este turno supera la distribución semanal. Elige uno de los turnos disponibles.</p>}
-    {manual && <p className="text-amber-700">Fuera del plan aprobado: revisa ingreso y salida.</p>}
+    {manual && <p className="text-amber-700">{shift?.splitShift ? 'Turno partido conservado. Elige un horario BUK para reemplazar ambos tramos.' : 'Fuera del plan aprobado: revisa ingreso y salida.'}</p>}
     {error && <p role="alert">{error}</p>}
   </div>;
 }

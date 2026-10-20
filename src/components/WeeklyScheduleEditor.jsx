@@ -10,8 +10,7 @@ import WeeklyScheduleExcelButton from './WeeklyScheduleExcelButton';
 import { getHeatmapAssignments, getProjectionForDay, getExportShiftSegments, getPositionSegments, canLimitPositionCoverage } from '../services/scheduleExportData';
 import SchedulePositionControl from './SchedulePositionControl';
 import { validateHeatmapTransfer, replacePositionInterval } from '../services/heatmapTransfers';
-import { exportSchedulePDF, exportGroupedPositionsPDF, exportExtraHoursReport } from './PDFExport';
-import { exportGeoVictoriaExcel } from "../services/GeoVictoriaExport";
+import { exportGroupedPositionsPDF, exportExtraHoursReport } from './PDFExport';
 import { calculateScheduleTotals, calculateScheduleDay, formatScheduleMinutes, getScheduleBreak, requiresScheduleBreak } from '../services/scheduleHours';
 import ScheduleBreakControl from './ScheduleBreakControl';
 import BukScheduleTools from './BukScheduleTools';
@@ -21,7 +20,6 @@ import { FaInfoCircle, FaExclamationTriangle, FaExclamationCircle } from 'react-
 import {
     Calendar,
     Save,
-    FileText,
     Download,
     Calculator,
     Filter,
@@ -130,8 +128,6 @@ export default function WeeklyScheduleEditor() {
     const [modalityFilter, setModalityFilter] = useState('Todos');
     const [positionFilter, setPositionFilter] = useState('Todas');
     const [excludeTraineesFilter, setExcludeTraineesFilter] = useState(false);
-    const [turnoMap, setTurnoMap] = useState({});
-    const [turnoMapLoading, setTurnoMapLoading] = useState(false);
     const [prevWeekSchedules, setPrevWeekSchedules] = useState({});
     const [tooltipOpen, setTooltipOpen] = useState(null);
     const [tooltipPosition, setTooltipPosition] = useState({ top: 0, left: 0 });
@@ -141,16 +137,6 @@ export default function WeeklyScheduleEditor() {
     const [scheduleAttempt, setScheduleAttempt] = useState(0);
     const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'success' | 'error'
     const [storeId, setStoreId] = useState('');
-    const [scheduleMode, setScheduleMode] = useState('buk');
-    const modeKey = currentUser?.uid && storeId ? `schedule_mode:${currentUser.uid}:${storeId}` : '';
-    useEffect(() => {
-        if (modeKey) setScheduleMode(localStorage.getItem(modeKey) === 'legacy' ? 'legacy' : 'buk');
-    }, [modeKey]);
-    const bukMode = scheduleMode === 'buk';
-    const changeScheduleMode = value => {
-        setScheduleMode(value);
-        if (modeKey) localStorage.setItem(modeKey, value);
-    };
     const [approvedRequests, setApprovedRequests] = useState([]);
     const [approvedRequestsError, setApprovedRequestsError] = useState('');
     const [showApprovedRequestsModal, setShowApprovedRequestsModal] = useState(false);
@@ -158,11 +144,6 @@ export default function WeeklyScheduleEditor() {
     const [searchTerm, setSearchTerm] = useState('');
     const [scheduleReload, setScheduleReload] = useState(0);
     const [aptitudeFilter, setAptitudeFilter] = useState('Todos'); // 'Todos', 'Certificados', 'En Proceso', 'No Capacitados'
-    const [showExportModal, setShowExportModal] = useState(false);
-    const [exportOptions, setExportOptions] = useState({
-        excludeTrainees: false,
-        showPositions: false
-    });
     const [showReplicateModal, setShowReplicateModal] = useState(false);
     const [replicateTargetStaff, setReplicateTargetStaff] = useState([]);
     const [replicateTargetDays, setReplicateTargetDays] = useState([]);
@@ -230,25 +211,6 @@ export default function WeeklyScheduleEditor() {
         fetchStore();
     }, [currentUser, db]);
     // === SETEAR SEMANA ACTUAL AUTOMÁTICAMENTE ===
-    useEffect(() => {
-        if (!storeId) return;
-
-        const fetchGeoVictoriaTurnos = async () => {
-            setTurnoMapLoading(true);
-            try {
-                const snap = await getDoc(doc(db, 'stores', storeId, 'config', 'geovictoria_turnos'));
-                setTurnoMap(snap.exists() ? (snap.data().turnoMap || {}) : {});
-            } catch (error) {
-                console.error('Error cargando turnos GeoVictoria:', error);
-                setTurnoMap({});
-            } finally {
-                setTurnoMapLoading(false);
-            }
-        };
-
-        fetchGeoVictoriaTurnos();
-    }, [storeId, db]);
-
     useEffect(() => {
         const today = new Date();
         const dayOfWeek = today.getDay(); // 0=Domingo, 1=Lunes
@@ -474,13 +436,14 @@ export default function WeeklyScheduleEditor() {
         }
 
         let updates = { [field]: finalValue };
-        if (bukMode && isBukScheduleExempt(person) && ['start', 'end'].includes(field)) {
+        if (isBukScheduleExempt(person) && ['start', 'end'].includes(field)) {
             updates = { ...updates, bukApprovedShiftId: '', bukBreakMinutes: 0 };
         }
-        if (bukMode && !isBukScheduleExempt(person) && field === 'start') {
+        if (!isBukScheduleExempt(person) && field === 'start') {
             const modality = getEffectiveModality(person, dateStr);
             const restDays = getBukRestDays(modality, schedules[staffId]);
-            const approved = findApprovedBukShiftByStart(modality, restDays, value, schedules[staffId], selectedDay);
+            // Historical split shifts remain intact until an approved BUK shift is chosen.
+            const approved = !current.splitShift && findApprovedBukShiftByStart(modality, restDays, value, schedules[staffId], selectedDay);
             updates = approved
                 ? makeApprovedBukPatch(approved.id, current, selectedDay)
                 : { start: finalValue, bukApprovedShiftId: '', bukBreakMinutes: 0 };
@@ -492,58 +455,15 @@ export default function WeeklyScheduleEditor() {
             updates = { off: true, start: '', end: '', position: '', feriado: false, extraHours: '', extraHoursPre: '', extraHoursPost: '', splitShift: false, start2: '', end2: '' };
         }
 
-        if (bukMode && isBukScheduleExempt(person) && field === 'feriado' && value === true) {
+        if (isBukScheduleExempt(person) && field === 'feriado' && value === true) {
             updates = { feriado: true, off: false };
         }
-        if (bukMode && !isBukScheduleExempt(person) && field === 'feriado' && value === true) {
+        if (!isBukScheduleExempt(person) && field === 'feriado' && value === true) {
             const modality = getEffectiveModality(person, dateStr);
             const restDays = getBukRestDays(modality, schedules[staffId]);
             const first = getAvailableApprovedBukOptions(modality, restDays, schedules[staffId], selectedDay)[0];
             if (!first) return;
             updates = { ...makeApprovedBukPatch(first.id, current, selectedDay), feriado: true, off: false };
-        }
-
-        if (!bukMode && field === 'feriado' && value === true) {
-            const holiday = isHoliday(dateStr);
-
-            if (holiday) {
-                alert(`Nota legal activa:\n\nEl ${dateStr} es "${holiday.name}".\n\nPor ley, no se puede usar un feriado oficial para pagar otro feriado. El sistema marcará automáticamente este día como "Día Libre (Descanso Legal)" para preservar el balance del colaborador.`);
-                updates = {
-                    off: true,
-                    feriado: false,
-                    start: '',
-                    end: '',
-                    position: '',
-                    extraHours: '',
-                    extraHoursPre: '',
-                    extraHoursPost: '',
-                    splitShift: false,
-                    start2: '',
-                    end2: ''
-                };
-            } else {
-                const effModality = getEffectiveModality(person, dateStr);
-                const isFull = (effModality || '').toLowerCase() === 'full-time';
-                updates = {
-                    feriado: true,
-                    off: false,
-                    start: '08:00',
-                    end: isFull ? '16:45' : '12:00',
-                    position: '',
-                    extraHours: '',
-                    extraHoursPre: '',
-                    extraHoursPost: '',
-                    splitShift: false,
-                    start2: '',
-                    end2: ''
-                };
-            }
-                }
-
-        if (field === 'splitShift') {
-            updates = value
-                ? { splitShift: true, off: false, feriado: false }
-                : { splitShift: false, start2: '', end2: '' };
         }
 
         // Si se desmarca feriado → limpiar solo feriado
@@ -569,10 +489,7 @@ export default function WeeklyScheduleEditor() {
 
         draftController.edit(prev => ({
             ...prev,
-            [staffId]: bukMode ? applyBukSchedulePatch(prev[staffId], selectedDay, updates) : {
-                ...prev[staffId],
-                [selectedDay]: { ...prev[staffId]?.[selectedDay], ...updates }
-            }
+            [staffId]: applyBukSchedulePatch(prev[staffId], selectedDay, updates)
         }));
     };
 
@@ -1638,39 +1555,7 @@ export default function WeeklyScheduleEditor() {
 
 
 
-                            <label className="flex flex-col gap-1 text-sm font-semibold">
-                                Modalidad de planificación
-                                <select aria-label="Modalidad de planificación" value={scheduleMode} onChange={event => changeScheduleMode(event.target.value)} className="border rounded-lg px-3 py-2 bg-white">
-                                    <option value="buk">BUK</option>
-                                    <option value="legacy">Anterior / GeoVictoria</option>
-                                </select>
-                                <span className="text-xs font-normal text-gray-600">Puedes cambiar en cualquier momento. No modifica tus horarios. Se recuerda en este navegador.</span>
-                            </label>
-                            {bukMode ? <BukScheduleTools storeId={storeId} staff={staff} schedules={schedules} weekStart={weekStartDate} /> : <>
-                            <button
-                                onClick={() => setShowExportModal(true)}
-                                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
-                            >
-                                <FileText className="w-5 h-5" />
-                                PDF
-                            </button>
-
-                            <button
-                                onClick={() => {
-                                    if (!wk || Object.keys(turnoMap).length === 0) {
-                                        alert('Primero sube el Excel de turnos GeoVictoria desde Admin > RRHH.');
-                                        return;
-                                    }
-                                    exportGeoVictoriaExcel(activeStaff, schedules, wk, turnoMap);
-                                }}
-                                disabled={turnoMapLoading}
-                                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-teal-500 to-teal-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium disabled:opacity-60 disabled:cursor-not-allowed"
-                            >
-                                <Download className="w-5 h-5" />
-                                {turnoMapLoading ? 'Cargando GeoVictoria...' : 'Excel GeoVictoria'}
-                            </button>
-
-                            </>}
+                            <BukScheduleTools storeId={storeId} staff={staff} schedules={schedules} weekStart={weekStartDate} />
 
                             <button
                                 onClick={async () => {
@@ -1724,7 +1609,6 @@ export default function WeeklyScheduleEditor() {
                                             <th className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center text-xs font-semibold uppercase tracking-wider">Entrada</th>
                                             <th className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center text-xs font-semibold uppercase tracking-wider">Salida</th>
 
-                                            {!bukMode && <th className="px-2 py-4 text-center">Partido</th>}
                                             <th className="w-[72px] min-w-[72px] max-w-[72px] px-1 py-4 text-center text-[11px] font-semibold uppercase tracking-normal" title="Horas Extras Antes">HE Ant</th>
                                             <th className="w-[72px] min-w-[72px] max-w-[72px] px-1 py-4 text-center text-[11px] font-semibold uppercase tracking-normal" title="Horas Extras Después">HE Desp</th>
                                             <th className="w-[72px] min-w-[72px] max-w-[72px] px-1 py-4 text-center text-[11px] font-semibold uppercase leading-tight tracking-normal">Horas<br />Día</th>
@@ -1769,7 +1653,7 @@ export default function WeeklyScheduleEditor() {
                                             );
                                             // Cálculo de rango correcto de horas según modalidad
                                             const esFullTime = effModality?.toLowerCase() === 'full-time';
-                                            const isBukWeek = bukMode && weekdays.some(day => schedules[p.id]?.[day]?.bukApprovedShiftId);
+                                            const isBukWeek = weekdays.some(day => schedules[p.id]?.[day]?.bukApprovedShiftId);
                                             const horasMin = esFullTime ? 48 * 60 : (isBukWeek ? 23 * 60 + 45 : 24 * 60);
                                             const horasMax = horasMin;
                                             const horasEnRango = horas.total >= horasMin && horas.total <= horasMax;
@@ -2047,13 +1931,13 @@ export default function WeeklyScheduleEditor() {
                                                                         }`}>
                                                                         {effModality}
                                                                     </span>
-                                                                    {bukMode && <BukApprovedShiftControl
+                                                                    <BukApprovedShiftControl
                                                                         person={{ ...p, modality: getEffectiveModality(p, getSelectedDateStr()) }}
                                                                         shift={d} schedule={schedules[p.id]} day={selectedDay}
                                                                         onApply={patch => draftController.edit(prev => ({
                                                                             ...prev,
                                                                             [p.id]: applyBukSchedulePatch(prev[p.id], selectedDay, patch)
-                                                                        }))} />}
+                                                                        }))} />
                                                                     {isChangeDay && (
                                                                         <span className="text-[9px] font-bold text-blue-600 animate-pulse mt-1">
                                                                             🔄 CAMBIO HOY
@@ -2063,85 +1947,23 @@ export default function WeeklyScheduleEditor() {
                                                             );
                                                         })()}
                                                     </td>
-                                                    {bukMode ? <>
                                                     <td className="w-[120px] px-2 py-4 text-center align-top">
                                                         {isCeased ? '--' : <div className="flex flex-col gap-2">
                                                             <input type="time" value={d.start || ''} onChange={e => handleChange(p.id, 'start', e.target.value)} disabled={d.feriado || d.off} title="Entrada" className="w-full border-2 rounded-lg px-2 py-2 text-center font-bold" />
+                                                            {d.splitShift && <label className="text-[10px] text-amber-800">Segundo tramo conservado
+                                                                <input type="time" value={d.start2 || ''} onChange={e => handleChange(p.id, 'start2', e.target.value)} disabled={d.feriado || d.off} title="Entrada del segundo tramo" className="w-full border-2 border-amber-200 rounded-lg px-2 py-2 text-center font-bold" />
+                                                            </label>}
                                                             {requiresScheduleBreak(d, effModality) && <ScheduleBreakControl shift={d} modality={effModality} name={`${p.name} ${p.lastName || ''}`.trim()} onChange={value => handleChange(p.id, 'breakStart', value)} />}
                                                         </div>}
                                                     </td>
                                                     <td className="w-[120px] px-2 py-4 text-center align-top">
-                                                        {isCeased ? '--' : <input type="time" value={d.end || ''} onChange={e => handleChange(p.id, 'end', e.target.value)} disabled={d.feriado || d.off} title="Salida" className="w-full border-2 rounded-lg px-2 py-2 text-center font-bold" />}
+                                                        {isCeased ? '--' : <div className="flex flex-col gap-2">
+                                                            <input type="time" value={d.end || ''} onChange={e => handleChange(p.id, 'end', e.target.value)} disabled={d.feriado || d.off} title="Salida" className="w-full border-2 rounded-lg px-2 py-2 text-center font-bold" />
+                                                            {d.splitShift && <label className="text-[10px] text-amber-800">Segundo tramo conservado
+                                                                <input type="time" value={d.end2 || ''} onChange={e => handleChange(p.id, 'end2', e.target.value)} disabled={d.feriado || d.off} title="Salida del segundo tramo" className="w-full border-2 border-amber-200 rounded-lg px-2 py-2 text-center font-bold" />
+                                                            </label>}
+                                                        </div>}
                                                     </td>
-                                                    </> : <>
-                                                    <td className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center align-top">
-                                                        {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
-                                                            <div className="flex flex-col gap-1.5">
-                                                                <input
-                                                                    type="time"
-                                                                    value={d.start || ''}
-                                                                    onChange={e => handleChange(p.id, 'start', e.target.value)}
-                                                                    disabled={d.feriado || d.off}
-                                                                    className={`w-full px-2 py-2 border-2 rounded-lg text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${hasConflict
-                                                                        ? 'border-red-500 bg-red-100 text-red-900 animate-pulse ring-2 ring-red-200'
-                                                                        : 'border-gray-300'
-                                                                        } disabled:bg-gray-100 disabled:cursor-not-allowed`}
-                                                                    title="Entrada 1"
-                                                                />
-                                                                {d.splitShift && (
-                                                                    <input
-                                                                        type="time"
-                                                                        value={d.start2 || ''}
-                                                                        onChange={e => handleChange(p.id, 'start2', e.target.value)}
-                                                                        disabled={d.feriado || d.off}
-                                                                        className="w-full px-2 py-2 border border-blue-200 bg-blue-50 rounded-lg text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
-                                                                        title="Entrada 2"
-                                                                    />
-                                                                )}
-                                                                {requiresScheduleBreak(d, effModality) && <ScheduleBreakControl shift={d} modality={effModality} name={`${p.name} ${p.lastName || ''}`.trim()} onChange={value => handleChange(p.id, 'breakStart', value)} />}
-                                                            </div>
-                                                        )}
-                                                    </td>
-                                                    <td className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center align-top">
-                                                        {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
-                                                            <div className="flex flex-col gap-1.5">
-                                                                <input
-                                                                    type="time"
-                                                                    value={d.end || ''}
-                                                                    onChange={e => handleChange(p.id, 'end', e.target.value)}
-                                                                    disabled={d.feriado || d.off}
-                                                                    className={`w-full px-2 py-2 border-2 rounded-lg text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${hasConflict
-                                                                        ? 'border-red-500 bg-red-100 text-red-900 animate-pulse ring-2 ring-red-200'
-                                                                        : 'border-gray-300'
-                                                                        } disabled:bg-gray-100 disabled:cursor-not-allowed`}
-                                                                    title="Salida 1"
-                                                                />
-                                                                {d.splitShift && (
-                                                                    <input
-                                                                        type="time"
-                                                                        value={d.end2 || ''}
-                                                                        onChange={e => handleChange(p.id, 'end2', e.target.value)}
-                                                                        disabled={d.feriado || d.off}
-                                                                        className="w-full px-2 py-2 border border-blue-200 bg-blue-50 rounded-lg text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
-                                                                        title="Salida 2"
-                                                                    />
-                                                                )}
-                                                            </div>
-                                                        )}
-                                                    </td>
-                                                    <td className="w-[72px] min-w-[72px] max-w-[72px] px-2 py-4 text-center">
-                                                        {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
-                                                            <input
-                                                                type="checkbox"
-                                                                checked={!!d.splitShift}
-                                                                onChange={e => handleChange(p.id, 'splitShift', e.target.checked)}
-                                                                disabled={!esFullTime || d.feriado || d.off}
-                                                                className="w-5 h-5 text-blue-600 rounded border-gray-300 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
-                                                                title={esFullTime ? 'Horario partido' : 'Solo disponible para Full-Time'}
-                                                            />
-                                                        )}
-                                                    </td>
-                                                    </>}
                                                     <td className="w-[72px] min-w-[72px] max-w-[72px] px-1 py-4 text-center">
                                                         {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
                                                             <input
@@ -2617,68 +2439,6 @@ export default function WeeklyScheduleEditor() {
                     </div>
                 )}
 
-                {showExportModal && (
-                    <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
-                        <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 animate-in fade-in zoom-in duration-300">
-                            <div className="flex items-center gap-3 mb-6">
-                                <div className="p-3 bg-blue-100 rounded-xl">
-                                    <FileText className="w-6 h-6 text-blue-600" />
-                                </div>
-                                <h3 className="text-2xl font-bold text-gray-800">Opciones de Impresión</h3>
-                            </div>
-
-                            <p className="text-gray-600 mb-6 font-medium">
-                                Selecciona las opciones para la exportación del horario semanal.
-                            </p>
-
-                            <div className="space-y-5 mb-8">
-                                <label className={`flex items-start gap-4 p-5 border-2 rounded-2xl cursor-pointer transition-all ${exportOptions.excludeTrainees ? 'border-blue-500 bg-blue-50' : 'border-gray-100 hover:border-gray-200 bg-gray-50'}`}>
-                                    <input
-                                        type="checkbox"
-                                        className="w-6 h-6 mt-1 text-blue-600 rounded-lg border-gray-300 focus:ring-blue-500 cursor-pointer"
-                                        checked={exportOptions.excludeTrainees}
-                                        onChange={e => setExportOptions({ ...exportOptions, excludeTrainees: e.target.checked })}
-                                    />
-                                    <div className="select-none">
-                                        <p className="font-extrabold text-gray-900 text-lg">Solo Personal de Tienda</p>
-                                        <p className="text-sm text-gray-600 leading-relaxed font-medium">Excluye automáticamente a colaboradores en entrenamiento (Trainees).</p>
-                                    </div>
-                                </label>
-
-                                <label className={`flex items-start gap-4 p-5 border-2 rounded-2xl cursor-pointer transition-all ${exportOptions.showPositions ? 'border-purple-500 bg-purple-50' : 'border-gray-100 hover:border-gray-200 bg-gray-50'}`}>
-                                    <input
-                                        type="checkbox"
-                                        className="w-6 h-6 mt-1 text-purple-600 rounded-lg border-gray-300 focus:ring-purple-500 cursor-pointer"
-                                        checked={exportOptions.showPositions}
-                                        onChange={e => setExportOptions({ ...exportOptions, showPositions: e.target.checked })}
-                                    />
-                                    <div className="select-none">
-                                        <p className="font-extrabold text-gray-900 text-lg">Incluir Posiciones</p>
-                                        <p className="text-sm text-gray-600 leading-relaxed font-medium">Muestra el cargo/posición asignado debajo de cada turno.</p>
-                                    </div>
-                                </label>
-                            </div>
-
-                            <div className="flex gap-4">
-                                <button
-                                    onClick={() => setShowExportModal(false)}
-                                    className="flex-1 px-4 py-3.5 border border-gray-300 rounded-xl text-gray-700 font-bold hover:bg-gray-50 transition-colors"
-                                >
-                                    Cancelar
-                                </button>
-                                <button
-                                    onClick={() => {
-                                        exportSchedulePDF(activeStaff, schedules, wk, exportOptions.excludeTrainees, exportOptions.showPositions);
-                                        setShowExportModal(false);
-                                    }}
-                                    className="flex-1 px-4 py-3.5 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl font-bold shadow-lg hover:shadow-xl transform hover:scale-[1.02] active:scale-[0.98] transition-all"
-                                >
-                                    Generar PDF
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
                 {/* Modal de Solicitudes Aprobadas */}
                 {showApprovedRequestsModal && (
                     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">

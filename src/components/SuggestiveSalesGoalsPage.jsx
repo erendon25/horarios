@@ -1,649 +1,388 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, ArrowLeft, CalendarDays, CheckCircle2, CloudUpload, Database, RefreshCw, Target, Users } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertCircle, ArrowLeft, CheckCircle2, CloudUpload, Plus, RefreshCw, Save, Target, Trash2, Upload, Users } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { collection, doc, getDoc, getDocs, orderBy, query, setDoc, where } from '../lib/supabase/firestoreCompat';
+import { collection, doc, getDoc, getDocs, query, setDoc, where } from '../lib/supabase/firestoreCompat';
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../supabase';
 import { supabase } from '../lib/supabase/client';
+import { buildRevenueSuggestiveSalesPlan, discoverSuggestiveChannels } from '../services/suggestiveSalesGoals';
+import { exactReportProductName, getReportedProductNames } from '../services/productMatching';
+import { readSalesHistoryDates, readSalesHistoryRange } from '../services/salesHistoryRead';
+import { getDatesInRange } from '../services/salesAnalysis';
+import { parseSalesFile } from '../services/salesImport';
+import { writeSalesHistoryDays } from '../services/salesHistoryWrite';
+import WeeklySuggestiveSalesReport from './WeeklySuggestiveSalesReport';
+import { suggestiveProductParticipation } from '../services/suggestiveSalesDefaults';
+import { suggestiveChannelLabel } from '../services/suggestiveChannels';
 import {
-    SUGGESTIVE_PRODUCTS,
-    SUGGESTIVE_PRODUCT_SET,
-    SUGGESTIVE_TRX_RULES,
-    buildTransactionSuggestiveSalesPlan,
-} from '../services/suggestiveSalesGoals';
+    buildSuggestiveSalesDraft, serializeSuggestiveSalesConfiguration,
+    loadSuggestiveSalesConfiguration, saveSuggestiveSalesConfiguration,
+    readSuggestiveSalesDraftCache, writeSuggestiveSalesDraftCache,
+    canApplySuggestiveSalesConfigurationLoad,
+} from '../services/suggestiveSalesConfiguration';
 
 const todayDate = () => {
     const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
-        timeZone: 'America/Lima',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
+        timeZone: 'America/Lima', year: 'numeric', month: '2-digit', day: '2-digit',
     }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
     return `${parts.year}-${parts.month}-${parts.day}`;
 };
-const currentMonth = () => todayDate().slice(0, 7);
-const lastDateOfMonth = (month) => {
+const lastDateOfMonth = month => {
     if (!/^\d{4}-\d{2}$/.test(month)) return '';
-    const [year, monthNumber] = month.split('-').map(Number);
-    const lastDay = new Date(year, monthNumber, 0).getDate();
-    return `${month}-${String(lastDay).padStart(2, '0')}`;
+    const [year, number] = month.split('-').map(Number);
+    return `${month}-${String(new Date(Date.UTC(year, number, 0)).getUTCDate()).padStart(2, '0')}`;
 };
-const formatUnits = (value) => Number(value || 0).toLocaleString('es-PE', { maximumFractionDigits: 1 });
-const formatPercent = (rate) => (rate * 100).toLocaleString('es-PE', { maximumFractionDigits: 2 });
-const participationConfigKey = (month) => `suggestive_sales_goals:${month}`;
+const money = value => value === null || value === undefined ? 'Sin datos' : Number(value).toLocaleString('es-PE', { style: 'currency', currency: 'PEN' });
+const units = value => Number(value || 0).toLocaleString('es-PE', { maximumFractionDigits: 0 });
+const percent = value => value === null || value === undefined ? 'Sin datos' : `${(value * 100).toLocaleString('es-PE', { maximumFractionDigits: 2 })}%`;
+const browserStorage = () => { try { return globalThis.localStorage; } catch { return null; } };
+const scopeId = scope => JSON.stringify([scope.userId, scope.storeId, scope.month]);
+const participationInput = product => {
+    const rate = suggestiveProductParticipation(product);
+    return rate === null ? '' : Number((rate * 100).toFixed(4));
+};
 
 export default function SuggestiveSalesGoalsPage() {
     const navigate = useNavigate();
-    const { userData } = useAuth();
+    const { userData, currentUser } = useAuth();
     const storeId = userData?.storeId || '';
-    const [month, setMonth] = useState(currentMonth);
+    const userId = currentUser?.uid || currentUser?.id || userData?.uid || userData?.id || '';
+    const [month, setMonth] = useState(() => todayDate().slice(0, 7));
     const [assignmentDate, setAssignmentDate] = useState(todayDate);
     const [source, setSource] = useState(null);
+    const [draft, setDraft] = useState(buildSuggestiveSalesDraft);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const [notice, setNotice] = useState('');
+    const [saving, setSaving] = useState(false);
     const [refreshToken, setRefreshToken] = useState(0);
     const [publication, setPublication] = useState({ state: 'idle', count: 0, message: '' });
-    const [participationDraft, setParticipationDraft] = useState('30');
-    const [unitDrafts, setUnitDrafts] = useState({});
-    const [savingParticipation, setSavingParticipation] = useState(false);
-    const [participationMessage, setParticipationMessage] = useState('');
-    const [participationError, setParticipationError] = useState('');
-    const draftValue = Number(participationDraft);
-    const validDraft = participationDraft.trim() !== '' && Number.isFinite(draftValue)
-        && draftValue >= 0 && draftValue <= 100;
-    const hasParticipationChange = validDraft && source && (source.unitTargets !== null || Math.abs(draftValue / 100 - source.participation) > 1e-10);
-
-    const plan = useMemo(() => {
-        if (!source || source.month !== month || source.storeId !== storeId) return null;
-        return buildTransactionSuggestiveSalesPlan({ ...source, month });
-    }, [month, source, storeId]);
+    const [customName, setCustomName] = useState('');
+    const [customPrice, setCustomPrice] = useState('');
+    const [importing, setImporting] = useState(false);
+    const reportInput = useRef(null);
+    const scope = useMemo(() => ({ userId, storeId, month }), [userId, storeId, month]);
+    const settingsScope = scopeId(scope);
+    const activeScope = useRef(scope);
+    activeScope.current = scope;
+    const draftRef = useRef(draft);
+    const revision = useRef(0);
+    const dirty = useRef(false);
+    const saveQueue = useRef(Promise.resolve());
+    const [loadedSettingsScope, setLoadedSettingsScope] = useState('');
+    const loadedScopeRef = useRef('');
+    const [settingsStatus, setSettingsStatus] = useState('idle');
+    const [settingsError, setSettingsError] = useState('');
+    const cacheDraft = useCallback((savedScope, savedDraft, savedDirty, savedRevision) => {
+        try { writeSuggestiveSalesDraftCache(browserStorage(), savedScope, { draft: savedDraft, dirty: savedDirty, revision: savedRevision }); }
+        catch (failure) { setSettingsError(failure.message); }
+    }, []);
+    const persistSettings = useCallback((snapshot, savedScope, savedRevision, automatic = false) => {
+        const configuration = serializeSuggestiveSalesConfiguration(snapshot);
+        const pending = saveQueue.current.catch(() => {}).then(async () => {
+            if (activeScope.current.userId !== savedScope.userId || activeScope.current.storeId !== savedScope.storeId) {
+                throw new Error('La cuenta o la tienda cambió. La configuración permanece en su borrador.');
+            }
+            if (scopeId(activeScope.current) === scopeId(savedScope) && revision.current === savedRevision) setSettingsStatus('saving');
+            await saveSuggestiveSalesConfiguration({ month: savedScope.month, configuration,
+                write: (key, value) => setDoc(doc(db, 'stores', savedScope.storeId, 'config', key), value) });
+            const cached = readSuggestiveSalesDraftCache(browserStorage(), savedScope);
+            if (cached?.revision === savedRevision) cacheDraft(savedScope, snapshot, false, savedRevision);
+            if (scopeId(activeScope.current) === scopeId(savedScope) && revision.current === savedRevision) {
+                dirty.current = false;
+                setSettingsStatus(automatic ? 'autosaved' : 'saved'); setSettingsError('');
+            }
+        });
+        saveQueue.current = pending.catch(() => {});
+        return pending.catch(failure => {
+            if (scopeId(activeScope.current) === scopeId(savedScope) && revision.current === savedRevision) {
+                setSettingsStatus('error');
+                setSettingsError('No se pudo guardar la configuración. El borrador se conserva en este navegador; reintenta guardar.');
+            }
+            throw failure;
+        });
+    }, [cacheDraft]);
 
     useEffect(() => {
-        if (!storeId || !/^\d{4}-\d{2}$/.test(month)) {
-            setSource(null);
-            setLoading(false);
-            return undefined;
-        }
-
+        if (!storeId || !/^\d{4}-\d{2}$/.test(month)) { setSource(null); setLoading(false); return undefined; }
         let cancelled = false;
-        const loadSource = async () => {
-            setSource(null);
-            setUnitDrafts({});
-            setLoading(true);
-            setError('');
-            setParticipationMessage('');
-            setParticipationError('');
+        const requestScope = scope;
+        const cached = readSuggestiveSalesDraftCache(browserStorage(), requestScope);
+        const keepMemoryDraft = loadedScopeRef.current === scopeId(requestScope) && dirty.current;
+        if (!keepMemoryDraft) {
+            revision.current = cached?.revision || 0;
+            dirty.current = cached?.dirty === true;
+        }
+        const requestRevision = revision.current;
+        if (cached && !keepMemoryDraft) { draftRef.current = cached.draft; setDraft(cached.draft); }
+        const load = async () => {
+            setLoading(true); setSource(null); setError(''); setNotice(''); setSettingsError(''); setSettingsStatus('idle');
+            setPublication({ state: 'idle', count: 0, message: '' });
             try {
-                const [historySnap, schedulesSnap, staffSnap, configSnap, participationSnap] = await Promise.all([
-                    getDocs(query(collection(db, 'stores', storeId, 'sales_history'), orderBy('__name__'))),
+                const historyPromise = readSalesHistoryRange(supabase, storeId).then(async range => {
+                    if (!range.min) return [];
+                    const end = range.max;
+                    if (range.min > end) return [];
+                    return [...(await readSalesHistoryDates(supabase, storeId, getDatesInRange(range.min, end))).values()];
+                });
+                const [history, schedules, staff, config, goalConfig] = await Promise.all([
+                    historyPromise,
                     getDocs(query(collection(db, 'schedules'), where('storeId', '==', storeId))),
                     getDocs(query(collection(db, 'staff_profiles'), where('storeId', '==', storeId))),
                     getDoc(doc(db, 'stores', storeId, 'sales_config', month)),
-                    getDoc(doc(db, 'stores', storeId, 'config', participationConfigKey(month))),
+                    loadSuggestiveSalesConfiguration({ month,
+                        read: async key => (await getDoc(doc(db, 'stores', storeId, 'config', key))).data() }),
                 ]);
-                if (cancelled) return;
-                const participation = participationSnap.data()?.participation ?? SUGGESTIVE_TRX_RULES.participation;
-                if (!Number.isFinite(participation) || participation < 0 || participation > 1) {
-                    throw new Error('El porcentaje guardado de venta sugestiva no es válido.');
+                if (cancelled || scopeId(activeScope.current) !== scopeId(requestScope)) return;
+                setSource({ month, storeId, history, monthlyData: config.data()?.monthlyData || {},
+                    schedules: schedules.docs.map(item => ({ ...item.data(), id: item.id })),
+                    staff: staff.docs.map(item => ({ ...item.data(), id: item.id })) });
+                if (canApplySuggestiveSalesConfigurationLoad({ requestScope, activeScope: activeScope.current,
+                    requestRevision, currentRevision: revision.current, dirty: dirty.current })) {
+                    const nextDraft = buildSuggestiveSalesDraft(goalConfig);
+                    draftRef.current = nextDraft; setDraft(nextDraft);
+                    cacheDraft(requestScope, nextDraft, false, revision.current);
                 }
-                setParticipationDraft(String(Number((participation * 100).toFixed(8))));
-                setSource({
-                    month,
-                    storeId,
-                    participation,
-                    unitTargets: participationSnap.data()?.unitTargets ?? null,
-                    monthlyData: configSnap.data()?.monthlyData || {},
-                    history: historySnap.docs.map((item) => ({ ...item.data(), date: item.id })),
-                    schedules: schedulesSnap.docs.map((item) => ({ ...item.data(), id: item.id })),
-                    staff: staffSnap.docs.map((item) => ({ ...item.data(), id: item.id })),
-                });
-            } catch (loadError) {
-                console.error('Error calculando metas de venta sugestiva:', loadError);
-                if (!cancelled) {
-                    setSource(null);
-                    setError('No se pudo cruzar el histórico con los horarios de colaboradores.');
-                }
-            } finally {
-                if (!cancelled) setLoading(false);
-            }
+                loadedScopeRef.current = scopeId(requestScope);
+                setLoadedSettingsScope(scopeId(requestScope));
+            } catch (failure) {
+                console.error('Error preparando venta sugestiva:', failure);
+                if (!cancelled) setError('No se pudieron consultar las metas de venta, los reportes y los horarios. Actualiza para reintentar.');
+            } finally { if (!cancelled) setLoading(false); }
         };
-
-        loadSource();
+        load();
         return () => { cancelled = true; };
-    }, [storeId, month, refreshToken]);
+    }, [storeId, month, refreshToken, scope, cacheDraft]);
 
+    const { plan, calculationError } = useMemo(() => {
+        if (!source || source.month !== month || source.storeId !== storeId) return { plan: null, calculationError: '' };
+        try {
+            if (String(draft.participation).trim() === '') throw Error('Indica la participación mínima.');
+            const pricedProducts = draft.products.filter(product => Number(product.price) > 0
+                && Number.isFinite(Number(product.price)) && suggestiveProductParticipation(product) !== null
+                && exactReportProductName(product.reportName));
+            return { plan: buildRevenueSuggestiveSalesPlan({ ...source, products: pricedProducts,
+                channels: draft.channels, participation: Number(draft.participation) / 100 }), calculationError: '' };
+        } catch (failure) { return { plan: null, calculationError: failure.message }; }
+    }, [source, month, storeId, draft]);
+    const selectedDay = plan?.daily.find(day => day.date === assignmentDate);
+    const selectedRows = plan?.rows.filter(row => row.date === assignmentDate) || [];
+    const selectedProducts = plan?.products || [];
+    const reportProductNames = useMemo(() => getReportedProductNames(source?.history || []), [source]);
+    const reportedChannels = useMemo(() => new Set(discoverSuggestiveChannels(source?.history || [])), [source]);
+    const selectedUnassigned = selectedRows.filter(row => row.missingStaff).reduce((sum, row) => sum + Object.values(row.goals).reduce((a, b) => a + b, 0), 0);
+    const ready = Boolean(plan?.products.length && plan?.channels.length && !loading);
+    const exactNamesComplete = draft.products.filter(product => product.enabled).every(product => exactReportProductName(product.reportName));
+    const validOptionalPrices = draft.products.every(product => product.price === ''
+        || (Number.isFinite(Number(product.price)) && Number(product.price) > 0 && Number(product.price) <= 1000000000));
+    const validParticipation = String(draft.participation).trim() !== '' && Number.isFinite(Number(draft.participation))
+        && Number(draft.participation) >= 0 && Number(draft.participation) <= 100;
+    const validProductTargets = draft.products.every(product => suggestiveProductParticipation(product) !== null);
+    const missingProductPrices = draft.products.filter(product => product.price === '');
+    const uniqueProductNames = new Set(draft.products.map(product => exactReportProductName(product.reportName))).size === draft.products.length;
+    const canSaveConfiguration = Boolean(source && loadedSettingsScope === settingsScope && !loading && !calculationError
+        && exactNamesComplete && validOptionalPrices && validParticipation && validProductTargets && uniqueProductNames);
+    const canPublish = ready && canSaveConfiguration && !missingProductPrices.length;
+    const updateDraft = updater => {
+        const nextDraft = updater(draftRef.current);
+        draftRef.current = nextDraft; revision.current += 1; dirty.current = true;
+        setDraft(nextDraft); cacheDraft(scope, nextDraft, true, revision.current);
+        setSettingsStatus('pending'); setSettingsError(''); setNotice('');
+        setPublication({ state: 'idle', count: 0, message: '' });
+    };
+    const updateProduct = (id, patch) => updateDraft(current => ({ ...current, products: current.products.map(product => product.id === id ? { ...product, ...patch } : product) }));
+    const removeProduct = id => updateDraft(current => ({ ...current, products: current.products.filter(product => product.locked || product.id !== id) }));
+    const updateChannel = (id, patch) => updateDraft(current => ({ ...current, channels: current.channels.map(channel => channel.id === id ? { ...channel, ...patch } : channel) }));
     useEffect(() => {
-        if (!plan || loading || !storeId || !/^\d{4}-\d{2}$/.test(month)) return undefined;
-        if (plan.metrics.missingDays > 0 || plan.metrics.untimedDays > 0) {
-            setPublication({ state: 'error', count: 0,
-                message: 'Faltan TRX diarias o detalle horario. Completa los datos para publicar el mes sin metas incompletas.' });
-            return undefined;
+        if (!dirty.current || !canSaveConfiguration || saving || importing || publication.state === 'publishing') return undefined;
+        const snapshot = draft, savedScope = scope, savedRevision = revision.current;
+        const timer = setTimeout(() => { void persistSettings(snapshot, savedScope, savedRevision, true).catch(() => {}); }, 500);
+        return () => clearTimeout(timer);
+    }, [draft, scope, canSaveConfiguration, saving, importing, publication.state, persistSettings]);
+    const saveConfiguration = async event => {
+        event.preventDefault();
+        if (!canSaveConfiguration || saving) return;
+        setSaving(true); setError(''); setNotice('');
+        try {
+            await persistSettings(draft, scope, revision.current);
+            setNotice('Configuración guardada. Revisa la distribución antes de publicar las metas.');
+        } catch (failure) { console.error('Error guardando la configuración:', failure); }
+        finally { setSaving(false); }
+    };
+    const publish = async () => {
+        if (!canPublish || saving || publication.state === 'publishing') return;
+        if (plan.metrics.missingGoalDates.length) {
+            setPublication({ state: 'error', count: 0, message: 'Completa las metas de venta del mes antes de reemplazar las metas publicadas. Usa cero para los días sin venta prevista.' }); return;
         }
-
-        let cancelled = false;
+        if (plan.metrics.missingHistoryDates.length) {
+            setPublication({ state: 'error', count: 0, message: 'Hay fechas con meta de venta y sin reportes monetarios suficientes. Completa el histórico antes de publicar.' }); return;
+        }
+        if (plan.metrics.missingChannelDates.length) {
+            setPublication({ state: 'error', count: 0, message: 'Hay canales seleccionados sin reportes de venta para calcular su participación. Carga sus reportes o retíralos de la evaluación.' }); return;
+        }
+        const rows = plan.rows.filter(row => !row.missingStaff && row.assigneeId).map(row => ({
+            staffId: row.assigneeId, date: row.date, channel: row.channel, schedule: row.schedule,
+            goals: row.goals, hourlyGoals: row.hourlyGoals, coveredHours: row.coveredHours,
+        }));
+        if (!rows.length) { setPublication({ state: 'error', count: 0, message: 'No hay metas asignadas a colaboradores para publicar. Revisa las posiciones y los horarios.' }); return; }
         setPublication({ state: 'publishing', count: 0, message: '' });
-        const timer = window.setTimeout(async () => {
-            setPublication((current) => ({ ...current, state: 'publishing', message: '' }));
-            const rows = plan.rows
-                .filter((row) => row.channel === 'SALÓN' && !row.missingStaff && row.assigneeId)
-                .map((row) => ({
-                    staffId: row.assigneeId,
-                    date: row.date,
-                    channel: row.channel,
-                    schedule: row.schedule,
-                    goals: row.goals,
-                    hourlyGoals: row.hourlyGoals,
-                    coveredHours: row.coveredHours,
-                }));
-            const { data, error: publishError } = await supabase.rpc('publish_suggestive_sales_goals', {
-                p_store_id: storeId,
-                p_month_start: `${month}-01`,
-                p_rows: rows,
-                p_targets: { ...plan.targets, calculation: {
-                    basis: plan.targetMode === 'units' ? 'monthly_units' : 'salon_transactions', participation: plan.metrics.participation,
-                    salonShare: plan.metrics.salonShare,
-                    productSet: SUGGESTIVE_PRODUCT_SET,
-                } },
-            });
-            if (cancelled) return;
-            if (publishError) {
-                console.error('Error publicando metas de venta sugestiva:', publishError);
-                setPublication({
-                    state: 'error',
-                    count: 0,
-                    message: 'El cálculo se muestra, pero no pudo publicarse en los paneles de colaboradores.',
-                });
-            } else {
-                setPublication({ state: 'published', count: Number(data) || rows.length, message: '' });
-            }
-        }, 700);
-
-        return () => {
-            cancelled = true;
-            window.clearTimeout(timer);
-        };
-    }, [loading, month, plan, storeId]);
-
-    const saveParticipation = async (event) => {
-        event.preventDefault();
-        if (!validDraft || !plan || !hasParticipationChange || savingParticipation
-            || publication.state === 'publishing') return;
-        setSavingParticipation(true);
-        setParticipationMessage('');
-        setParticipationError('');
-        const participation = draftValue / 100;
         try {
-            await setDoc(doc(db, 'stores', storeId, 'config', participationConfigKey(month)), {
-                participation, unitTargets: null,
+            await persistSettings(draft, scope, revision.current);
+            const { data, error: failure } = await supabase.rpc('publish_suggestive_sales_goals', {
+                p_store_id: storeId, p_month_start: `${month}-01`, p_rows: rows,
+                p_targets: { ...plan.targets, calculation: { basis: 'channel_sales_revenue', participation: Number(draft.participation) / 100,
+                    products: selectedProducts.map(({ id, label, price, reportName, participation }) => ({ id, label, price, reportName, participation })), channels: plan.channels } },
             });
-            setSource((current) => current?.month === month && current?.storeId === storeId
-                ? { ...current, participation, unitTargets: null } : current);
-            setParticipationMessage(`Objetivo de ${formatPercent(participation)}% guardado para ${month}.`);
-        } catch (saveError) {
-            console.error('Error guardando el porcentaje de venta sugestiva:', saveError);
-            setParticipationError('No se pudo guardar el porcentaje. Las metas mantienen el último valor guardado; vuelve a intentarlo.');
-        } finally {
-            setSavingParticipation(false);
+            if (failure) throw failure;
+            setPublication({ state: 'published', count: Number(data) || rows.length, message: '' });
+        } catch (failure) {
+            console.error('Error publicando venta sugestiva:', failure);
+            setPublication({ state: 'error', count: 0, message: 'No se pudieron publicar las metas. El cálculo y la configuración se conservan para volver a intentarlo.' });
         }
     };
-
-    const saveUnitTargets = async (event) => {
-        event.preventDefault();
-        if (!plan || savingParticipation || publication.state === 'publishing') return;
-        const unitTargets = Object.fromEntries(SUGGESTIVE_PRODUCTS.map(({ id }) => [id,
-            Number(unitDrafts[id] ?? plan.targets[id]),
-        ]));
-        if (!SUGGESTIVE_PRODUCTS.every(({ id }) => String(unitDrafts[id] ?? plan.targets[id]).trim() !== ''
-            && Number.isSafeInteger(unitTargets[id]) && unitTargets[id] >= 0)) {
-            setParticipationError('Ingresa una cantidad entera no negativa para cada producto.');
-            return;
-        }
-        setSavingParticipation(true);
-        setParticipationError('');
-        setParticipationMessage('');
+    const canAddProduct = Boolean(exactReportProductName(customName) && (customPrice === ''
+        || (Number.isFinite(Number(customPrice)) && Number(customPrice) > 0 && Number(customPrice) <= 1000000000))
+        && !draft.products.some(product => exactReportProductName(product.reportName) === exactReportProductName(customName)));
+    const addCustomProduct = () => {
+        if (!canAddProduct) return;
+        const id = `product-${crypto.randomUUID()}`;
+        const reportName = exactReportProductName(customName);
+        updateDraft(current => ({ ...current, products: [...current.products, { id, label: reportName, reportName, price: customPrice, participation: 0.30, enabled: true }] }));
+        setCustomName(''); setCustomPrice('');
+    };
+    const changeMonth = value => {
+        setMonth(value); setSource(null);
+        setAssignmentDate(todayDate().startsWith(`${value}-`) ? todayDate() : `${value}-01`);
+    };
+    const importReport = async event => {
+        const file = event.target.files[0];
+        event.target.value = '';
+        if (!file || !storeId || loading || saving || importing || publication.state === 'publishing') return;
+        setImporting(true); setError(''); setNotice('');
         try {
-            await setDoc(doc(db, 'stores', storeId, 'config', participationConfigKey(month)), {
-                participation: source.participation, unitTargets,
-            });
-            setSource((current) => current?.month === month && current?.storeId === storeId
-                ? { ...current, unitTargets } : current);
-            setParticipationMessage(`Metas en unidades guardadas para ${month}.`);
-        } catch (saveError) {
-            console.error('Error guardando metas en unidades:', saveError);
-            setParticipationError('No se pudieron guardar las metas. Vuelve a intentarlo.');
-        } finally {
-            setSavingParticipation(false);
-        }
+            const { days } = await parseSalesFile(file);
+            if (!days.size) throw new Error('No se encontraron ventas válidas en el reporte.');
+            const dates = await writeSalesHistoryDays(supabase, storeId, days);
+            setSource(current => current && current.storeId === storeId ? { ...current,
+                history: [...new Map([...(current.history || []).map(day => [day.date, day]), ...days]
+                    .map(([date, day]) => [date, { ...day, date }])).values()].sort((a, b) => a.date.localeCompare(b.date)) } : current);
+            setPublication({ state: 'idle', count: 0, message: '' });
+            setNotice(`${file.name}: ${dates.length} jornadas cargadas, del ${dates[0]} al ${dates.at(-1)}. Se reemplazan sólo las jornadas incluidas; las demás se conservan.`);
+        } catch (failure) {
+            console.error('Error importando el reporte de venta sugestiva:', failure);
+            setError(failure?.message || 'No se pudo importar el reporte de Intraview o Inforest.');
+        } finally { setImporting(false); }
     };
-    const latestSalesDate = source?.history?.map((day) => day.date).sort().at(-1);
-    const monthHasSales = source?.history?.some((day) => day.date?.startsWith(`${month}-`));
+    const busy = saving || importing || publication.state === 'publishing';
 
-    const changeMonth = (value) => {
-        setMonth(value);
-        if (!/^\d{4}-\d{2}$/.test(value)) {
-            setAssignmentDate('');
-            return;
-        }
-        const today = todayDate();
-        setAssignmentDate(today.startsWith(`${value}-`) ? today : `${value}-01`);
-    };
-
-    return (
-        <div className="min-h-screen bg-slate-50 pb-20">
-            <header className="bg-white border-b border-slate-200 shadow-sm">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                    <div className="flex items-center gap-4">
-                        <button
-                            type="button"
-                            onClick={() => navigate('/admin')}
-                            className="p-2 text-slate-500 hover:text-orange-600 transition-colors"
-                            aria-label="Volver al panel admin"
-                        >
-                            <ArrowLeft className="w-6 h-6" />
-                        </button>
-                        <div>
-                            <h1 className="text-2xl font-black text-slate-900 uppercase tracking-tight">Venta sugestiva</h1>
-                            <p className="text-xs font-semibold text-slate-500 mt-1">Metas comerciales de salón por producto, horario y colaborador.</p>
-                        </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-end gap-3">
-                        <label className="text-[10px] font-black uppercase text-slate-500">
-                            Mes objetivo
-                            <input
-                                type="month"
-                                disabled={savingParticipation}
-                                value={month}
-                                onChange={(event) => changeMonth(event.target.value)}
-                                className="block mt-1 bg-white text-slate-900 border border-slate-300 rounded-lg px-3 py-2 text-sm font-bold"
-                            />
-                        </label>
-                        <button
-                            type="button"
-                            onClick={() => setRefreshToken((current) => current + 1)}
-                            disabled={loading || !storeId || savingParticipation}
-                            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-slate-900 text-white text-xs font-black uppercase hover:bg-slate-800 disabled:opacity-50 transition-colors"
-                        >
-                            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                            Actualizar datos
-                        </button>
-                    </div>
-                </div>
-            </header>
-
-            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6">
-                <div className="mb-4 rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs text-slate-600 flex flex-wrap items-center justify-between gap-3">
-                    <span className="inline-flex items-center gap-2 font-semibold">
-                        <Database className="w-4 h-4 text-blue-600" />
-                        El histórico de SKU se carga desde el apartado Análisis de ventas.
-                    </span>
-                    {plan && (
-                        <div className="flex flex-wrap items-center gap-3">
-                            <span className="font-black text-slate-800">
-                                {plan.coveredDays} días con detalle de productos
-                            </span>
-                            {publication.state === 'publishing' && (
-                                <span className="inline-flex items-center gap-1.5 font-bold text-indigo-700">
-                                    <CloudUpload className="h-4 w-4 animate-pulse" /> Publicando en paneles…
-                                </span>
-                            )}
-                            {publication.state === 'published' && (
-                                <span className="inline-flex items-center gap-1.5 font-bold text-green-700">
-                                    <CheckCircle2 className="h-4 w-4" /> {publication.count} metas publicadas
-                                </span>
-                            )}
-                        </div>
-                    )}
-                </div>
-
-                {publication.state === 'error' && (
-                    <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
-                        <AlertCircle className="h-4 w-4 shrink-0" />
-                        {publication.message}
-                    </div>
-                )}
-
-                {!storeId && !loading && (
-                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-800">
-                        No hay una tienda asociada al usuario actual.
-                    </div>
-                )}
-
-                {error && (
-                    <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
-                        <AlertCircle className="w-4 h-4 shrink-0" />
-                        {error}
-                    </div>
-                )}
-
-                {source && !monthHasSales && (
-                    <div role="status" className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm">
-                        No hay ventas importadas para {month}.
-                        {latestSalesDate && <> El último día importado es {latestSalesDate}.
-                            <button type="button" onClick={() => changeMonth(latestSalesDate.slice(0, 7))}
-                                className="ml-2 font-bold underline">Ver ventas de {latestSalesDate.slice(0, 7)}</button>
-                        </>}
-                    </div>
-                )}
-                <form onSubmit={saveUnitTargets} className="mb-4 rounded-xl border border-orange-200 bg-white p-4">
-                    <h2 className="font-bold text-slate-900">Metas mensuales en unidades — Salón</h2>
-                    <p className="mt-1 text-xs text-slate-500">Los productos se mantienen; define la cantidad de cada uno para esta tienda y mes. Al guardar, estas cantidades reemplazan la meta calculada por porcentaje.</p>
-                    <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                        {SUGGESTIVE_PRODUCTS.map(({ id, label }) => (
-                            <label key={id} className="text-xs font-bold text-slate-700">{label}
-                                <input type="number" min="0" step="1" required
-                                    value={unitDrafts[id] ?? plan?.targets[id] ?? ''}
-                                    onChange={(event) => setUnitDrafts((current) => ({ ...current, [id]: event.target.value }))}
-                                    disabled={!plan || loading || savingParticipation}
-                                    className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-lg" />
+    return <div className="min-h-screen bg-slate-50 pb-16">
+        <header className="border-b border-slate-200 bg-white">
+            <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-5 sm:px-6">
+                <div className="flex items-center gap-3"><button type="button" onClick={() => navigate('/admin')} aria-label="Volver al panel admin" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><ArrowLeft className="h-5 w-5" /></button>
+                    <div><h1 className="text-2xl font-black text-slate-900">Venta sugestiva</h1><p className="mt-1 text-sm text-slate-500">Porcentaje semanal por canal y metas por producto y colaborador.</p></div></div>
+                <div className="flex flex-wrap items-end gap-2"><label className="text-xs font-bold text-slate-600">Mes objetivo<input type="month" value={month} disabled={busy} onChange={event => changeMonth(event.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+                    <input ref={reportInput} type="file" accept=".xlsx,.xls,.csv" aria-label="Cargar reporte de ventas" onChange={importReport} className="hidden" />
+                    <button type="button" onClick={() => reportInput.current?.click()} disabled={loading || busy || !storeId} title="Archivos de Intraview o Inforest (.xlsx, .xls y .csv)" className="inline-flex items-center gap-2 rounded-lg bg-orange-600 px-3 py-2.5 text-xs font-bold text-white disabled:opacity-50"><Upload className="h-4 w-4" />{importing ? 'Leyendo reporte…' : 'Cargar reporte de ventas'}</button>
+                    <button type="button" disabled={loading || busy || !storeId} onClick={() => setRefreshToken(value => value + 1)} className="rounded-lg bg-slate-900 p-2.5 text-white disabled:opacity-50" aria-label="Actualizar datos"><RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} /></button></div>
+            </div>
+        </header>
+        <main className="mx-auto max-w-7xl space-y-5 px-4 pt-6 sm:px-6">
+            {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</p>}
+            {settingsError && <p role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{settingsError}</p>}
+            {!storeId && !loading && <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">No hay una tienda asociada a tu usuario.</p>}
+            <form onSubmit={saveConfiguration} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h2 className="font-black text-slate-900">1. Define qué evaluar</h2>
+                <p className="mt-1 text-xs text-slate-500">Bordes y Hazlo Combo permanecen como productos predeterminados, con una meta inicial de 30% cada uno. Puedes ajustar sus metas y precios; los cambios se guardan automáticamente.</p>
+                <fieldset disabled={loading || busy || !source} className="mt-5 grid min-w-0 gap-6 lg:grid-cols-2">
+                    <div><h3 className="text-sm font-bold text-slate-800">Productos y precio unitario</h3><div className="mt-2 space-y-2">
+                        {draft.products.map(product => <div key={product.id} className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-3">
+                            <label className="min-w-0 flex-1 basis-52 text-xs font-bold text-slate-600">Nombre exacto en el reporte
+                                <input type="text" maxLength="160" list="suggestive-report-product-names" readOnly={Boolean(product.locked)} aria-describedby="suggestive-product-name-help" value={product.reportName ?? ''}
+                                    onChange={event => updateProduct(product.id, { reportName: event.target.value, label: event.target.value || product.label })}
+                                    aria-label={`Nombre exacto en el reporte de ${product.label}`} placeholder="Nombre de la columna Producto"
+                                    className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-900" />
                             </label>
-                        ))}
+                            <label className="text-xs font-bold text-slate-600">Precio para meta (S/)<input type="number" min="0.01" step="0.01" value={product.price} onChange={event => updateProduct(product.id, { price: event.target.value })} aria-label={`Precio de ${product.label}`} placeholder="Opcional" className="mt-1 block w-24 rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm font-normal text-slate-900" /></label>
+                            <label className="text-xs font-bold text-slate-600">Meta (%)<input type="number" min="0" max="100" step="0.01" value={participationInput(product)} onChange={event => updateProduct(product.id, { participation: event.target.value === '' ? '' : Number(event.target.value) / 100 })} aria-label={`Meta de participación de ${product.label}`} className="mt-1 block w-24 rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm font-normal text-slate-900" /></label>
+                            {product.locked ? <span className="rounded bg-slate-100 px-2 py-1.5 text-[10px] font-semibold text-slate-600">Predeterminado</span>
+                                : <button type="button" onClick={() => removeProduct(product.id)} aria-label={`Quitar producto ${product.label}`} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold text-slate-600 hover:bg-red-50 hover:text-red-700"><Trash2 className="h-4 w-4" />Quitar</button>}
+                        </div>)}
+                    </div>{!draft.products.length && <p className="mt-3 rounded-xl bg-slate-50 p-4 text-sm text-slate-500">Aún no has agregado productos para evaluar.</p>}
+                    <p id="suggestive-product-name-help" className="mt-2 text-xs leading-relaxed text-slate-600">El nombre debe coincidir con la columna Producto del reporte, incluidas mayúsculas, acentos y signos. Si escribes un nombre distinto, no se reconocerán sus ventas. Puedes elegir una sugerencia de los reportes cargados para evitar errores.</p>
+                    <p className="mt-2 text-xs text-slate-500">El porcentaje semanal usa los importes reales del reporte. El precio es opcional y se usa para calcular las unidades de las metas diarias.</p>
+                    <datalist id="suggestive-report-product-names">{reportProductNames.map(name => <option key={name} value={name} />)}</datalist>
+                    <div className="mt-3 flex flex-wrap items-end gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-3"><label className="min-w-0 flex-1 basis-52 text-xs font-bold text-slate-600">Nombre exacto del nuevo producto<input maxLength="160" list="suggestive-report-product-names" aria-describedby="suggestive-product-name-help" value={customName} onChange={event => setCustomName(event.target.value)} placeholder="Nombre de la columna Producto" className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+                        <label className="text-xs font-bold text-slate-600">Precio para meta (S/)<input type="number" min="0.01" step="0.01" value={customPrice} onChange={event => setCustomPrice(event.target.value)} aria-label="Precio del nuevo producto" placeholder="Opcional" className="mt-1 block w-24 rounded-lg border border-slate-300 px-2 py-2 text-sm" /></label>
+                        <button type="button" onClick={addCustomProduct} disabled={!canAddProduct} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2.5 text-xs font-bold text-white disabled:opacity-40" aria-label="Agregar producto"><Plus className="h-4 w-4" />Agregar producto</button></div></div>
+                    <div><h3 className="text-sm font-bold text-slate-800">Canales evaluados</h3><div className="mt-2 space-y-2">{draft.channels.map(channel => <div key={channel.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 p-3">
+                        <label className="flex items-center gap-2 text-sm font-semibold text-slate-800"><input type="checkbox" aria-label={channel.id} checked={channel.enabled} onChange={event => updateChannel(channel.id, { enabled: event.target.checked })} className="h-4 w-4" />{suggestiveChannelLabel(channel.id)}{!reportedChannels.has(channel.id) && <span className="text-[10px] font-normal text-amber-700">Sin reportes</span>}</label>
+                    </div>)}</div>
+                        <p className="mt-2 text-xs text-slate-500">Las metas se asignan automáticamente a los colaboradores que ocupan la posición correspondiente a cada canal en el horario.</p>
+                        <p className="mt-2 text-xs text-slate-500">Salón y Módulo son los canales predeterminados. Módulo figura como Serv. Fila en los reportes; cada producto tiene su meta por separado en cada canal.</p>
+                        <p className="mt-5 text-xs leading-relaxed text-slate-500">La meta de cada producto se aplica a su porcentaje de venta en cada canal seleccionado. Cargar otro reporte conserva los productos, metas, precios y canales de evaluación.</p>
                     </div>
-                    <button type="submit" disabled={!plan || loading || savingParticipation || publication.state === 'publishing'}
-                        className="mt-3 rounded-lg bg-orange-600 px-4 py-3 text-xs font-bold text-white disabled:opacity-50">
-                        {savingParticipation ? 'Guardando…' : 'Guardar metas en unidades'}
-                    </button>
-                </form>
+                </fieldset>
+                {calculationError && <p role="alert" className="mt-3 text-sm text-amber-800">{calculationError}</p>}
+                {!exactNamesComplete && !calculationError && <p role="alert" className="mt-3 text-sm text-amber-800">Completa el nombre exacto del reporte de cada producto seleccionado antes de guardar o publicar. Los registros históricos se conservan.</p>}
+                {!validProductTargets && <p role="alert" className="mt-3 text-sm text-amber-800">Completa una meta entre 0% y 100% para cada producto. El borrador se conserva mientras terminas de editar.</p>}
+                <div className="mt-5 flex flex-wrap items-center gap-3"><button type="submit" disabled={!canSaveConfiguration || busy} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-40"><Save className="h-4 w-4" />{saving ? 'Guardando…' : 'Guardar configuración'}</button>{notice && <p role="status" className="text-xs font-semibold text-green-700">{notice}</p>}</div>
+                {settingsStatus !== 'idle' && <p role="status" className={`mt-3 text-xs font-semibold ${settingsStatus === 'error' ? 'text-amber-800' : settingsStatus === 'pending' || settingsStatus === 'saving' ? 'text-slate-600' : 'text-green-700'}`}>
+                    {({ pending: 'Cambios pendientes de guardar.', saving: 'Guardando configuración…', autosaved: 'Configuración guardada automáticamente.', saved: 'Configuración guardada.', error: 'El borrador se conserva; reintenta guardar.' })[settingsStatus]}
+                </p>}
+            </form>
 
-                <form onSubmit={saveParticipation} className="mb-4 rounded-xl border border-indigo-200 bg-white p-4">
-                    <div className="flex flex-wrap items-end gap-3">
-                        <label className="text-xs font-bold text-slate-700">
-                            Participación objetivo de venta sugestiva (%)
-                            <input
-                                type="number" min="0" max="100" step="0.01" required
-                                value={participationDraft}
-                                onChange={(event) => {
-                                    setParticipationDraft(event.target.value);
-                                    setParticipationMessage('');
-                                    setParticipationError('');
-                                }}
-                                disabled={!plan || loading || savingParticipation}
-                                className="mt-1 block w-36 rounded-lg border border-slate-300 px-3 py-2 text-lg font-black text-indigo-900 disabled:opacity-50"
-                                aria-describedby="participation-help"
-                            />
-                        </label>
-                        <button type="submit"
-                            disabled={!plan || !validDraft || !hasParticipationChange || loading || savingParticipation || publication.state === 'publishing'}
-                            className="rounded-lg bg-indigo-700 px-4 py-3 text-xs font-black text-white hover:bg-indigo-800 disabled:opacity-50">
-                            {savingParticipation ? 'Guardando…' : 'Usar meta por porcentaje'}
-                        </button>
-                    </div>
-                    <p id="participation-help" className="mt-2 text-xs text-slate-500">
-                        Admite de 0% a 100%, con decimales. Se guarda por tienda y mes. SALÓN mantiene el 60% estimado de las TRX totales.
-                        {plan && <> Valor aplicado: <strong>{formatPercent(plan.metrics.participation)}%</strong>.</>}
-                    </p>
-                    {!validDraft && <p className="mt-2 text-xs font-semibold text-red-700">Ingresa un porcentaje entre 0 y 100.</p>}
-                    {hasParticipationChange && <p className="mt-2 text-xs text-amber-700">Cambio pendiente de guardar. Al guardar se recalculan las cantidades y se publican si el mes tiene datos suficientes.</p>}
-                    {participationMessage && <p role="status" className="mt-2 text-xs font-semibold text-green-700">{participationMessage}</p>}
-                    {participationError && <p role="alert" className="mt-2 text-xs font-semibold text-red-700">{participationError}</p>}
-                </form>
+            {!loading && source && <WeeklySuggestiveSalesReport history={source.history} products={draft.products} channels={draft.channels} participation={Number(draft.participation) / 100} />}
 
-                <SuggestiveGoalsWorkspace
-                    plan={plan}
-                    loading={loading}
-                    error={error}
-                    month={month}
-                    assignmentDate={assignmentDate}
-                    onAssignmentDateChange={setAssignmentDate}
-                />
-            </main>
-        </div>
-    );
-}
-
-function SuggestiveGoalsWorkspace({
-    plan,
-    loading,
-    error,
-    month,
-    assignmentDate,
-    onAssignmentDateChange,
-}) {
-    const summaries = Array.isArray(plan?.summaries) ? plan.summaries : [];
-    const planRows = Array.isArray(plan?.rows) ? plan.rows : [];
-    const channelTargets = plan?.channelTargets && typeof plan.channelTargets === 'object' ? plan.channelTargets : {};
-    const selectedRows = planRows.filter((row) => row.date === assignmentDate);
-    const selectedTotals = Object.fromEntries(SUGGESTIVE_PRODUCTS.map(({ id }) => [
-        id,
-        selectedRows.reduce((sum, row) => sum + (row.goals[id] || 0), 0),
-    ]));
-    const hasExactHistory = summaries.some((product) => product?.hasHistory);
-    const metrics = plan?.metrics;
-    const participationLabel = formatPercent(metrics?.participation ?? SUGGESTIVE_TRX_RULES.participation);
-    const salonLabel = formatPercent(metrics?.salonShare ?? SUGGESTIVE_TRX_RULES.salonShare);
-    const exampleGoal = Math.max(0, Math.ceil(1000 * (metrics?.salonShare ?? SUGGESTIVE_TRX_RULES.salonShare)
-        * (metrics?.participation ?? SUGGESTIVE_TRX_RULES.participation) - 1e-9));
-    const selectedDay = plan?.daily?.find((day) => day.date === assignmentDate);
-    const unassignedTotal = selectedRows
-        .filter((row) => row.missingStaff)
-        .reduce((sum, row) => sum + SUGGESTIVE_PRODUCTS.reduce(
-            (rowSum, product) => rowSum + (Number(row.goals[product.id]) || 0),
-            0,
-        ), 0);
-    const selectedDateLabel = /^\d{4}-\d{2}-\d{2}$/.test(assignmentDate)
-        ? new Date(`${assignmentDate}T12:00:00`).toLocaleDateString('es-PE', {
-            weekday: 'long',
-            day: '2-digit',
-            month: 'long',
-            year: 'numeric',
-        })
-        : 'fecha no seleccionada';
-
-    return (
-        <section className="bg-white border border-slate-200 shadow-sm rounded-xl overflow-hidden">
-            <div className="bg-slate-900 text-white px-5 py-4 flex items-start gap-3">
-                <Target className="w-6 h-6 text-orange-400 mt-0.5" />
-                <div>
-                    <h2 className="text-lg font-black uppercase tracking-tight">Metas de venta sugestiva</h2>
-                    <p className="text-xs text-slate-300 mt-1">Distribución exclusiva para salón por fecha y turno completo del colaborador.</p>
-                </div>
-            </div>
-
-            <div className="p-5">
-                <div className="mb-5 rounded-lg border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-950">
-                    {plan?.targetMode === 'units' ? <p className="font-black">Objetivo mensual definido: {formatUnits(metrics?.totalGoal)} unidades en Salón. Las cantidades por producto se distribuyen entre fechas y turnos según las TRX.</p> : <><p className="font-black">Objetivo: {participationLabel} unidades sugestivas por cada 100 TRX de SALÓN</p>
-                    <p className="mt-2">TRX totales × {salonLabel}% de participación estimada de SALÓN × {participationLabel}% de venta sugestiva.</p>
-                    <p className="mt-1 text-xs">Borde de queso + VS HAZLO CMB V3 CANELITAS + VS HAZLO CMB V3 CRAZY suman ese {participationLabel}%. Cada unidad registrada del SKU cuenta una vez. Ejemplo: 1.000 TRX × {salonLabel}% × {participationLabel}% = {formatUnits(exampleGoal)} unidades entre los tres productos.</p></>}
-                    {metrics && <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                        <div><span className="block text-xs">TRX base del mes</span><strong>{formatUnits(metrics.totalTransactions)}</strong></div>
-                        <div><span className="block text-xs">TRX estimadas de SALÓN</span><strong>{formatUnits(metrics.salonTransactions)}</strong></div>
-                        <div><span className="block text-xs">Meta conjunta mensual</span><strong>{formatUnits(metrics.totalGoal)} unidades</strong></div>
-                        <div><span className="block text-xs">Participación registrada*</span><strong>{metrics.actualParticipation === null ? 'Sin detalle comparable' : `${(metrics.actualParticipation * 100).toFixed(1)}%`}</strong></div>
-                    </div>}
-                    <p className="mt-3 text-xs leading-relaxed">*Unidades de los tres SKU vendidas en SALÓN ÷ (TRX totales × 60%), sólo en fechas con TRX y detalle completo de SKU. El 60% se aplica como supuesto sobre tickets, no como porcentaje comprobado de TRX. No mide tickets únicos con venta sugestiva.</p>
-                    <p className="mt-2 text-xs">Se usan TRX registradas del día; si faltan, las configuradas del mes; y luego el promedio histórico del mismo día de semana (promedio general si no hay muestra). {plan?.targetMode === 'units' ? 'Las cantidades mensuales se reparten en unidades enteras conservando el total por producto.' : <>Se redondea la meta conjunta diaria hacia arriba para alcanzar al menos el {participationLabel}%.</>}</p>
-                    {metrics?.estimatedDays > 0 && <p className="mt-2 text-xs font-bold">{metrics.estimatedDays} días calculados con TRX estimadas a partir del histórico.</p>}
-                    {plan?.targetMode !== 'units' && metrics?.equalMixDays > 0 && <p className="mt-2 text-xs font-bold">{metrics.equalMixDays} días sin mezcla histórica de los tres SKU actuales de SALÓN: reparto inicial equitativo. Reimporta el Excel detallado para incorporar los productos HAZLO CMB V3; los antiguos combos x4 no se convierten a estos SKU.</p>}
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {SUGGESTIVE_PRODUCTS.map((product) => {
-                        const summary = summaries.find((item) => item?.id === product.id);
-                        const progress = summary?.target > 0 ? (summary.actual / summary.target) * 100 : 0;
-                        return (
-                            <article key={product.id} className="border border-slate-200 rounded-lg p-4 bg-slate-50">
-                                <div className="flex items-start justify-between gap-3">
-                                    <div>
-                                        <p className="text-xs font-black text-slate-800 uppercase">{product.label}</p>
-                                        <p className="text-[10px] text-slate-500 mt-1">SKU: {product.importName}</p>
-                                    </div>
-                                    <div className="text-[9px] font-black uppercase text-slate-500 text-right">
-                                        {plan?.targetMode === 'units' ? 'Meta mensual definida' : 'Meta mensual calculada'}
-                                        <strong className="block mt-1 text-xl text-slate-900">{formatUnits(summary?.target)}</strong>
-                                    </div>
-                                </div>
-                                <div className="grid grid-cols-3 gap-2 mt-4 text-center">
-                                    <div><span className="block text-[9px] uppercase font-bold text-slate-400">Vendido</span><strong className="text-base text-orange-600">{formatUnits(summary?.actual)}</strong></div>
-                                    <div><span className="block text-[9px] uppercase font-bold text-slate-400">Pendiente</span><strong className="text-base text-slate-800">{formatUnits(summary?.gap)}</strong></div>
-                                    <div><span className="block text-[9px] uppercase font-bold text-slate-400">Avance</span><strong className="text-base text-blue-700">{progress.toFixed(1)}%</strong></div>
-                                </div>
-                                <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden mt-3">
-                                    <div className="h-full bg-orange-500" style={{ width: `${Math.min(100, progress)}%` }} />
-                                </div>
-                                <p className="text-[10px] text-slate-500 mt-3">
-                                    {plan?.targetMode === 'units' ? 'Participación en la meta definida:' : 'Peso en la meta conjunta:'} <strong>{((summary?.mixShare || 0) * 100).toFixed(1)}%</strong>. {plan?.targetMode === 'units' ? 'Se respeta la cantidad mensual guardada para este producto.' : 'La mezcla histórica de SALÓN reparte la cantidad; las TRX determinan el total.'}
-                                </p>
-                            </article>
-                        );
-                    })}
-                </div>
-
-                <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4">
-                    <p className="text-xs font-black uppercase text-blue-900">Alcance de esta meta</p>
-                    <p className="mt-1 text-xs leading-relaxed text-blue-800">
-                        Borde de queso, VS HAZLO CMB V3 CANELITAS y VS HAZLO CMB V3 CRAZY se asignan únicamente a colaboradores posicionados en Salón. Drive Thru, Módulo y Delivery se muestran solo como información; sus ventas no suman al avance de Salón.
-                    </p>
-                    {plan && (
-                        <div className="mt-3 overflow-x-auto rounded border border-blue-200 bg-white">
-                            <table className="w-full text-xs">
-                                <thead className="bg-blue-900 text-white">
-                                    <tr>
-                                        <th className="p-2.5 text-left font-black uppercase">Producto</th>
-                                        <th className="p-2.5 text-right font-black uppercase">Meta Salón</th>
-                                        {['SALÓN', 'DRIVE THRU', 'SERV. FILA', 'DELIVERY'].map((channel) => <th key={channel} className="p-2.5 text-right font-black uppercase">Vendido {channel === 'SERV. FILA' ? 'Módulo' : channel}</th>)}
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {SUGGESTIVE_PRODUCTS.map((product) => (
-                                        <tr key={product.id} className="border-t border-blue-100">
-                                            <td className="p-2.5 font-bold text-slate-800">{product.label}</td>
-                                            <td className="p-2.5 text-right font-black text-blue-800">{formatUnits(channelTargets[product.id]?.['SALÓN'])}</td>
-                                            {['SALÓN', 'DRIVE THRU', 'SERV. FILA', 'DELIVERY'].map((channel) => <td key={channel} className="p-2.5 text-right">{formatUnits(plan.channelActuals?.[product.id]?.[channel])}</td>)}
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4"><div className="flex items-center gap-2"><Target className="h-5 w-5 text-orange-600" /><h2 className="font-black text-slate-900">3. Revisa la meta diaria</h2></div>
+                    <label className="text-xs font-bold text-slate-600">Fecha de evaluación<input type="date" value={assignmentDate} min={`${month}-01`} max={lastDateOfMonth(month)} onChange={event => setAssignmentDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label></div>
+                <div className="p-5">
+                    {!loading && missingProductPrices.length > 0 && <p className="mb-4 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">Completa el precio de {missingProductPrices.map(product => product.label).join(', ')} para calcular y publicar todas las metas diarias. Sus metas de participación semanal se conservan.</p>}
+                    {loading ? <p className="py-8 text-center text-sm text-slate-500">Consultando reportes, metas y horarios…</p> : !ready ? <p className="py-8 text-center text-sm text-slate-500">Para calcular metas diarias, completa el precio de los productos y selecciona un canal. El seguimiento semanal funciona sin introducir precios.</p> : <>
+                        <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-950"><p className="font-bold">Meta de venta del día: {money(selectedDay?.salesGoal)}</p><p className="mt-1 text-xs">Meta de venta × participación del canal × meta de cada producto ÷ su precio. Las unidades se redondean hacia arriba.</p><p className="mt-2 text-xs">Participación del canal: {({ recorded: 'reporte cargado de esta fecha', 'same-weekday': 'reportes anteriores del mismo día de la semana', historical: 'reportes anteriores disponibles', missing: 'sin histórico suficiente' })[selectedDay?.shareSource]}. Jornada comercial de 06:00 a 05:59.</p></div>
+                        {selectedDay?.salesGoal === null && <p className="mt-3 text-sm text-amber-800">Esta fecha no tiene una meta de venta cargada. Regístrala en Metas de ventas para calcular las cantidades.</p>}
+                        <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[670px] text-sm">
+                            <thead className="bg-slate-50 text-left text-xs text-slate-500"><tr>
+                                <th className="p-3">Canal</th><th className="p-3 text-right">Participación</th><th className="p-3 text-right">Meta del canal</th>
+                                {selectedProducts.map(product => <th key={product.id} className="p-3 text-right">{product.label}<span className="block text-[10px] font-normal">{money(product.price)} por unidad · Meta {percent(product.participation)}</span></th>)}
+                            </tr></thead>
+                            <tbody>{selectedDay?.channels.map(channel => <tr key={channel.id} className="border-t border-slate-100">
+                                <td className="p-3 font-bold">{suggestiveChannelLabel(channel.id)}</td><td className="p-3 text-right">{channel.share === null ? 'Sin reportes' : percent(channel.share)}</td><td className="p-3 text-right">{money(channel.channelSalesGoal)}</td>
+                                {selectedProducts.map(product => <td key={product.id} className="p-3 text-right text-lg font-black text-orange-700">
+                                    <strong>{channel.share === null ? '—' : units(channel.goals[product.id])}</strong>
+                                    <span className="mt-1 block text-[10px] font-normal text-slate-600">Venta objetivo: {money(channel.suggestiveRevenueByProduct?.[product.id])}</span>
+                                    <span className="mt-1 block text-[10px] font-normal text-slate-600">Vendido: {channel.actual[product.id] === null ? 'Sin detalle' : units(channel.actual[product.id])}</span>
+                                </td>)}
+                            </tr>)}</tbody>
+                        </table></div>
+                        <div className="mt-4 grid gap-3 md:grid-cols-3">
+                            {selectedProducts.map(product => {
+                                const hasRecorded = Boolean(selectedDay?.hasProductHistory[product.id]);
+                                const actual = selectedDay?.actual[product.id] || 0;
+                                const target = selectedDay?.goals[product.id] || 0;
+                                return <article key={product.id} aria-label={`Resultado diario de ${product.label}`} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                                    <h3 className="text-sm font-bold text-slate-900">{product.label}</h3>
+                                    <p className="mt-1 break-words text-[10px] text-slate-500">{product.reportName || 'Nombre exacto pendiente de completar'}</p>
+                                    <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                                        <div><dt className="text-slate-500">Meta del día</dt><dd className="mt-1 text-lg font-black text-orange-700">{units(target)}</dd></div>
+                                        <div><dt className="text-slate-500">Vendidos registrados</dt><dd className="mt-1 font-bold text-slate-900">{hasRecorded ? units(actual) : 'Sin detalle'}</dd></div>
+                                        <div><dt className="text-slate-500">Pendientes</dt><dd className="mt-1 font-bold text-slate-900">{hasRecorded ? units(Math.max(0, target - actual)) : 'Sin detalle'}</dd></div>
+                                    </dl>
+                                    <p className="mt-3 text-[10px] text-slate-500">Sólo esta fecha y los canales seleccionados. Las ventas no se atribuyen a colaboradores.</p>
+                                </article>;
+                            })}
                         </div>
-                    )}
+                        <div className="mt-6 flex flex-wrap items-center justify-between gap-3"><h3 className="flex items-center gap-2 text-sm font-black text-slate-900"><Users className="h-5 w-5 text-blue-600" />Asignación por colaborador y posición</h3><span className={`rounded-lg px-3 py-2 text-xs font-bold ${selectedUnassigned ? 'bg-amber-50 text-amber-800' : 'bg-green-50 text-green-800'}`}>{selectedUnassigned ? `${units(selectedUnassigned)} unidades sin cobertura` : 'Sin unidades pendientes de asignar'}</span></div>
+                        <p className="mt-2 text-xs text-slate-500">La venta histórica por hora pondera el turno; los colaboradores comparten cada minuto cubierto. Los descansos y las horas sin responsable conservan su parte como pendiente.</p>
+                        <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[680px] text-sm"><thead className="bg-slate-50 text-left text-xs text-slate-500"><tr><th className="p-3">Colaborador</th><th className="p-3">Canal</th><th className="p-3">Horario</th>{selectedProducts.map(product => <th key={product.id} className="p-3 text-right">{product.label}</th>)}</tr></thead><tbody>{selectedRows.map((row, index) => <tr key={`${row.assigneeId}-${row.channel}-${index}`} className={`border-t border-slate-100 ${row.missingStaff ? 'bg-amber-50' : ''}`}><td className="p-3 font-semibold">{row.assignee}</td><td className="p-3 text-xs">{suggestiveChannelLabel(row.channel)}</td><td className="p-3 text-xs">{row.schedule}<details className="mt-1"><summary className="cursor-pointer text-blue-700">Ver franjas</summary><div className="mt-2 space-y-1 text-slate-500">{Object.entries(row.hourlyGoals).sort(([a], [b]) => ((+a + 18) % 24) - ((+b + 18) % 24)).map(([hour, goals]) => <p key={hour}>{String(hour).padStart(2, '0')}:00 · {selectedProducts.map(product => `${product.label}: ${units(goals[product.id])}`).join(' · ')}</p>)}</div></details></td>{selectedProducts.map(product => <td key={product.id} className="p-3 text-right font-black">{units(row.goals[product.id])}</td>)}</tr>)}{!selectedRows.length && <tr><td colSpan={selectedProducts.length + 3} className="p-6 text-center text-slate-500">No hay unidades calculadas para esta fecha.</td></tr>}</tbody><tfoot className="border-t-2 border-slate-200 bg-slate-50 font-black"><tr><td colSpan="3" className="p-3">Total del día</td>{selectedProducts.map(product => <td key={product.id} className="p-3 text-right">{units(selectedDay?.goals[product.id])}</td>)}</tr></tfoot></table></div>
+                    </>}
                 </div>
-
-                {loading && <div className="py-10 text-center text-sm font-bold text-slate-500">Cruzando ventas, horarios y posiciones…</div>}
-
-                {!loading && !error && plan && (
-                    <>
-                        {!hasExactHistory && (
-                            <p className="mt-5 bg-amber-50 border border-amber-200 text-amber-800 rounded p-3 text-sm">
-                                <strong>Falta el histórico detallado de estos SKU.</strong> La distribución usa transacciones por hora como respaldo. Carga nuevamente el reporte Inforest detallado desde Análisis de ventas para calcular la participación real de cada producto.
-                            </p>
-                        )}
-
-                        <div className="mt-5 flex flex-wrap items-end justify-between gap-3">
-                            <div className="flex items-center gap-2 text-sm font-black text-slate-800">
-                                <Users className="w-5 h-5 text-blue-600" />
-                                <div>
-                                    <span className="block">Asignación diaria por colaborador</span>
-                                    <span className="block mt-0.5 text-[10px] font-semibold capitalize text-slate-500">{selectedDateLabel}</span>
-                                </div>
-                            </div>
-                            <div className="flex flex-wrap items-end gap-2">
-                                <label className="text-[10px] font-black uppercase text-slate-500">
-                                    Fecha de asignación
-                                    <span className="mt-1 flex items-center gap-2 rounded-lg border border-indigo-300 bg-white px-3 py-2">
-                                        <CalendarDays className="h-4 w-4 text-indigo-600" />
-                                        <input
-                                            type="date"
-                                            value={assignmentDate}
-                                            min={month ? `${month}-01` : undefined}
-                                            max={lastDateOfMonth(month) || undefined}
-                                            onChange={(event) => onAssignmentDateChange(event.target.value)}
-                                            className="bg-transparent text-sm font-black text-slate-900 outline-none"
-                                        />
-                                    </span>
-                                </label>
-                                <div className={`text-xs font-bold px-3 py-2.5 rounded border ${unassignedTotal > 0 ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-green-50 text-green-800 border-green-200'}`}>
-                                    {unassignedTotal > 0
-                                        ? `${formatUnits(unassignedTotal)} unidades sin colaborador este día`
-                                        : 'Todas las unidades del día tienen responsable'}
-                                </div>
-                            </div>
-                        </div>
-
-                        <p className="mt-3 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs leading-relaxed text-indigo-800">
-                            {selectedDay && <span className="mb-2 block font-bold">
-                                TRX del día: {selectedDay.transactions === null ? 'sin datos' : formatUnits(selectedDay.transactions)} ({({ recorded: 'registradas', configured: 'configuradas', estimated: 'estimadas', missing: 'sin datos' })[selectedDay.transactionSource]})
-                                {plan?.targetMode === 'units' ? ' → distribución de la meta mensual: ' : ` × ${salonLabel}% × ${participationLabel}% = `}{formatUnits(selectedDay.totalGoal)} unidades entre los tres productos.
-                            </span>}
-                            <strong>La meta mostrada es la suma de todo el turno.</strong> Por ejemplo, un horario de 09:00 a 19:00 incorpora cada hora entre 09:00 y 18:59: las horas de alta demanda aportan más y las horas de baja demanda aportan menos. Abre “franjas ponderadas” para revisar el aporte horario.
-                        </p>
-
-                        {selectedRows.length > 0 ? (
-                            <div className="mt-3 overflow-auto max-h-[620px] border border-slate-200 rounded">
-                                <table className="w-full min-w-[980px] text-xs">
-                                    <thead className="bg-slate-100 text-slate-600 sticky top-0 z-10">
-                                        <tr>
-                                            <th className="p-2.5 text-left font-black uppercase">Fecha</th>
-                                            <th className="p-2.5 text-left font-black uppercase">Colaborador</th>
-                                            <th className="p-2.5 text-left font-black uppercase">Horario</th>
-                                            <th className="p-2.5 text-left font-black uppercase">Canal</th>
-                                            {SUGGESTIVE_PRODUCTS.map((product) => (
-                                                <th key={product.id} scope="col" className="p-2.5 text-right font-black uppercase">
-                                                    {product.importName}
-                                                </th>
-                                            ))}
-                                            <th className="p-2.5 text-right font-black uppercase">Total</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {selectedRows.map((row, index) => {
-                                            const total = SUGGESTIVE_PRODUCTS.reduce((sum, product) => sum + (row.goals[product.id] || 0), 0);
-                                            const dateLabel = new Date(`${row.date}T12:00:00`).toLocaleDateString('es-PE', { weekday: 'short', day: '2-digit', month: '2-digit' });
-                                            return (
-                                                <tr key={`${row.date}-${row.assigneeId}-${row.channel}-${row.schedule}-${index}`} className={`border-t ${row.missingStaff ? 'bg-amber-50' : 'bg-white hover:bg-blue-50'}`}>
-                                                    <td className="p-2.5 font-bold text-slate-700 capitalize whitespace-nowrap">{dateLabel}</td>
-                                                    <td className={`p-2.5 font-bold ${row.missingStaff ? 'text-amber-800' : 'text-slate-900'}`}>{row.assignee}</td>
-                                                    <td className="p-2.5 text-slate-600 min-w-[190px]">
-                                                        <div className="font-semibold whitespace-nowrap">{row.schedule}</div>
-                                                        <details className="mt-1 group">
-                                                            <summary className="cursor-pointer select-none text-[10px] font-bold text-indigo-700 hover:text-indigo-900">
-                                                                {row.coveredHours?.length || 0} franjas ponderadas
-                                                            </summary>
-                                                            <div className="mt-2 flex max-w-[240px] flex-wrap gap-1">
-                                                                {(row.coveredHours || []).map((hour) => {
-                                                                    const hourGoals = row.hourlyGoals?.[hour] || {};
-                                                                    const hourTotal = SUGGESTIVE_PRODUCTS.reduce((sum, product) => sum + (hourGoals[product.id] || 0), 0);
-                                                                    const detail = SUGGESTIVE_PRODUCTS
-                                                                        .map((product) => `${product.label}: ${formatUnits(hourGoals[product.id])}`)
-                                                                        .join(' · ');
-                                                                    return (
-                                                                        <span
-                                                                            key={hour}
-                                                                            title={detail}
-                                                                            className={`rounded border px-1.5 py-1 text-[9px] font-black ${hourTotal > 0 ? 'border-indigo-200 bg-white text-indigo-800' : 'border-slate-200 bg-slate-50 text-slate-400'}`}
-                                                                        >
-                                                                            {String(hour).padStart(2, '0')}:00 · {formatUnits(hourTotal)}
-                                                                        </span>
-                                                                    );
-                                                                })}
-                                                            </div>
-                                                        </details>
-                                                    </td>
-                                                    <td className="p-2.5 font-bold text-blue-700">{row.channelLabel}</td>
-                                                    {SUGGESTIVE_PRODUCTS.map((product) => <td key={product.id} className="p-2.5 text-right font-bold text-slate-700">{formatUnits(row.goals[product.id])}</td>)}
-                                                    <td className="p-2.5 text-right font-black text-slate-900 bg-slate-50">{formatUnits(total)}</td>
-                                                </tr>
-                                            );
-                                        })}
-                                    </tbody>
-                                    <tfoot className="bg-slate-900 text-white sticky bottom-0">
-                                        <tr>
-                                            <td colSpan="4" className="p-2.5 font-black uppercase">Total del día</td>
-                                            {SUGGESTIVE_PRODUCTS.map((product) => <td key={product.id} className="p-2.5 text-right font-black">{formatUnits(selectedTotals[product.id])}</td>)}
-                                            <td className="p-2.5 text-right font-black">{formatUnits(Object.values(selectedTotals).reduce((sum, value) => sum + (Number(value) || 0), 0))}</td>
-                                        </tr>
-                                    </tfoot>
-                                </table>
-                            </div>
-                        ) : (
-                            <div className="mt-4 border border-dashed border-slate-300 rounded p-8 text-center text-sm text-slate-500">
-                                No hay asignaciones de venta sugestiva para {selectedDateLabel}.
-                            </div>
-                        )}
-
-                        <p className="mt-3 text-[10px] leading-relaxed text-slate-500">
-                            Método: {plan?.targetMode === 'units' ? 'las metas mensuales guardadas se reparten por producto según las TRX de cada día.' : <>la meta conjunta del día se obtiene de TRX × {salonLabel}% × {participationLabel}%.</>} Las TRX por hora distribuyen esa cantidad dentro de SALÓN; se usa el patrón horario de la tienda como respaldo cuando falta el de SALÓN. {plan?.targetMode !== 'units' && 'La mezcla histórica de los tres productos divide las unidades por SKU.'} Cada colaborador recibe la suma de los minutos que cubre en su turno; cuando coinciden, comparten la demanda. Los minutos sin cobertura quedan como “Sin colaborador asignado”.
-                        </p>
-                    </>
-                )}
-            </div>
-        </section>
-    );
+            </section>
+            <section className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5"><div><h2 className="font-black text-slate-900">4. Publica después de revisar</h2><p className="mt-1 text-xs text-slate-500">Publicar actualiza las metas de los colaboradores para {month}. Abrir o editar esta vista conserva la revisión en pantalla.</p></div>
+                <button type="button" onClick={publish} disabled={!canPublish || busy} className="inline-flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-40"><CloudUpload className="h-4 w-4" />{publication.state === 'publishing' ? 'Publicando…' : 'Publicar metas del mes'}</button>
+                {publication.state === 'published' && <p role="status" className="flex w-full items-center gap-2 text-sm font-semibold text-green-700"><CheckCircle2 className="h-4 w-4" />{publication.count} asignaciones publicadas.</p>}
+                {publication.state === 'error' && <p role="alert" className="flex w-full items-center gap-2 text-sm text-red-700"><AlertCircle className="h-4 w-4" />{publication.message}</p>}
+            </section>
+        </main>
+    </div>;
 }

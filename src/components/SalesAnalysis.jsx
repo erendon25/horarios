@@ -1,17 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { getFirestore, doc, getDoc, writeBatch, collection, getDocs, query, where, orderBy, limit } from '../lib/supabase/firestoreCompat';
+import { getFirestore, doc, getDoc } from '../lib/supabase/firestoreCompat';
 import { useAuth } from '../contexts/AuthContext';
+import { supabase } from '../lib/supabase/client';
+import { readSalesHistoryDates, readSalesHistoryRange } from '../services/salesHistoryRead';
+import { writeSalesHistoryDays } from '../services/salesHistoryWrite';
+import { parseSalesFile } from '../services/salesImport';
 import { ArrowLeft, Upload, AlertCircle, Search, Database } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import * as XLSX from 'xlsx';
+
 import {
     BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList
 } from 'recharts';
 import { startOfISOWeek, endOfISOWeek, format, startOfMonth, endOfMonth, startOfYear, endOfYear, subMonths, subDays } from 'date-fns';
 import {
-    SUGGESTIVE_PRODUCTS,
-    classifySuggestiveProduct,
-} from '../services/suggestiveSalesGoals';
+    getDatesInRange, getComparisonDates, getComparisonAvailability, datesForWeekday, comparisonDatesForWeekday,
+    getHourlyDateSelection, sumHourlyValues,
+} from '../services/salesAnalysis';
 
 const TURNOS = [
     { key: 'Apertura a 1pm', check: (h) => h >= 6 && h < 13 },
@@ -25,328 +29,6 @@ const CANALES_FIJOS = ['SALÓN', 'DELIVERY', 'DRIVE THRU', 'SERV. FILA'];
 const DIAS_SEMANA = ['Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab', 'Dom'];
 const DIAS_SEMANA_GETDAY = [1, 2, 3, 4, 5, 6, 0];
 
-const addDays = (dateStr, days) => {
-    const d = new Date(dateStr + 'T12:00:00');
-    d.setDate(d.getDate() + days);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
-
-const subtractYear = (dateStr) => {
-    const d = new Date(dateStr + 'T12:00:00');
-    d.setFullYear(d.getFullYear() - 1);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
-
-const getDatesInRange = (start, end) => {
-    const dates = [];
-    let curr = new Date(start + 'T12:00:00');
-    const last = new Date(end + 'T12:00:00');
-    while (curr <= last) {
-        dates.push(`${curr.getFullYear()}-${String(curr.getMonth() + 1).padStart(2, '0')}-${String(curr.getDate()).padStart(2, '0')}`);
-        curr.setDate(curr.getDate() + 1);
-    }
-    return dates;
-};
-
-const getPreviousFullIsoWeekDates = (dateStr) => {
-    const base = new Date(dateStr + 'T12:00:00');
-    const day = base.getDay();
-    const mondayOffset = day === 0 ? -6 : 1 - day;
-    const previousMonday = new Date(base);
-    previousMonday.setDate(base.getDate() + mondayOffset - 7);
-
-    const previousSunday = new Date(previousMonday);
-    previousSunday.setDate(previousMonday.getDate() + 6);
-
-    const start = `${previousMonday.getFullYear()}-${String(previousMonday.getMonth() + 1).padStart(2, '0')}-${String(previousMonday.getDate()).padStart(2, '0')}`;
-    const end = `${previousSunday.getFullYear()}-${String(previousSunday.getMonth() + 1).padStart(2, '0')}-${String(previousSunday.getDate()).padStart(2, '0')}`;
-    return getDatesInRange(start, end);
-};
-
-const getSmartComparisonPeriod = (start, end) => {
-    const startObj = new Date(`${start}T12:00:00`);
-    const endObj = new Date(`${end}T12:00:00`);
-    const isSameMonth =
-        startObj.getFullYear() === endObj.getFullYear()
-        && startObj.getMonth() === endObj.getMonth();
-    const lastDayOfMonth = new Date(
-        endObj.getFullYear(),
-        endObj.getMonth() + 1,
-        0
-    ).getDate();
-    const isFullMonth = isSameMonth && startObj.getDate() === 1 && endObj.getDate() === lastDayOfMonth;
-    const currentDates = getDatesInRange(start, end);
-
-    if (isFullMonth) {
-        const previousMonthStart = new Date(startObj.getFullYear(), startObj.getMonth() - 1, 1);
-        const previousMonthEnd = new Date(startObj.getFullYear(), startObj.getMonth(), 0);
-        const previousStart = format(previousMonthStart, 'yyyy-MM-dd');
-        const previousEnd = format(previousMonthEnd, 'yyyy-MM-dd');
-        return {
-            dates: getDatesInRange(previousStart, previousEnd),
-            title: 'Mes Anterior',
-            label: 'MES ANTERIOR',
-        };
-    }
-
-    if (isSameMonth) {
-        const previousMonthStart = new Date(startObj.getFullYear(), startObj.getMonth() - 1, startObj.getDate());
-        const previousMonthEnd = new Date(endObj.getFullYear(), endObj.getMonth() - 1, endObj.getDate());
-        const previousStart = format(previousMonthStart, 'yyyy-MM-dd');
-        const previousEnd = format(previousMonthEnd, 'yyyy-MM-dd');
-        return {
-            dates: getDatesInRange(previousStart, previousEnd),
-            title: 'Mes Anterior (Mismo Rango)',
-            label: 'MES ANTERIOR',
-        };
-    }
-
-    if (currentDates.length === 7) {
-        return {
-            dates: getPreviousFullIsoWeekDates(start),
-            title: 'Semana Anterior',
-            label: 'SEM ANTERIOR',
-        };
-    }
-
-    const previousEnd = addDays(start, -1);
-    const previousStart = addDays(previousEnd, -(currentDates.length - 1));
-    return {
-        dates: getDatesInRange(previousStart, previousEnd),
-        title: 'Periodo Anterior',
-        label: 'PERIODO ANTERIOR',
-    };
-};
-
-const recoverLegacyXlsRows = (bytes) => {
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    const u16 = (o) => view.getUint16(o, true);
-    const u32 = (o) => view.getUint32(o, true);
-    const i32 = (o) => view.getInt32(o, true);
-    const END_OF_CHAIN = -2;
-    const sectorSize = 1 << u16(30);
-    const fatCount = u32(44);
-    const firstDir = i32(48);
-    const sectorOffset = (sid) => (sid + 1) * sectorSize;
-
-    const fatSectors = [];
-    for (let i = 0; i < 109; i++) {
-        const sid = i32(76 + i * 4);
-        if (sid >= 0) fatSectors.push(sid);
-    }
-
-    const fat = [];
-    fatSectors.slice(0, fatCount).forEach((sid) => {
-        const off = sectorOffset(sid);
-        if (off < 0 || off + sectorSize > bytes.length) return;
-        for (let p = 0; p < sectorSize; p += 4) {
-            fat.push(view.getInt32(off + p, true));
-        }
-    });
-
-    const readChain = (startSid, maxBytes = Number.MAX_SAFE_INTEGER) => {
-        const chunks = [];
-        const seen = new Set();
-        let sid = startSid;
-        let total = 0;
-        while (sid >= 0 && sid !== END_OF_CHAIN && !seen.has(sid) && total < maxBytes) {
-            seen.add(sid);
-            const off = sectorOffset(sid);
-            if (off < 0 || off >= bytes.length) break;
-            const take = Math.min(sectorSize, bytes.length - off, maxBytes - total);
-            chunks.push(bytes.slice(off, off + take));
-            total += take;
-            sid = fat[sid];
-        }
-        const out = new Uint8Array(total);
-        let cursor = 0;
-        chunks.forEach((chunk) => {
-            out.set(chunk, cursor);
-            cursor += chunk.length;
-        });
-        return out;
-    };
-
-    const decodeUtf16 = (arr) => new TextDecoder('utf-16le', { fatal: false }).decode(arr);
-    const dir = readChain(firstDir, 1024 * 1024);
-    const dirView = new DataView(dir.buffer, dir.byteOffset, dir.byteLength);
-    let workbookEntry = null;
-    for (let off = 0; off + 128 <= dir.length; off += 128) {
-        const nameLen = dirView.getUint16(off + 64, true);
-        if (nameLen < 2 || nameLen > 64) continue;
-        const name = decodeUtf16(dir.slice(off, off + nameLen - 2));
-        const type = dir[off + 66];
-        if (type !== 2 || !/^(workbook|book)$/i.test(name)) continue;
-        workbookEntry = {
-            start: dirView.getInt32(off + 116, true),
-            size: Number(dirView.getBigUint64(off + 120, true))
-        };
-        break;
-    }
-    if (!workbookEntry) return [];
-
-    const stream = readChain(workbookEntry.start, workbookEntry.size);
-    const streamView = new DataView(stream.buffer, stream.byteOffset, stream.byteLength);
-    const records = [];
-    for (let off = 0; off + 4 <= stream.length;) {
-        const rt = streamView.getUint16(off, true);
-        const len = streamView.getUint16(off + 2, true);
-        if (off + 4 + len > stream.length) break;
-        records.push({ rt, data: stream.slice(off + 4, off + 4 + len) });
-        off += 4 + len;
-    }
-
-    const decodeLatin = (arr) => new TextDecoder('windows-1252', { fatal: false }).decode(arr);
-    const parseSst = () => {
-        const idx = records.findIndex((r) => r.rt === 0x00FC);
-        if (idx === -1) return [];
-        const chunks = [records[idx].data];
-        for (let j = idx + 1; j < records.length && records[j].rt === 0x003C; j++) {
-            chunks.push(records[j].data);
-        }
-        let ci = 0;
-        let pos = 0;
-        const read = (n) => {
-            const out = new Uint8Array(n);
-            let k = 0;
-            while (k < n) {
-                if (ci >= chunks.length) throw new Error('SST incompleto');
-                const chunk = chunks[ci];
-                if (pos >= chunk.length) {
-                    ci++;
-                    pos = 0;
-                    continue;
-                }
-                const take = Math.min(chunk.length - pos, n - k);
-                out.set(chunk.slice(pos, pos + take), k);
-                pos += take;
-                k += take;
-            }
-            return out;
-        };
-        const readU8 = () => read(1)[0];
-        const readU16 = () => new DataView(read(2).buffer).getUint16(0, true);
-        const readU32 = () => new DataView(read(4).buffer).getUint32(0, true);
-        const skip = (n) => { if (n > 0) read(n); };
-
-        readU32();
-        const unique = readU32();
-        const strings = [];
-        for (let i = 0; i < unique; i++) {
-            try {
-                const cch = readU16();
-                const flags = readU8();
-                const is16 = (flags & 1) !== 0;
-                const rich = (flags & 8) !== 0;
-                const ext = (flags & 4) !== 0;
-                const richRuns = rich ? readU16() : 0;
-                const extLen = ext ? readU32() : 0;
-                const raw = read(cch * (is16 ? 2 : 1));
-                strings.push(is16 ? decodeUtf16(raw) : decodeLatin(raw));
-                skip(richRuns * 4);
-                skip(extLen);
-            } catch {
-                break;
-            }
-        }
-        return strings;
-    };
-
-    const sst = parseSst();
-    const rkNumber = (rk) => {
-        let value;
-        if (rk & 0x02) {
-            value = rk >> 2;
-        } else {
-            const buf = new ArrayBuffer(8);
-            const dv = new DataView(buf);
-            dv.setUint32(4, rk & 0xfffffffc, true);
-            value = dv.getFloat64(0, true);
-        }
-        return (rk & 0x01) ? value / 100 : value;
-    };
-
-    let sheetNo = -1;
-    const rowMap = {};
-    records.forEach((record) => {
-        const data = record.data;
-        const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
-        if (record.rt === 0x0809 && data.length >= 4 && dv.getUint16(2, true) === 0x0010) {
-            sheetNo++;
-        }
-        if (sheetNo < 0 || sheetNo > 0) return;
-        const setCell = (r, c, value) => {
-            if (!rowMap[r]) rowMap[r] = {};
-            rowMap[r][c] = value;
-        };
-        if (record.rt === 0x00FD && data.length >= 10) {
-            const r = dv.getUint16(0, true);
-            const c = dv.getUint16(2, true);
-            const ix = dv.getUint32(6, true);
-            setCell(r, c, sst[ix] ?? `#SST${ix}`);
-        } else if (record.rt === 0x0203 && data.length >= 14) {
-            setCell(dv.getUint16(0, true), dv.getUint16(2, true), dv.getFloat64(6, true));
-        } else if (record.rt === 0x027E && data.length >= 10) {
-            setCell(dv.getUint16(0, true), dv.getUint16(2, true), rkNumber(dv.getInt32(6, true)));
-        } else if (record.rt === 0x00BE && data.length >= 6) {
-            const r = dv.getUint16(0, true);
-            const firstCol = dv.getUint16(2, true);
-            const lastCol = dv.getUint16(4, true);
-            let p = 6;
-            for (let c = firstCol; c <= lastCol && p + 6 <= data.length; c++, p += 6) {
-                setCell(r, c, rkNumber(dv.getInt32(p, true)));
-            }
-        }
-    });
-
-    const rows = Object.keys(rowMap)
-        .map(Number)
-        .sort((a, b) => a - b)
-        .map((r) => {
-            const row = rowMap[r];
-            const max = Math.max(...Object.keys(row).map(Number));
-            return Array.from({ length: max + 1 }, (_, i) => row[i] ?? '');
-        });
-
-    const headerKeywords = ['pedido', 'fecha', 'monto', 'documento', 'canal'];
-    let headerIdx = -1;
-    let bestScore = 0;
-    rows.forEach((row, idx) => {
-        const text = row.map((cell) => String(cell).toLowerCase()).join('|');
-        const score = headerKeywords.reduce((acc, kw) => acc + (text.includes(kw) ? 1 : 0), 0);
-        if (score > bestScore && score >= 3) {
-            bestScore = score;
-            headerIdx = idx;
-        }
-    });
-    if (headerIdx === -1) return [];
-
-    const headers = rows[headerIdx].map((h) => String(h || '').trim().toLowerCase());
-    const fechaIdx = headers.findIndex((h) => h.includes('fecha') && h.includes('hora'));
-    const rawText = decodeUtf16(bytes);
-    const rawDates = [...rawText.matchAll(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/g)].map((m) => m[0]);
-    const datePlaceholders = new Map();
-
-    return rows.slice(headerIdx + 1).map((row) => {
-        const normalized = [...row];
-        if (fechaIdx >= 0) {
-            const current = String(normalized[fechaIdx] || '');
-            if (current.startsWith('#SST')) {
-                if (!datePlaceholders.has(current)) {
-                    datePlaceholders.set(current, rawDates[datePlaceholders.size] || '');
-                }
-                normalized[fechaIdx] = datePlaceholders.get(current);
-            }
-        }
-        const obj = {};
-        normalized.forEach((cell, idx) => {
-            const key = headers[idx];
-            if (key) obj[key] = cell;
-        });
-        return obj;
-    }).filter((row) => Object.values(row).some((value) => value !== '' && value !== null && value !== undefined));
-};
-
 const fmtMoney = (val) => val != null ? `S/ ${val.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'S/ 0.00';
 const fmtNum = (val) => val != null ? val.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00';
 const fmtPct = (val) => val != null ? `${val > 0 ? '+' : ''}${val.toFixed(1)}%` : '0.0%';
@@ -359,6 +41,7 @@ export default function SalesAnalysis() {
     const [loading, setLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const fileInputRef = useRef(null);
+    const analysisRequestRef = useRef(0);
 
     const [startDate, setStartDate] = useState(() => {
         const d = new Date(); d.setDate(d.getDate() - 7);
@@ -372,21 +55,38 @@ export default function SalesAnalysis() {
     const [dataCurrent, setDataCurrent] = useState(null);
     const [dataPrevWeek, setDataPrevWeek] = useState(null);
     const [dataPrevMonth, setDataPrevMonth] = useState(null);
-    const [previousPeriodMeta, setPreviousPeriodMeta] = useState({
-        title: 'Semana Anterior',
-        label: 'SEM ANTERIOR',
-    });
+
     const [dataPrevYear, setDataPrevYear] = useState(null);
     const [currentGoal, setCurrentGoal] = useState(0);
+    const [analysisVersion, setAnalysisVersion] = useState(0);
     const [viewMode, setViewMode] = useState('VTA');
     const [selectedHourlyTxsDay, setSelectedHourlyTxsDay] = useState('all');
     const [dateError, setDateError] = useState('');
     const [selectedCanalDetail, setSelectedCanalDetail] = useState(null);
     const [selectedDayDetail, setSelectedDayDetail] = useState(null);
-    const [comparePeriod, setComparePeriod] = useState('week');
+    const [requestedComparePeriod, setComparePeriod] = useState('week');
     const [availableRange, setAvailableRange] = useState({ min: null, max: null });
     const [lastUploadInfo, setLastUploadInfo] = useState(null);
     const [activeQuickFilter, setActiveQuickFilter] = useState('week');
+    const activeDates = React.useMemo(() => getDatesInRange(startDate, endDate), [startDate, endDate]);
+    const monthComparison = React.useMemo(() => getComparisonAvailability(activeDates, 'month'), [activeDates]);
+    const comparePeriod = requestedComparePeriod === 'month' && !monthComparison.enabled ? 'week' : requestedComparePeriod;
+    const comparisonDates = React.useMemo(() => getComparisonDates(activeDates, comparePeriod), [activeDates, comparePeriod]);
+    const previousPeriodMeta = comparePeriod === 'month'
+        ? { title: 'Mes Anterior', label: 'MES ANTERIOR' }
+        : comparePeriod === 'year'
+        ? { title: 'Año Anterior', label: 'AÑO ANTERIOR' }
+        : { title: 'Semana Anterior', label: 'SEM ANTERIOR' };
+
+    useEffect(() => {
+        if (requestedComparePeriod === 'month' && !monthComparison.enabled) setComparePeriod('week');
+    }, [requestedComparePeriod, monthComparison.enabled]);
+
+    useEffect(() => {
+        setSelectedHourlyTxsDay(startDate === endDate ? startDate : 'all');
+        setSelectedDayDetail(startDate && startDate === endDate
+            ? (new Date(`${startDate}T12:00:00`).getDay() + 6) % 7 : null);
+    }, [startDate, endDate]);
     useEffect(() => {
         const fetchStore = async () => {
             if (!currentUser) return;
@@ -403,12 +103,7 @@ export default function SalesAnalysis() {
     const fetchAvailableRange = async (targetStoreId = storeId) => {
         if (!targetStoreId) return null;
         try {
-            const salesRef = collection(db, 'stores', targetStoreId, 'sales_history');
-            const firstQ = query(salesRef, orderBy('__name__'), limit(1));
-            const lastQ = query(salesRef, orderBy('__name__', 'desc'), limit(1));
-            const [firstSnap, lastSnap] = await Promise.all([getDocs(firstQ), getDocs(lastQ)]);
-            const min = firstSnap.docs[0]?.id || null;
-            const max = lastSnap.docs[0]?.id || null;
+            const { min, max } = await readSalesHistoryRange(supabase, targetStoreId);
             setAvailableRange({ min, max });
             return { min, max };
         } catch (err) {
@@ -475,45 +170,33 @@ export default function SalesAnalysis() {
     };
 
     const loadAnalysisData = async () => {
-        if (!storeId || !startDate || !endDate) return;
-        if (startDate > endDate) {
-            setDateError("La fecha de inicio no puede ser mayor a la fecha de fin.");
+        if (!storeId || !getDatesInRange(startDate, endDate).length) {
+            setLoading(false);
+            setDataCurrent(null);
+            setDateError(!startDate || !endDate ? 'Selecciona las fechas de inicio y fin.'
+                : 'La fecha de inicio no puede ser mayor a la fecha de fin.');
             return;
         }
         setDateError('');
         setLoading(true);
+        const requestId = ++analysisRequestRef.current;
         try {
             const currentDates = getDatesInRange(startDate, endDate);
-            const smartComparison = getSmartComparisonPeriod(startDate, endDate);
-            const prevWeekDates = currentDates.map(d => addDays(d, -7));
+            const prevWeekDates = getComparisonDates(currentDates, 'week');
+            const prevMonthDates = getComparisonDates(currentDates, 'month');
+            const prevYearDates = getComparisonDates(currentDates, 'year');
 
-            setPreviousPeriodMeta({
-                title: smartComparison.title,
-                label: smartComparison.label,
-            });
-
-            const prevMonthDates = currentDates.map(d => {
-                const date = new Date(d + 'T12:00:00');
-                date.setMonth(date.getMonth() - 1);
-                return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-            });
-            const prevYearDates = currentDates.map(d => subtractYear(d));
-
-            const compareDatesMap = {
-                week: prevWeekDates,
-                month: prevMonthDates,
-                year: prevYearDates
-            };
-
+            const allDates = [...new Set([...currentDates, ...prevWeekDates, ...prevMonthDates, ...prevYearDates])].sort();
+            const historyByDate = await readSalesHistoryDates(supabase, storeId, allDates);
             const fetchRange = async (datesArr) => {
-                const results = await Promise.all(datesArr.map(d => getDoc(doc(db, 'stores', storeId, 'sales_history', d))));
+                const results = datesArr.map(date => historyByDate.get(date));
                 const agg = {
                     total: 0, txs: 0,
                     canales: {}, canalesTxs: {}, turnos: {}, turnosTxs: {}, dias: {}, diasTxs: {},
-                    horasTxs: {}, horasTxsPorDia: {},
+                    horasTxs: {}, horasTxsPorDia: {}, horasTxsPorFecha: {},
                     canalesHoras: {}, canalesHorasTxs: {}, canalesDias: {}, canalesDiasTxs: {},
                     canalesHorasPorFecha: {}, canalesHorasTxsPorFecha: {},
-                    ventasPorFecha: {}, txsPorFecha: {}
+                    ventasPorFecha: {}, txsPorFecha: {}, totalsOnlyDates: [],
                 };
 
                 TURNOS.forEach(t => { agg.turnos[t.key] = 0; agg.turnosTxs[t.key] = 0; });
@@ -543,11 +226,15 @@ export default function SalesAnalysis() {
                 });
 
                 results.forEach((snap, idx) => {
-                    if (snap.exists()) {
-                        const dayData = snap.data();
+                    if (snap) {
+                        const dayData = snap;
+                        if (dayData.monthlyArchive && (!Object.keys(dayData.hourlyData || {}).length || !Object.keys(dayData.hourlyTxs || {}).length)) {
+                            agg.totalsOnlyDates.push(datesArr[idx]);
+                        }
                         agg.total += dayData.totalSales || 0;
                         agg.txs += dayData.totalTxs || 0;
 
+                        agg.horasTxsPorFecha[datesArr[idx]] = {};
                         const dateObj = new Date(datesArr[idx] + 'T12:00:00');
                         const dow = dateObj.getDay();
                         agg.dias[dow] += dayData.totalSales || 0;
@@ -556,17 +243,27 @@ export default function SalesAnalysis() {
                         agg.ventasPorFecha[datesArr[idx]] = dayData.totalSales || 0;
                         agg.txsPorFecha[datesArr[idx]] = dayData.totalTxs || 0;
 
-                        if (dayData.hourlyData) {
-                            Object.entries(dayData.hourlyData).forEach(([hourStr, canalData]) => {
+                        if (dayData.hourlyData || dayData.hourlyTxs) {
+                            const hours = new Set([
+                                ...Object.keys(dayData.hourlyData || {}),
+                                ...Object.keys(dayData.hourlyTxs || {}),
+                            ]);
+                            hours.forEach((hourStr) => {
+                                const canalData = dayData.hourlyData?.[hourStr] || {};
                                 const hour = parseInt(hourStr, 10);
                                 let sumHour = 0, sumHourTxs = 0;
 
-                                Object.entries(canalData).forEach(([canal, val]) => {
+                                const channels = new Set([...Object.keys(canalData), ...Object.keys(dayData.hourlyTxs?.[hourStr] || {})]);
+                                channels.forEach((canal) => {
+                                    const val = Number(canalData[canal]) || 0;
+                                    ['canalesHoras', 'canalesHorasTxs', 'canalesDias', 'canalesDiasTxs', 'canalesHorasPorFecha', 'canalesHorasTxsPorFecha'].forEach((key) => {
+                                        agg[key][canal] ||= {};
+                                    });
                                     if (!agg.canales[canal]) agg.canales[canal] = 0;
                                     agg.canales[canal] += val;
                                     sumHour += val;
 
-                                    const txsVal = dayData.hourlyTxs?.[hourStr]?.[canal] || 0;
+                                    const txsVal = Number(dayData.hourlyTxs?.[hourStr]?.[canal]) || 0;
                                     if (!agg.canalesTxs[canal]) agg.canalesTxs[canal] = 0;
                                     agg.canalesTxs[canal] += txsVal;
                                     sumHourTxs += txsVal;
@@ -585,6 +282,7 @@ export default function SalesAnalysis() {
                                 });
 
                                 const turnoObj = TURNOS.find(t => t.check(hour));
+                                agg.horasTxsPorFecha[datesArr[idx]][hour] = sumHourTxs;
                                 agg.horasTxs[hour] = (agg.horasTxs[hour] || 0) + sumHourTxs;
                                 agg.horasTxsPorDia[dow][hour] =
                                     (agg.horasTxsPorDia[dow][hour] || 0) + sumHourTxs;
@@ -621,507 +319,88 @@ export default function SalesAnalysis() {
                 fetchRange(currentDates), fetchRange(prevWeekDates), fetchRange(prevMonthDates), fetchRange(prevYearDates), fetchConfig()
             ]);
 
+            if (requestId !== analysisRequestRef.current) return;
             setDataCurrent(resCurr);
             setDataPrevWeek(resPrev);
             setDataPrevMonth(resPrevMonth);
             setDataPrevYear(resYear);
             setCurrentGoal(goal);
-
-            setPreviousPeriodMeta(
-                comparePeriod === 'month'
-                    ? { title: 'Mes Anterior', label: 'MES ANTERIOR' }
-                    : comparePeriod === 'year'
-                    ? { title: 'Año Anterior', label: 'AÑO ANTERIOR' }
-                    : { title: 'Semana Anterior', label: 'SEM ANTERIOR' }
-            );
         } catch (err) {
             console.error("Error fetching data", err);
+            if (requestId === analysisRequestRef.current) {
+                setDataCurrent(null);
+                setDateError('No se pudieron cargar las ventas. Vuelve a consultar el rango.');
+            }
         } finally {
+            if (requestId === analysisRequestRef.current) setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (!storeId || !getDatesInRange(startDate, endDate).length) {
             setLoading(false);
+            setDataCurrent(null);
+            setDateError(!startDate || !endDate ? 'Selecciona las fechas de inicio y fin.'
+                : startDate > endDate ? 'La fecha de inicio no puede ser mayor a la fecha de fin.' : '');
+            return;
         }
-    };
-
-    useEffect(() => {
-        if (!storeId || !startDate || !endDate) return;
-        if (startDate > endDate) return;
+        setDateError('');
         const t = setTimeout(() => { loadAnalysisData(); }, 350);
-        return () => clearTimeout(t);
-    }, [storeId, comparePeriod, startDate, endDate]);
+        return () => { clearTimeout(t); analysisRequestRef.current++; };
+    }, [storeId, startDate, endDate, analysisVersion]);
 
-    useEffect(() => {
-        if (comparePeriod === 'month') {
-            setPreviousPeriodMeta({ title: 'Mes Anterior', label: 'MES ANTERIOR' });
-        } else if (comparePeriod === 'year') {
-            setPreviousPeriodMeta({ title: 'Año Anterior', label: 'AÑO ANTERIOR' });
-        } else {
-            setPreviousPeriodMeta({ title: 'Semana Anterior', label: 'SEM ANTERIOR' });
-        }
-    }, [comparePeriod, startDate, endDate]);
-
-    const parseHTMLTable = (text) => {
-        const parser = new DOMParser();
-        const docHtml = parser.parseFromString(text, 'text/html');
-        const tables = docHtml.querySelectorAll('table');
-        if (tables.length === 0) return [];
-
-        const allResults = [];
-        tables.forEach((table) => {
-            const trs = table.querySelectorAll('tr');
-            if (trs.length < 2) return;
-
-            let headerIdx = -1;
-            let maxMatches = 0;
-            const kws = ['fecha', 'hora', 'comprobante', 'pedido', 'total', 'canal', 'documento', 'importe'];
-
-            for (let i = 0; i < Math.min(20, trs.length); i++) {
-                const cells = trs[i].querySelectorAll('td, th');
-                const rowText = Array.from(cells).map(c => c.textContent.toLowerCase().trim()).join('|');
-                let m = 0;
-                for (const kw of kws) if (rowText.includes(kw)) m++;
-                if (m > maxMatches && m >= 2) {
-                    maxMatches = m;
-                    headerIdx = i;
-                }
-            }
-
-            if (headerIdx !== -1) {
-                const headerCells = trs[headerIdx].querySelectorAll('td, th');
-                const headers = Array.from(headerCells).map(c => c.textContent.trim().toLowerCase());
-
-                for (let i = headerIdx + 1; i < trs.length; i++) {
-                    const cells = trs[i].querySelectorAll('td, th');
-                    if (cells.length === 0) continue;
-                    const row = {};
-                    cells.forEach((cell, idx) => {
-                        if (idx < headers.length && headers[idx]) {
-                            row[headers[idx]] = cell.textContent.trim();
-                        }
-                    });
-                    if (Object.values(row).some(v => v !== '')) allResults.push(row);
-                }
-            }
-        });
-        return allResults;
-    };
-
-    const handleFileUpload = (e) => {
-        const file = e.target.files[0];
+    const handleFileUpload = async event => {
+        const file = event.target.files[0];
+        event.target.value = '';
         if (!file) return;
         if (!storeId) {
-            alert("No se pudo identificar la tienda. Espera unos segundos y vuelve a intentar. Si el problema continúa, revisa la conexión a internet.");
-            if (fileInputRef.current) fileInputRef.current.value = null;
+            alert('No se pudo identificar la tienda. Espera unos segundos y vuelve a intentar.');
             return;
         }
-
-        const fileName = file.name.toLowerCase();
-        const isCSV = fileName.endsWith('.csv') || fileName.endsWith('.txt');
         setIsSaving(true);
-
-        if (isCSV) {
-            import('papaparse').then(({ default: Papa }) => {
-                Papa.parse(file, {
-                    header: true, skipEmptyLines: true,
-                    complete: async (results) => {
-                        try { await processSalesRows(results.data); }
-                        catch (err) { alert(err?.message || "Error al procesar el archivo CSV."); }
-                        finally {
-                            setIsSaving(false);
-                            if (fileInputRef.current) fileInputRef.current.value = null;
-                            setStartDate(s => s + "");
-                        }
-                    }
-                });
-            });
-            return;
+        try {
+            await processSalesDays(await parseSalesFile(file));
+        } catch (failure) {
+            console.error('Error al procesar el reporte de ventas:', failure);
+            alert(failure?.message || 'No se pudo leer el reporte de Intraview o Inforest.');
+        } finally {
+            setIsSaving(false);
         }
-
-        const reader = new FileReader();
-        reader.onload = async (evt) => {
-            try {
-                const data = new Uint8Array(evt.target.result);
-                const isZip = data[0] === 0x50 && data[1] === 0x4B;
-                const isCFB = data[0] === 0xD0 && data[1] === 0xCF;
-                const isTextBased = !isZip && !isCFB;
-
-                let allRawData = [];
-
-                if (isTextBased) {
-                    const text = new TextDecoder('windows-1252', { fatal: false }).decode(data);
-                    allRawData = parseHTMLTable(text);
-                    if (allRawData.length === 0) {
-                        const { default: Papa } = await import('papaparse');
-                        const result = Papa.parse(text, { header: true, skipEmptyLines: true });
-                        allRawData = result.data;
-                    }
-                } else {
-                    try {
-                        const workbook = XLSX.read(data, { type: 'array', cellDates: true });
-                        for (let sheetName of workbook.SheetNames) {
-                            const sheet = workbook.Sheets[sheetName];
-                            const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-                            let hIdx = -1, maxM = 0;
-                            const kws = ['fecha', 'pedido', 'total', 'canal', 'comprobante'];
-                            for (let i = 0; i < Math.min(20, rows.length); i++) {
-                                const rStr = rows[i].map(c => String(c).toLowerCase()).join('|');
-                                let m = 0;
-                                for (let kw of kws) if (rStr.includes(kw)) m++;
-                                if (m > maxM && m >= 2) { maxM = m; hIdx = i; }
-                            }
-                            if (hIdx !== -1) {
-                                const sData = XLSX.utils.sheet_to_json(sheet, { range: hIdx, raw: true, defval: '' });
-                                allRawData = allRawData.concat(sData);
-                            }
-                        }
-                    } catch (xlsxError) {
-                        console.warn("Lectura XLS estándar falló. Intentando recuperación BIFF:", xlsxError);
-                        allRawData = recoverLegacyXlsRows(data);
-                    }
-                }
-                if (allRawData.length === 0) {
-                    throw new Error("No se encontraron filas de ventas en el archivo.");
-                }
-                await processSalesRows(allRawData);
-            } catch (err) {
-                console.error("Error al procesar Excel:", err);
-                alert(err?.message || "Hubo un error al procesar el archivo.");
-            } finally {
-                setIsSaving(false);
-                if (fileInputRef.current) fileInputRef.current.value = null;
-                setStartDate(s => s + "");
-            }
-        };
-        reader.readAsArrayBuffer(file);
     };
 
-    const processSalesRows = async (data) => {
-        if (!storeId) {
-            throw new Error("No se pudo identificar la tienda para guardar el historial de ventas.");
-        }
-        if (data.length === 0) return;
+    const processSalesDays = async ({ days }) => {
+        if (!storeId) throw new Error('No se pudo identificar la tienda para guardar las ventas.');
 
-        const findValue = (row, possibleKeys) => {
-            const keys = Object.keys(row);
-            for (let pk of possibleKeys) {
-                const exact = keys.find(k => k.trim().toLowerCase() === pk);
-                if (exact) return row[exact];
-            }
-            for (let pk of possibleKeys) {
-                const pkClean = pk.replace(/[^a-z]/g, '');
-                const semiExact = keys.find(k => k.toLowerCase().replace(/[^a-z]/g, '') === pkClean);
-                if (semiExact) return row[semiExact];
-            }
-            for (let pk of possibleKeys) {
-                const match = keys.find(k => {
-                    const clean = k.trim().toLowerCase();
-                    if (pk === 'total' || pk === 'monto' || pk === 'importe') {
-                        if (clean.includes('sub') || clean.includes('dscto') || clean.includes('descuento') || clean.includes('igv') || clean.includes('impuesto') || clean.includes('propina') || clean.includes('recargo')) return false;
-                    }
-                    if (pk === 'pedido' || pk === 'comprobante' || pk === 'ticket') {
-                        if (clean.includes('tipo') || clean.includes('estado') || clean.includes('fecha') || clean.includes('hora')) return false;
-                    }
-                    return clean.includes(pk);
-                });
-                if (match) return row[match];
-            }
-            return undefined;
-        };
+        const dates = [...days.keys()].sort();
+        if (!dates.length) throw new Error('No se encontraron ventas válidas en el archivo.');
 
-        const cleanMonto = (raw) => {
-            if (raw === null || raw === undefined || raw === '') return 0;
-            if (typeof raw === 'number') return raw;
-            let text = String(raw).trim();
-            if (text === '') return 0;
+        await writeSalesHistoryDays(supabase, storeId, days);
+        const sales = [...days.values()].reduce((sum, day) => sum + day.totalSales, 0);
+        const transactions = [...days.values()].reduce((sum, day) => sum + day.totalTxs, 0);
+        const min = dates[0];
+        const max = dates.at(-1);
+        setLastUploadInfo({ min, max, dias: dates.length, ventas: sales, txs: transactions });
+        setStartDate(min);
+        setEndDate(max);
+        setActiveQuickFilter(null);
+        setAnalysisVersion(version => version + 1);
+        await fetchAvailableRange(storeId);
 
-            // Salvavidas estricto: Prevenir que las fechas u horas se parseen como montos millonarios
-            if (/^\d{4}-\d{2}-\d{2}/.test(text) || /^\d{2}\/\d{2}\/\d{4}/.test(text)) return NaN;
-            if (/\d{2}:\d{2}:\d{2}/.test(text) || /^\d{2}:\d{2}$/.test(text)) return NaN;
-
-            let isNegative = text.includes('-') || (text.startsWith('(') && text.endsWith(')'));
-            text = text.replace(/[^\d.,]/g, '');
-            if (!text) return 0;
-            if (text.includes(',') && text.includes('.')) {
-                if (text.lastIndexOf(',') > text.lastIndexOf('.')) text = text.replace(/\./g, '').replace(',', '.');
-                else text = text.replace(/,/g, '');
-            } else if (text.includes(',')) {
-                const parts = text.split(',');
-                if (parts[parts.length - 1].length === 3) text = text.replace(/,/g, '');
-                else text = text.replace(',', '.');
-            }
-            let m = parseFloat(text);
-            return isNaN(m) ? NaN : (isNegative ? -Math.abs(m) : m);
-        };
-
-        const pedidosMap = new Map();
-        let currentPedidoId = null;
-        let currentPedidoIsValid = false;
-
-        data.forEach((fila) => {
-            if (!fila || typeof fila !== 'object') return;
-            const rawValStr = Object.values(fila).join(' ').toLowerCase();
-
-            if (rawValStr.includes('total general') || rawValStr.includes('resumen') || rawValStr.includes('total periodo')) return;
-
-            let colPedido = String(findValue(fila, ['nro. pedido', 'pedido', 'comprobante', 'documento', 'ticket']) || '').trim();
-            let isTotalRow = colPedido.toLowerCase().includes('total ped') || rawValStr.includes('total pedido :');
-
-            // 1. EVALUACIÓN Y SEGUIMIENTO DEL PEDIDO ACTIVO
-            if (!isTotalRow && colPedido && colPedido !== 'undefined') {
-                currentPedidoId = colPedido;
-                const estadoVal = String(findValue(fila, ['estado', 'status', 'estado pedido', 'condicion', 'situacion']) || '').trim().toUpperCase();
-
-                if (estadoVal) {
-                    currentPedidoIsValid = !(
-                        estadoVal.includes('ANULAD') || estadoVal.includes('CANCELAD') ||
-                        estadoVal.includes('VOID') || estadoVal.includes('NULO') ||
-                        estadoVal.includes('INACTIV') || estadoVal.includes('PENDIENTE') ||
-                        estadoVal.includes('ABIERTO') || estadoVal.includes('NO COBRADO') ||
-                        estadoVal.includes('ELIMINAD')
-                    );
-                }
-
-                if (currentPedidoIsValid && !pedidosMap.has(currentPedidoId)) {
-                    let docStr = String(findValue(fila, ['documento', 'comprobante']) || '').trim().toUpperCase();
-                    // Identificador estricto de Notas de Crédito en Perú
-                    let isNC = docStr.startsWith('NC') || docStr.startsWith('BC') || docStr.startsWith('FC') || docStr.startsWith('FN') || rawValStr.includes('nota de credito') || rawValStr.includes('devolucion');
-
-                    pedidosMap.set(currentPedidoId, {
-                        fechaRaw: findValue(fila, ['fecha', 'fechapedido', 'fecha pedido', 'date', 'fec.', 'fecha/hora']),
-                        horaRaw: findValue(fila, ['hora', 'time', 'horapedido', 'hr', 'hora pedido']),
-                        canalRaw: findValue(fila, ['canal venta', 'canal vta', 'canal', 'canal de venta', 'tipo pedido', 'origen', 'modalidad']),
-                        documento: docStr,
-                        itemsSum: 0,
-                        suggestiveItems: new Map(),
-                        totalPedido: null,
-                        isNC: isNC
-                    });
-                } else if (currentPedidoIsValid && pedidosMap.has(currentPedidoId)) {
-                    // Si el documento aparece en las filas siguientes (Items), lo actualiza
-                    let docStr = String(findValue(fila, ['documento', 'comprobante']) || '').trim().toUpperCase();
-                    if (docStr && docStr !== '0' && docStr !== 'UNDEFINED' && !pedidosMap.get(currentPedidoId).documento) {
-                        pedidosMap.get(currentPedidoId).documento = docStr;
-                        if (docStr.startsWith('NC') || docStr.startsWith('BC') || docStr.startsWith('FC')) {
-                            pedidosMap.get(currentPedidoId).isNC = true;
-                        }
-                    }
-                }
-            }
-
-            // 2. EXTRACCIÓN ROBUSTA DE LA FILA DE TOTAL (Ignorando fechas/horas infiltradas)
-            if (isTotalRow) {
-                if (currentPedidoId && currentPedidoIsValid && pedidosMap.has(currentPedidoId)) {
-                    let rowVals = Object.values(fila);
-                    let possibleTotals = [];
-
-                    for (let val of rowVals) {
-                        let strVal = String(val).trim();
-                        if (!strVal || strVal.toLowerCase().includes('total')) continue;
-
-                        let num = cleanMonto(strVal);
-                        // Permitimos ceros (por si hubo 100% descuento) y descartamos NaN (fechas/letras)
-                        if (!isNaN(num)) possibleTotals.push(num);
-                    }
-
-                    let totalRowMonto = 0;
-                    if (possibleTotals.length > 0) {
-                        // El Total final es matemáticamente el último valor del bloque numérico
-                        totalRowMonto = possibleTotals[possibleTotals.length - 1];
-                    }
-
-                    if (pedidosMap.get(currentPedidoId).isNC) {
-                        totalRowMonto = -Math.abs(totalRowMonto);
-                    }
-
-                    pedidosMap.get(currentPedidoId).totalPedido = totalRowMonto;
-                }
-                return;
-            }
-
-            // 3. SUMA DE ÍTEMS INDIVIDUALES (Backup)
-            if (currentPedidoId && currentPedidoIsValid && pedidosMap.has(currentPedidoId)) {
-                const pedido = pedidosMap.get(currentPedidoId);
-                let numStr = findValue(fila, ['total', 'monto', 'venta', 'importe', 'neto']);
-                let montoItem = cleanMonto(numStr);
-
-                if (!isNaN(montoItem)) {
-                    if (pedido.isNC) {
-                        montoItem = -Math.abs(montoItem);
-                    }
-                    pedido.itemsSum += montoItem;
-                }
-
-                const productId = classifySuggestiveProduct(findValue(fila, ['producto', 'descripcion producto', 'articulo', 'item descripcion']));
-                const quantity = cleanMonto(findValue(fila, ['cant', 'cantidad', 'qty', 'unidades']));
-                if (productId && Number.isFinite(quantity) && quantity > 0 && !pedido.isNC) {
-                    const itemNumber = String(findValue(fila, ['itm', 'item', 'item nro', 'linea']) || '').trim();
-                    const itemKey = `${itemNumber || pedido.suggestiveItems.size + 1}:${productId}`;
-                    pedido.suggestiveItems.set(itemKey, { productId, quantity });
-                }
-            }
-        });
-
-        // 4. PREPARACIÓN Y CONSOLIDACIÓN A FIREBASE
-        const dailyAggregations = {};
-        let debugSum = 0;
-
-        for (const [pedidoId, dataP] of pedidosMap.entries()) {
-            let monto = dataP.totalPedido !== null ? dataP.totalPedido : dataP.itemsSum;
-            // Se procesan montos de S/ 0 si son transacciones reales (ej. Cortesías con boleta), pero ignoramos vacíos rotundos
-            if (isNaN(monto)) continue;
-
-            let timeStr = "";
-            let dateStr = "";
-
-            if (dataP.fechaRaw instanceof Date) {
-                dateStr = `${dataP.fechaRaw.getFullYear()}-${dataP.fechaRaw.getMonth() + 1}-${dataP.fechaRaw.getDate()}`;
-                timeStr = `${dataP.fechaRaw.getHours()}:${dataP.fechaRaw.getMinutes()}:${dataP.fechaRaw.getSeconds()}`;
-            } else {
-                const cleanStr = String(dataP.fechaRaw).trim().replace(/\s+/g, ' ');
-                if (cleanStr.includes(' ')) {
-                    const parts = cleanStr.split(' ');
-                    dateStr = parts[0];
-                    if (!dataP.horaRaw) timeStr = parts.slice(1).join(' ');
-                } else {
-                    dateStr = cleanStr;
-                }
-                if (dataP.horaRaw) timeStr = String(dataP.horaRaw).trim();
-            }
-
-            let y, m, d;
-            const partesFecha = dateStr.split(/[\/\-]/);
-            if (partesFecha.length >= 3) {
-                if (partesFecha[0].length === 4) {
-                    y = parseInt(partesFecha[0], 10); m = parseInt(partesFecha[1], 10) - 1; d = parseInt(partesFecha[2], 10);
-                } else {
-                    d = parseInt(partesFecha[0], 10); m = parseInt(partesFecha[1], 10) - 1; y = parseInt(partesFecha[2], 10);
-                    if (y < 100) y += 2000;
-                }
-            }
-
-            let hh = 0, mm2 = 0, ss = 0;
-            if (timeStr) {
-                const tMatch = timeStr.match(/(\d+):(\d+)(?::(\d+))?\s*(a\.m\.|p\.m\.|am|pm)?/i);
-                if (tMatch) {
-                    hh = parseInt(tMatch[1], 10); mm2 = parseInt(tMatch[2], 10); ss = parseInt(tMatch[3] || 0, 10);
-                    const modifier = tMatch[4] ? tMatch[4].toLowerCase() : null;
-                    if (modifier && modifier.includes('p') && hh < 12) hh += 12;
-                    if (modifier && modifier.includes('a') && hh === 12) hh = 0;
-                }
-            }
-
-            let fechaObj = new Date(y, m, d, hh, mm2, ss);
-            if (!fechaObj || isNaN(fechaObj.getTime())) continue;
-
-            let rawHours = fechaObj.getHours();
-            let businessDate = new Date(fechaObj);
-            if (rawHours < 6) businessDate.setDate(businessDate.getDate() - 1);
-
-            const fecha = `${businessDate.getFullYear()}-${String(businessDate.getMonth() + 1).padStart(2, '0')}-${String(businessDate.getDate()).padStart(2, '0')}`;
-            let canalRawStr = String(dataP.canalRaw || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
-            let canal = 'SALÓN';
-
-            if (canalRawStr.includes('DELIVERY') || canalRawStr.includes('RAPPI') || canalRawStr.includes('PEDIDOS YA') || canalRawStr.includes('PEDIDOSYA') || canalRawStr.includes('DIDI') || canalRawStr.includes('UBER') || canalRawStr.includes('CALL CENTER')) canal = 'DELIVERY';
-            else if (canalRawStr.includes('DRIVE') || canalRawStr.includes('AUTO')) canal = 'DRIVE THRU';
-            else if (canalRawStr.includes('FILA') || canalRawStr.includes('MODULO') || canalRawStr.includes('MÓDULO')) canal = 'SERV. FILA';
-            else if (canalRawStr.includes('LOCAL') || canalRawStr.includes('SALON') || canalRawStr.includes('SALÓN')) canal = 'SALÓN';
-            else if (canalRawStr !== '') canal = 'SALÓN';
-
-            // El resumen de Inforest excluye pedidos sin comprobante en los
-            // canales fiscales. SERV. FILA es la excepción: los pedidos de
-            // kiosko pueden formar parte del total aun sin número de documento.
-            const hasDocument = String(dataP.documento || '').trim() !== '';
-            if (!hasDocument && canal !== 'SERV. FILA') continue;
-
-            if (!dailyAggregations[fecha]) {
-                dailyAggregations[fecha] = {
-                    totalSales: 0,
-                    hourlyData: {},
-                    suggestiveProducts: Object.fromEntries(SUGGESTIVE_PRODUCTS.map(({ id }) => [id, {}])),
-                    _pedidosGlobal: new Set(),
-                    _pedidosHoraCanal: {},
-                };
-            }
-
-            const dayObj = dailyAggregations[fecha];
-
-            dayObj.totalSales += monto;
-            debugSum += monto;
-
-            // EL SEGUNDO GRAN CAMBIO: Contar por Documento en lugar de Pedido interno para limpiar tickets falsos y divisiones
-            let txId = dataP.documento ? dataP.documento : pedidoId;
-            dayObj._pedidosGlobal.add(txId);
-
-            if (!dayObj.hourlyData[rawHours]) {
-                dayObj.hourlyData[rawHours] = {};
-                dayObj._pedidosHoraCanal[rawHours] = {};
-            }
-            dayObj.hourlyData[rawHours][canal] = (dayObj.hourlyData[rawHours][canal] || 0) + monto;
-
-            if (!dayObj._pedidosHoraCanal[rawHours][canal]) dayObj._pedidosHoraCanal[rawHours][canal] = new Set();
-            dayObj._pedidosHoraCanal[rawHours][canal].add(txId);
-
-            for (const item of dataP.suggestiveItems?.values?.() || []) {
-                if (!dayObj.suggestiveProducts[item.productId][rawHours]) {
-                    dayObj.suggestiveProducts[item.productId][rawHours] = {};
-                }
-                dayObj.suggestiveProducts[item.productId][rawHours][canal] =
-                    (dayObj.suggestiveProducts[item.productId][rawHours][canal] || 0) + item.quantity;
-            }
-        }
-
-        let batch = writeBatch(db);
-        let count = 0;
-        for (const [date, dataRaw] of Object.entries(dailyAggregations)) {
-            const dataToSave = {
-                totalSales: dataRaw.totalSales,
-                totalTxs: dataRaw._pedidosGlobal.size,
-                hourlyData: dataRaw.hourlyData,
-                suggestiveProducts: dataRaw.suggestiveProducts,
-                hourlyTxs: {}
-            };
-            for (const hr in dataRaw._pedidosHoraCanal) {
-                dataToSave.hourlyTxs[hr] = {};
-                for (const cn in dataRaw._pedidosHoraCanal[hr]) {
-                    dataToSave.hourlyTxs[hr][cn] = dataRaw._pedidosHoraCanal[hr][cn].size;
-                }
-            }
-
-            const docRef = doc(db, 'stores', storeId, 'sales_history', date);
-            batch.set(docRef, dataToSave);
-            count++;
-            if (count >= 490) {
-                await batch.commit();
-                batch = writeBatch(db);
-                count = 0;
-            }
-        }
-        if (count > 0) await batch.commit();
-
-        const fechasArchivo = Object.keys(dailyAggregations).sort();
-        const totalTxs = Object.keys(dailyAggregations).reduce((acc, k) => acc + dailyAggregations[k]._pedidosGlobal.size, 0);
-
-        if (fechasArchivo.length > 0) {
-            const min = fechasArchivo[0];
-            const max = fechasArchivo[fechasArchivo.length - 1];
-            setLastUploadInfo({
-                min, max,
-                dias: fechasArchivo.length,
-                ventas: debugSum,
-                txs: totalTxs,
-            });
-            setStartDate(min);
-            setEndDate(max);
-            setActiveQuickFilter(null);
-            await fetchAvailableRange(storeId);
-        }
-
-        alert(`¡Datos procesados con éxito!\n\nRango detectado: ${fechasArchivo[0] || '-'} a ${fechasArchivo[fechasArchivo.length - 1] || '-'}\nDías cargados: ${fechasArchivo.length}\nVenta Total Verificada: S/ ${debugSum.toLocaleString('es-PE', { minimumFractionDigits: 2 })}\nTransacciones Finales: ${totalTxs}`);
+        alert(`¡Datos procesados con éxito!\n\nJornada comercial: ${min}${min !== max ? ` a ${max}` : ''}\nDías cargados: ${dates.length}\nVenta total: S/ ${sales.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\nTransacciones: ${transactions}`);
     };
 
-    const allCanales = CANALES_FIJOS;
+    const allCanales = [...new Set([
+        ...CANALES_FIJOS,
+        ...[dataCurrent, dataPrevWeek, dataPrevMonth, dataPrevYear]
+            .flatMap(data => Object.keys(data?.canales || {})),
+    ])];
 
     const AnalysisSection = ({ title, compareData, compareLabel, colorCompare, colorCurrent, viewMode, showHourlyChart = false }) => {
         if (!dataCurrent || !compareData) return null;
         const isTxs = viewMode === 'TXS';
+        const rangeDates = getDatesInRange(startDate, endDate);
+        const allowedDays = new Set(rangeDates.map(date =>
+            (new Date(`${date}T12:00:00`).getDay() + 6) % 7));
 
         const getTurnosByCanal = (data, canal) => {
             if (!canal) {
@@ -1149,11 +428,7 @@ export default function SalesAnalysis() {
 
             const targetDayOfWeek = DIAS_SEMANA_GETDAY[selectedDayDetail];
             const currentDates = getDatesInRange(startDate, endDate);
-            const compareDates = comparePeriod === 'month' ? currentDates.map(d => {
-                const date = new Date(d + 'T12:00:00');
-                date.setMonth(date.getMonth() - 1);
-                return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-            }) : comparePeriod === 'year' ? currentDates.map(d => subtractYear(d)) : currentDates.map(d => addDays(d, -7));
+            const compareDates = comparisonDatesForWeekday(currentDates, comparePeriod, targetDayOfWeek);
 
             let currentSum = 0, currentCount = 0, compareSum = 0, compareCount = 0;
             const currentDayData = [];
@@ -1161,7 +436,7 @@ export default function SalesAnalysis() {
 
             currentDates.forEach((d) => {
                 const dateObj = new Date(d + 'T12:00:00');
-                if (dateObj.getDay() === targetDayOfWeek) {
+                if (dateObj.getDay() === targetDayOfWeek && Object.hasOwn(dataCurrent.ventasPorFecha, d)) {
                     const val = isTxs ? (dataCurrent.txsPorFecha[d] || 0) : (dataCurrent.ventasPorFecha[d] || 0);
                     currentSum += val;
                     currentCount++;
@@ -1170,8 +445,7 @@ export default function SalesAnalysis() {
             });
 
             compareDates.forEach((d) => {
-                const dateObj = new Date(d + 'T12:00:00');
-                if (dateObj.getDay() === targetDayOfWeek) {
+                if (Object.hasOwn(compareData.ventasPorFecha, d)) {
                     const val = isTxs ? (compareData.txsPorFecha[d] || 0) : (compareData.ventasPorFecha[d] || 0);
                     compareSum += val;
                     compareCount++;
@@ -1184,16 +458,21 @@ export default function SalesAnalysis() {
             const diff = currentAvg - compareAvg;
             const pct = compareAvg > 0 ? (diff / compareAvg) * 100 : 0;
 
-            const canalesBreakdown = allCanales.map(canal => {
-                const currentCanalData = isTxs
-                    ? (dataCurrent.canalesDiasTxs[canal] || {})
-                    : (dataCurrent.canalesDias[canal] || {});
-                const compareCanalData = isTxs
-                    ? (compareData.canalesDiasTxs[canal] || {})
-                    : (compareData.canalesDias[canal] || {});
+            const sumHorasCanalFecha = (dataObj, canal, fecha) => {
+                if (!dataObj) return 0;
+                const src = isTxs
+                    ? (dataObj.canalesHorasTxsPorFecha?.[canal]?.[fecha] || {})
+                    : (dataObj.canalesHorasPorFecha?.[canal]?.[fecha] || {});
+                let total = 0;
+                for (const h in src) total += src[h] || 0;
+                return total;
+            };
 
-                const currentVal = currentCanalData[targetDayOfWeek] || 0;
-                const compareVal = compareCanalData[targetDayOfWeek] || 0;
+            const canalesBreakdown = allCanales.map(canal => {
+                const currentVal = currentDayData.reduce((sum, day) =>
+                    sum + sumHorasCanalFecha(dataCurrent, canal, day.fecha), 0);
+                const compareVal = compareDayData.reduce((sum, day) =>
+                    sum + sumHorasCanalFecha(compareData, canal, day.fecha), 0);
                 const canalDiff = currentVal - compareVal;
                 const canalPct = compareVal > 0 ? (canalDiff / compareVal) * 100 : 0;
 
@@ -1205,16 +484,6 @@ export default function SalesAnalysis() {
                     pct: canalPct
                 };
             }).sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
-
-            const sumHorasCanalFecha = (dataObj, canal, fecha) => {
-                if (!dataObj) return 0;
-                const src = isTxs
-                    ? (dataObj.canalesHorasTxsPorFecha?.[canal]?.[fecha] || {})
-                    : (dataObj.canalesHorasPorFecha?.[canal]?.[fecha] || {});
-                let total = 0;
-                for (const h in src) total += src[h] || 0;
-                return total;
-            };
 
             const fechaCanalBreakdown = currentDayData.map(({ fecha }) => {
                 const canales = {};
@@ -1305,11 +574,7 @@ export default function SalesAnalysis() {
             const targetDayOfWeek = DIAS_SEMANA_GETDAY[selectedDayDetail];
 
             const currentDates = getDatesInRange(startDate, endDate);
-            const compareDates = comparePeriod === 'month' ? currentDates.map(d => {
-                const date = new Date(d + 'T12:00:00');
-                date.setMonth(date.getMonth() - 1);
-                return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-            }) : comparePeriod === 'year' ? currentDates.map(d => subtractYear(d)) : currentDates.map(d => addDays(d, -7));
+            const compareDates = comparisonDatesForWeekday(currentDates, comparePeriod, targetDayOfWeek);
 
             return TURNOS.map(t => {
                 let current = 0, compare = 0;
@@ -1327,14 +592,9 @@ export default function SalesAnalysis() {
                 });
 
                 compareDates.forEach((d) => {
-                    const dateObj = new Date(d + 'T12:00:00');
-                    if (dateObj.getDay() === targetDayOfWeek) {
-                        const horasData = isTxs ? (activeCompareData.canalesHorasTxsPorFecha[selectedCanalDetail]?.[d] || {}) : (activeCompareData.canalesHorasPorFecha[selectedCanalDetail]?.[d] || {});
-                        for (let h = 0; h < 24; h++) {
-                            if (t.check(h)) {
-                                compare += horasData[h] || 0;
-                            }
-                        }
+                    const horasData = isTxs ? (activeCompareData.canalesHorasTxsPorFecha[selectedCanalDetail]?.[d] || {}) : (activeCompareData.canalesHorasPorFecha[selectedCanalDetail]?.[d] || {});
+                    for (let h = 0; h < 24; h++) {
+                        if (t.check(h)) compare += horasData[h] || 0;
                     }
                 });
 
@@ -1347,27 +607,25 @@ export default function SalesAnalysis() {
         };
 
         const getChartDia = () => {
-            if (selectedCanalDetail) {
-                const diasData = isTxs ? (dataCurrent.canalesDiasTxs[selectedCanalDetail] || {}) : (dataCurrent.canalesDias[selectedCanalDetail] || {});
-                const diasDataCompare = isTxs ? (compareData.canalesDiasTxs[selectedCanalDetail] || {}) : (compareData.canalesDias[selectedCanalDetail] || {});
-
-                return DIAS_SEMANA.map((d, i) => {
-                    const getDayValue = DIAS_SEMANA_GETDAY[i];
-                    return {
-                        name: `${i + 1}. ${d}`,
-                        [compareLabel]: diasDataCompare[getDayValue] || 0,
-                        "PERIODO ACTUAL": diasData[getDayValue] || 0,
-                        _realIdx: getDayValue
-                    };
-                });
-            }
-            return DIAS_SEMANA.map((d, i) => {
-                const getDayValue = DIAS_SEMANA_GETDAY[i];
+            const dates = getDatesInRange(startDate, endDate);
+            const totalForDates = (data, selectedDates) => {
+                if (selectedCanalDetail) {
+                    const valuesByDate = isTxs
+                        ? data.canalesHorasTxsPorFecha?.[selectedCanalDetail]
+                        : data.canalesHorasPorFecha?.[selectedCanalDetail];
+                    return Object.values(sumHourlyValues(valuesByDate, selectedDates))
+                        .reduce((sum, value) => sum + value, 0);
+                }
+                const values = isTxs ? data.txsPorFecha : data.ventasPorFecha;
+                return selectedDates.reduce((sum, date) => sum + (values[date] || 0), 0);
+            };
+            return DIAS_SEMANA.map((day, index) => {
+                const selectedDates = datesForWeekday(dates, DIAS_SEMANA_GETDAY[index]);
                 return {
-                    name: `${i + 1}. ${d}`,
-                    [compareLabel]: isTxs ? (compareData.diasTxs[getDayValue] || 0) : parseFloat((compareData.dias[getDayValue] || 0).toFixed(2)),
-                    "PERIODO ACTUAL": isTxs ? (dataCurrent.diasTxs[getDayValue] || 0) : parseFloat((dataCurrent.dias[getDayValue] || 0).toFixed(2)),
-                    _realIdx: getDayValue
+                    name: `${index + 1}. ${day}`,
+                    [compareLabel]: totalForDates(compareData, comparisonDatesForWeekday(dates, comparePeriod, DIAS_SEMANA_GETDAY[index])),
+                    'PERIODO ACTUAL': totalForDates(dataCurrent, selectedDates),
+                    _realIdx: index,
                 };
             });
         };
@@ -1375,17 +633,21 @@ export default function SalesAnalysis() {
         const chartTurno = getChartTurno();
         const chartDia = getChartDia();
 
-        const currentHourlyTxs = selectedHourlyTxsDay === 'all'
-            ? dataCurrent.horasTxs
-            : dataCurrent.horasTxsPorDia?.[selectedHourlyTxsDay];
-        const comparedHourlyTxs = selectedHourlyTxsDay === 'all'
-            ? compareData.horasTxs
-            : compareData.horasTxsPorDia?.[selectedHourlyTxsDay];
+        const currentDates = getDatesInRange(startDate, endDate);
+        const hourlyDate = getHourlyDateSelection(currentDates, selectedHourlyTxsDay);
+        const hourlyDates = hourlyDate === 'all' ? currentDates : [hourlyDate];
+        const hourlyComparisonDates = getComparisonDates(hourlyDates, comparePeriod);
+        const hasCurrentHourlyDetail = hourlyDates.some(date => Object.keys(dataCurrent.horasTxsPorFecha?.[date] || {}).length > 0);
+        const hasComparedHourlyDetail = hourlyComparisonDates.some(date => Object.keys(compareData.horasTxsPorFecha?.[date] || {}).length > 0);
+        const currentHourlyTxs = sumHourlyValues(dataCurrent.horasTxsPorFecha, hourlyDates);
+        const comparedHourlyTxs = sumHourlyValues(
+            compareData.horasTxsPorFecha, hourlyComparisonDates
+        );
         const businessHours = [...Array.from({ length: 18 }, (_, index) => index + 6), 0, 1, 2, 3, 4, 5];
         const allHourlyTxs = businessHours.map((hour) => ({
             name: `${String(hour).padStart(2, '0')}:00`,
-            [compareLabel]: comparedHourlyTxs?.[hour] || 0,
-            "PERIODO ACTUAL": currentHourlyTxs?.[hour] || 0,
+            [compareLabel]: hasComparedHourlyDetail ? (comparedHourlyTxs?.[hour] || 0) : null,
+            "PERIODO ACTUAL": hasCurrentHourlyDetail ? (currentHourlyTxs?.[hour] || 0) : null,
         }));
         const firstTransactionIndex = allHourlyTxs.findIndex(
             (item) => item[compareLabel] > 0 || item["PERIODO ACTUAL"] > 0
@@ -1416,6 +678,11 @@ export default function SalesAnalysis() {
                 <h2 className="text-xl font-black text-gray-800 mb-6 uppercase tracking-tight flex items-center gap-2">
                     <span className="bg-orange-500 w-2 h-6 rounded-sm"></span> VS {title}
                 </h2>
+                {(dataCurrent.totalsOnlyDates?.length > 0 || compareData.totalsOnlyDates?.length > 0) && (
+                    <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                        Algunas jornadas históricas solo tienen totales. Sus ventas y transacciones están incluidas; vuelve a cargar sus reportes para ver el detalle completo por hora y canal.
+                    </p>
+                )}
 
                 <div className="flex flex-col lg:flex-row gap-6">
                     <div className="w-full lg:w-72 shrink-0 space-y-4">
@@ -1505,11 +772,13 @@ export default function SalesAnalysis() {
                                 <div className="overflow-x-auto">
                                     <div className="flex gap-2 pb-2">
                                         {DIAS_SEMANA.map((d, idx) => {
+                                            if (!allowedDays.has(idx)) return null;
                                             const isSelected = selectedDayDetail === idx;
                                             return (
                                                 <button
                                                     key={idx}
-                                                    onClick={() => setSelectedDayDetail(isSelected ? null : idx)}
+                                                    onClick={() => setSelectedDayDetail(isSelected && rangeDates.length > 1 ? null : idx)}
+                                                    disabled={rangeDates.length === 1}
                                                     className={`px-4 py-2 rounded font-bold text-sm transition-all ${
                                                         isSelected
                                                             ? 'bg-green-500 text-white'
@@ -1584,37 +853,15 @@ export default function SalesAnalysis() {
                                             const activeCompareLabel = getActiveCompareLabel();
                                             const targetDayOfWeek = DIAS_SEMANA_GETDAY[selectedDayDetail];
 
-                                            const currDates = getDatesInRange(startDate, endDate);
-                                            const cmpDates = comparePeriod === 'month'
-                                                ? currDates.map(d => {
-                                                    const dd = new Date(d + 'T12:00:00');
-                                                    dd.setMonth(dd.getMonth() - 1);
-                                                    return `${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, '0')}-${String(dd.getDate()).padStart(2, '0')}`;
-                                                })
-                                                : comparePeriod === 'year'
-                                                    ? currDates.map(d => subtractYear(d))
-                                                    : currDates.map(d => addDays(d, -7));
-
-                                            const sumHours = (dataObj, fechas) => {
-                                                const acc = {};
-                                                for (let h = 0; h < 24; h++) acc[h] = 0;
-                                                if (!dataObj) return acc;
-                                                const src = isTxs
-                                                    ? (dataObj.canalesHorasTxsPorFecha?.[selectedCanalDetail] || {})
-                                                    : (dataObj.canalesHorasPorFecha?.[selectedCanalDetail] || {});
-                                                fechas.forEach(d => {
-                                                    const dow = new Date(d + 'T12:00:00').getDay();
-                                                    if (dow !== targetDayOfWeek) return;
-                                                    const hh = src[d] || {};
-                                                    for (let h = 0; h < 24; h++) {
-                                                        acc[h] += hh[h] || 0;
-                                                    }
-                                                });
-                                                return acc;
-                                            };
-
-                                            const horasActual = sumHours(dataCurrent, currDates);
-                                            const horasCompare = sumHours(activeCompareData, cmpDates);
+                                            const currDates = datesForWeekday(
+                                                getDatesInRange(startDate, endDate), targetDayOfWeek
+                                            );
+                                            const cmpDates = comparisonDatesForWeekday(
+                                                getDatesInRange(startDate, endDate), comparePeriod, targetDayOfWeek
+                                            );
+                                            const source = isTxs ? 'canalesHorasTxsPorFecha' : 'canalesHorasPorFecha';
+                                            const horasActual = sumHourlyValues(dataCurrent[source]?.[selectedCanalDetail], currDates);
+                                            const horasCompare = sumHourlyValues(activeCompareData[source]?.[selectedCanalDetail], cmpDates);
 
                                             const lineChartData = businessHours.map(h => ({
                                                 name: `${String(h).padStart(2, '0')}:00`,
@@ -1657,18 +904,22 @@ export default function SalesAnalysis() {
                             <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mb-1 px-4">
                                 <h3 className="font-bold text-violet-700 italic">Tendencia lineal de transacciones por hora</h3>
                                 <select
-                                    value={selectedHourlyTxsDay}
+                                    value={hourlyDate}
+                                    disabled={currentDates.length === 1}
+                                    aria-label="Fecha de la tendencia de transacciones"
                                     onChange={(event) => setSelectedHourlyTxsDay(event.target.value)}
                                     className="border border-violet-200 bg-violet-50 text-violet-800 rounded-md px-3 py-1.5 text-xs font-bold outline-none"
                                 >
-                                    <option value="all">Toda la semana</option>
-                                    {DIAS_SEMANA.map((day, index) => (
-                                        <option key={day} value={index}>{day}</option>
+                                    {currentDates.length > 1 && <option value="all">Todo el rango seleccionado</option>}
+                                    {currentDates.map((date) => (
+                                        <option key={date} value={date}>
+                                            {format(new Date(`${date}T12:00:00`), 'dd/MM/yyyy')} · {DIAS_SEMANA[(new Date(`${date}T12:00:00`).getDay() + 6) % 7]}
+                                        </option>
                                     ))}
                                 </select>
                             </div>
                             <p className="text-center text-xs text-gray-500 mb-2">
-                                Evolución desde la primera hasta la última transacción del día seleccionado.
+                                {hourlyDate === 'all' ? `Transacciones del rango ${startDate} al ${endDate}.` : `Transacciones del ${hourlyDate}.`} Comparación: {getComparisonDates(hourlyDates, comparePeriod)[0]}{hourlyDates.length > 1 ? ` al ${getComparisonDates(hourlyDates, comparePeriod).at(-1)}` : ''}.
                             </p>
                             <div className="h-72 px-3">
                                 <ResponsiveContainer width="100%" height="100%">
@@ -1796,7 +1047,7 @@ export default function SalesAnalysis() {
                         <div className="bg-white border border-gray-200 shadow-sm flex flex-col relative pt-4 xl:col-span-2 mt-4">
                             <div className="flex items-center justify-center gap-3 mb-2">
                                 <h3 className="text-center font-bold text-red-700 italic">{isTxs ? 'Transacciones por día' : 'Ventas por día'}</h3>
-                                {selectedCanalDetail && selectedDayDetail && (
+                                {selectedCanalDetail && selectedDayDetail !== null && (
                                     <span className="bg-green-100 text-green-700 px-3 py-1 rounded text-xs font-bold">
                                         {DIAS_SEMANA[selectedDayDetail]} seleccionado
                                     </span>
@@ -1832,12 +1083,7 @@ export default function SalesAnalysis() {
                                                 <span className="w-2 h-2 inline-block shrink-0" style={{ backgroundColor: colorCompare }}></span> {compareLabel}
                                             </td>
                                             {chartDia.map(d => {
-                                                let val;
-                                                if (selectedCanalDetail) {
-                                                    val = isTxs ? (compareData.canalesDiasTxs[selectedCanalDetail]?.[d._realIdx] || 0) : (compareData.canalesDias[selectedCanalDetail]?.[d._realIdx] || 0);
-                                                } else {
-                                                    val = isTxs ? (compareData.diasTxs[d._realIdx] || 0) : (compareData.dias[d._realIdx] || 0);
-                                                }
+                                                const val = d[compareLabel];
                                                 const isSelected = selectedCanalDetail && selectedDayDetail === d._realIdx;
                                                 return <td key={d.name} className={`p-1 border-r border-gray-100 ${isSelected ? 'bg-green-100' : ''} ${selectedCanalDetail ? 'cursor-pointer hover:bg-green-50' : ''}`} onClick={() => selectedCanalDetail && setSelectedDayDetail(isSelected ? null : d._realIdx)}>{isTxs ? val : fmtNum(val)}</td>
                                             })}
@@ -1847,12 +1093,7 @@ export default function SalesAnalysis() {
                                                 <span className="w-2 h-2 inline-block shrink-0" style={{ backgroundColor: colorCurrent }}></span> ACTUAL
                                             </td>
                                             {chartDia.map(d => {
-                                                let val;
-                                                if (selectedCanalDetail) {
-                                                    val = isTxs ? (dataCurrent.canalesDiasTxs[selectedCanalDetail]?.[d._realIdx] || 0) : (dataCurrent.canalesDias[selectedCanalDetail]?.[d._realIdx] || 0);
-                                                } else {
-                                                    val = isTxs ? (dataCurrent.diasTxs[d._realIdx] || 0) : (dataCurrent.dias[d._realIdx] || 0);
-                                                }
+                                                const val = d['PERIODO ACTUAL'];
                                                 const isSelected = selectedCanalDetail && selectedDayDetail === d._realIdx;
                                                 return <td key={d.name} className={`p-1 border-r border-gray-100 ${isSelected ? 'bg-green-100' : ''} ${selectedCanalDetail ? 'cursor-pointer hover:bg-green-50' : ''}`} onClick={() => selectedCanalDetail && setSelectedDayDetail(isSelected ? null : d._realIdx)}>{isTxs ? val : fmtNum(val)}</td>
                                             })}
@@ -1860,14 +1101,8 @@ export default function SalesAnalysis() {
                                         <tr className="border-b bg-gray-50">
                                             <td className="p-1 text-left font-bold border-r border-gray-100 pl-2 text-gray-600 italic">VAR</td>
                                             {chartDia.map(d => {
-                                                let act, ant;
-                                                if (selectedCanalDetail) {
-                                                    act = isTxs ? (dataCurrent.canalesDiasTxs[selectedCanalDetail]?.[d._realIdx] || 0) : (dataCurrent.canalesDias[selectedCanalDetail]?.[d._realIdx] || 0);
-                                                    ant = isTxs ? (compareData.canalesDiasTxs[selectedCanalDetail]?.[d._realIdx] || 0) : (compareData.canalesDias[selectedCanalDetail]?.[d._realIdx] || 0);
-                                                } else {
-                                                    act = isTxs ? (dataCurrent.diasTxs[d._realIdx] || 0) : (dataCurrent.dias[d._realIdx] || 0);
-                                                    ant = isTxs ? (compareData.diasTxs[d._realIdx] || 0) : (compareData.dias[d._realIdx] || 0);
-                                                }
+                                                const act = d['PERIODO ACTUAL'];
+                                                const ant = d[compareLabel];
                                                 const v = calcVar(act, ant);
                                                 const isSelected = selectedCanalDetail && selectedDayDetail === d._realIdx;
                                                 return <td key={d.name} className={`p-1 font-bold border-r border-gray-100 ${v.color} ${isSelected ? 'bg-green-100' : ''} ${selectedCanalDetail ? 'cursor-pointer hover:bg-green-50' : ''}`} onClick={() => selectedCanalDetail && setSelectedDayDetail(isSelected ? null : d._realIdx)}>{v.icon} {fmtPct(v.pct)}</td>
@@ -1876,14 +1111,8 @@ export default function SalesAnalysis() {
                                         <tr className="bg-gray-50">
                                             <td className="p-1 text-left font-bold border-r border-gray-100 pl-2 text-gray-600 italic">DIF {isTxs ? 'TXS' : 'S/.'}</td>
                                             {chartDia.map(d => {
-                                                let act, ant;
-                                                if (selectedCanalDetail) {
-                                                    act = isTxs ? (dataCurrent.canalesDiasTxs[selectedCanalDetail]?.[d._realIdx] || 0) : (dataCurrent.canalesDias[selectedCanalDetail]?.[d._realIdx] || 0);
-                                                    ant = isTxs ? (compareData.canalesDiasTxs[selectedCanalDetail]?.[d._realIdx] || 0) : (compareData.canalesDias[selectedCanalDetail]?.[d._realIdx] || 0);
-                                                } else {
-                                                    act = isTxs ? (dataCurrent.diasTxs[d._realIdx] || 0) : (dataCurrent.dias[d._realIdx] || 0);
-                                                    ant = isTxs ? (compareData.diasTxs[d._realIdx] || 0) : (compareData.dias[d._realIdx] || 0);
-                                                }
+                                                const act = d['PERIODO ACTUAL'];
+                                                const ant = d[compareLabel];
                                                 const v = calcVar(act, ant);
                                                 const isSelected = selectedCanalDetail && selectedDayDetail === d._realIdx;
                                                 return <td key={d.name} className={`p-1 font-bold border-r border-gray-100 ${v.color} ${isSelected ? 'bg-green-100' : ''} ${selectedCanalDetail ? 'cursor-pointer hover:bg-green-50' : ''}`} onClick={() => selectedCanalDetail && setSelectedDayDetail(isSelected ? null : d._realIdx)}>{isTxs ? v.dif : fmtNum(v.dif)}</td>
@@ -1900,11 +1129,13 @@ export default function SalesAnalysis() {
                                 <div className="overflow-x-auto mb-4">
                                     <div className="flex gap-2 pb-2">
                                         {DIAS_SEMANA.map((d, idx) => {
+                                            if (!allowedDays.has(idx)) return null;
                                             const isSelected = selectedDayDetail === idx;
                                             return (
                                                 <button
                                                     key={idx}
-                                                    onClick={() => setSelectedDayDetail(isSelected ? null : idx)}
+                                                    onClick={() => setSelectedDayDetail(isSelected && rangeDates.length > 1 ? null : idx)}
+                                                    disabled={rangeDates.length === 1}
                                                     className={`px-4 py-2 rounded font-bold text-sm transition-all whitespace-nowrap ${
                                                         isSelected
                                                             ? 'bg-blue-500 text-white'
@@ -1925,16 +1156,16 @@ export default function SalesAnalysis() {
                                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                                 <div className="bg-blue-50 border border-blue-200 rounded p-3">
                                                     <p className="text-xs font-bold text-blue-600 uppercase mb-1">Promedio Actual ({details.currentDayData.length} {details.dayName})</p>
-                                                    <p className="text-2xl font-black text-blue-700">{isTxs ? details.currentAvg.toFixed(0) : fmtMoney(details.currentAvg)}</p>
+                                                    <p className="text-2xl font-black text-blue-700">{isTxs ? details.currentAvg.toLocaleString('es-PE', { maximumFractionDigits: 2 }) : fmtMoney(details.currentAvg)}</p>
                                                 </div>
                                                 <div className="bg-gray-50 border border-gray-200 rounded p-3">
-                                                    <p className="text-xs font-bold text-gray-600 uppercase mb-1">Promedio {compareLabel.toUpperCase()} ({details.compareDayData.length} {details.dayName})</p>
-                                                    <p className="text-2xl font-black text-gray-700">{isTxs ? details.compareAvg.toFixed(0) : fmtMoney(details.compareAvg)}</p>
+                                                    <p className="text-xs font-bold text-gray-600 uppercase mb-1">Promedio {compareLabel.toUpperCase()} ({details.compareDayData.length} fechas)</p>
+                                                    <p className="text-2xl font-black text-gray-700">{isTxs ? details.compareAvg.toLocaleString('es-PE', { maximumFractionDigits: 2 }) : fmtMoney(details.compareAvg)}</p>
                                                 </div>
                                                 <div className={`${details.diff >= 0 ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'} border rounded p-3`}>
                                                     <p className="text-xs font-bold uppercase mb-1" style={{color: details.diff >= 0 ? '#059669' : '#dc2626'}}>Variación</p>
                                                     <p className="text-2xl font-black" style={{color: details.diff >= 0 ? '#059669' : '#dc2626'}}>
-                                                        {isTxs ? details.diff.toFixed(0) : fmtNum(details.diff)}
+                                                        {isTxs ? details.diff.toLocaleString('es-PE', { maximumFractionDigits: 2 }) : fmtNum(details.diff)}
                                                     </p>
                                                     <p className="text-sm font-bold" style={{color: details.diff >= 0 ? '#059669' : '#dc2626'}}>
                                                         {details.diff >= 0 ? '▲' : '▼'} {Math.abs(details.pct).toFixed(1)}%
@@ -2121,7 +1352,7 @@ export default function SalesAnalysis() {
                         }`}
                     >
                         <Upload className="w-4 h-4" />
-                        {storeId ? 'Cargar Excel Inforest' : 'Cargando tienda...'}
+                        {storeId ? 'Cargar Intraview / Inforest' : 'Cargando tienda...'}
                     </button>
                 </div>
             </div>
@@ -2201,12 +1432,16 @@ export default function SalesAnalysis() {
                         { k: 'year', label: 'Año Anterior' }
                     ].map(opt => {
                         const isActive = comparePeriod === opt.k;
+                        const disabled = opt.k === 'month' && !monthComparison.enabled;
                         return (
                             <button
                                 key={opt.k}
+                                disabled={disabled}
+                                title={disabled ? monthComparison.reason : opt.k === 'year' ? 'Mismo día de la semana, 52 semanas antes' : undefined}
                                 onClick={() => setComparePeriod(opt.k)}
                                 className={`px-3 py-1.5 rounded text-xs font-bold transition-all ${
-                                    isActive ? 'bg-blue-600 text-white shadow'
+                                    disabled ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                    : isActive ? 'bg-blue-600 text-white shadow'
                                     : 'bg-gray-100 text-gray-700 hover:bg-blue-100 hover:text-blue-700'
                                 }`}
                             >
@@ -2214,6 +1449,16 @@ export default function SalesAnalysis() {
                             </button>
                         );
                     })}
+                    {comparisonDates.length > 0 && (
+                        <p className="w-full text-xs text-gray-600 mt-1">
+                            Comparación: {comparisonDates[0]}{comparisonDates.length > 1 ? ` al ${comparisonDates.at(-1)}` : ''}
+                            {comparePeriod === 'year' ? ' · Mismo día de la semana, 52 semanas antes.' : ''}
+                            {' '}Jornada comercial: 06:00 a 05:59 del día siguiente.
+                        </p>
+                    )}
+                    {!monthComparison.enabled && activeDates.length > 0 && (
+                        <p className="w-full text-xs text-amber-700">{monthComparison.reason}</p>
+                    )}
                 </div>
 
                 {dataCurrent && !loading && (() => {
@@ -2282,11 +1527,11 @@ export default function SalesAnalysis() {
 
                 {loading ? (
                     <div className="flex justify-center p-20"><div className="animate-spin rounded-full h-10 w-10 border-4 border-orange-500 border-t-transparent"></div></div>
-                ) : (dataCurrent && Number(dataCurrent.total || 0) === 0 && dataPrevWeek.total === 0 && dataPrevYear.total === 0) ? (
+                ) : (dataCurrent && Number(dataCurrent.total || 0) === 0 && Number((comparePeriod === 'month' ? dataPrevMonth : comparePeriod === 'year' ? dataPrevYear : dataPrevWeek)?.total || 0) === 0) ? (
                     <div className="bg-white p-12 text-center border border-gray-200 rounded">
                         <AlertCircle className="w-12 h-12 text-gray-300 mx-auto mb-4" />
                         <h2 className="text-xl font-bold text-gray-600">No hay datos en este rango</h2>
-                        <p className="text-gray-500 mt-2">Sube un Excel de Inforest para poblar la base de datos.</p>
+                        <p className="text-gray-500 mt-2">Carga un reporte de ventas de Intraview o Inforest para consultar este rango.</p>
                     </div>
                 ) : (
                     <>
@@ -2294,10 +1539,10 @@ export default function SalesAnalysis() {
                             <AnalysisSection title={previousPeriodMeta.title} compareData={dataPrevWeek} compareLabel={previousPeriodMeta.label} colorCompare="#fcd34d" colorCurrent="#f97316" viewMode={viewMode} showHourlyChart />
                         )}
                         {comparePeriod === 'month' && dataPrevMonth && (
-                            <AnalysisSection title="Mes Anterior" compareData={dataPrevMonth} compareLabel="MES ANTERIOR" colorCompare="#a78bfa" colorCurrent="#f97316" viewMode={viewMode} />
+                            <AnalysisSection title="Mes Anterior" compareData={dataPrevMonth} compareLabel="MES ANTERIOR" colorCompare="#a78bfa" colorCurrent="#f97316" viewMode={viewMode} showHourlyChart />
                         )}
                         {comparePeriod === 'year' && dataPrevYear && (
-                            <AnalysisSection title="Año Anterior" compareData={dataPrevYear} compareLabel="AÑO ANTERIOR" colorCompare="#d1d5db" colorCurrent="#f97316" viewMode={viewMode} />
+                            <AnalysisSection title="Año Anterior" compareData={dataPrevYear} compareLabel="AÑO ANTERIOR" colorCompare="#d1d5db" colorCurrent="#f97316" viewMode={viewMode} showHourlyChart />
                         )}
                     </>
                 )}

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { CalendarDays, Clock3, RefreshCw, Sparkles, Target } from 'lucide-react';
 import { supabase } from '../lib/supabase/client';
-import { SUGGESTIVE_PRODUCTS, channelDisplayName, hasCurrentSuggestiveProducts } from '../services/suggestiveSalesGoals';
+import { channelDisplayName, hasCurrentSuggestiveProducts, publishedSuggestiveProducts } from '../services/suggestiveSalesGoals';
 
 const todayInLima = () => {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
@@ -55,7 +55,8 @@ export default function CollaboratorSuggestiveGoals({ staffId, storeId }) {
         setAssignments([]);
         setError('No pudimos consultar tus metas en este momento. Intenta actualizar el panel.');
       } else {
-        setAssignments((data || []).filter((row) => row.channel === 'SALÓN' && hasCurrentSuggestiveProducts(row.goals)));
+        setAssignments((data || []).filter((row) => row.monthly_targets?.calculation?.basis === 'channel_sales_revenue'
+          ? publishedSuggestiveProducts([row]).length > 0 : row.channel === 'SALÓN' && hasCurrentSuggestiveProducts(row.goals)));
       }
       setLoading(false);
     };
@@ -64,31 +65,32 @@ export default function CollaboratorSuggestiveGoals({ staffId, storeId }) {
     return () => { cancelled = true; };
   }, [selectedDate, staffId, storeId, refreshToken]);
 
-  const totals = useMemo(() => Object.fromEntries(SUGGESTIVE_PRODUCTS.map(({ id }) => [
+  const products = useMemo(() => publishedSuggestiveProducts(assignments), [assignments]);
+  const totals = useMemo(() => Object.fromEntries(products.map(({ id }) => [
     id,
     assignments.reduce((sum, row) => sum + (Number(row.goals?.[id]) || 0), 0),
-  ])), [assignments]);
+  ])), [assignments, products]);
 
   const hourlyGoals = useMemo(() => {
     const result = new Map();
     for (const assignment of assignments) {
       for (const [hour, goals] of Object.entries(assignment.hourly_goals || {})) {
-        if (!result.has(hour)) result.set(hour, Object.fromEntries(SUGGESTIVE_PRODUCTS.map(({ id }) => [id, 0])));
+        if (!result.has(hour)) result.set(hour, Object.fromEntries(products.map(({ id }) => [id, 0])));
         const aggregate = result.get(hour);
-        for (const product of SUGGESTIVE_PRODUCTS) aggregate[product.id] += Number(goals?.[product.id]) || 0;
+        for (const product of products) aggregate[product.id] += Number(goals?.[product.id]) || 0;
       }
     }
     return [...result.entries()]
       .map(([hour, goals]) => ({ hour: Number(hour), goals }))
       .sort((left, right) => businessHourOrder(left.hour) - businessHourOrder(right.hour));
-  }, [assignments]);
+  }, [assignments, products]);
 
   const grandTotal = Object.values(totals).reduce((sum, value) => sum + value, 0);
   const latestPublication = assignments.reduce((latest, row) => (
     !latest || String(row.published_at) > String(latest) ? row.published_at : latest
   ), '');
-  const publishedCalculation = assignments.find((row) => row.monthly_targets?.calculation?.basis === 'salon_transactions')
-    ?.monthly_targets?.calculation;
+  const publishedCalculation = assignments.find((row) => row.monthly_targets?.calculation)?.monthly_targets?.calculation;
+  const monetaryGoal = publishedCalculation?.basis === 'channel_sales_revenue';
   const publishedParticipation = Number.isFinite(publishedCalculation?.participation)
     ? (publishedCalculation.participation * 100).toLocaleString('es-PE', { maximumFractionDigits: 2 }) : null;
 
@@ -105,8 +107,9 @@ export default function CollaboratorSuggestiveGoals({ staffId, storeId }) {
               <h2 className="mt-1 text-xl font-black">Mis metas del turno</h2>
               <p className="mt-1 max-w-2xl text-xs leading-relaxed text-indigo-100">
                 Consulta tus cantidades antes de iniciar. La meta suma todo tu horario y pondera cada franja según la demanda histórica.
-                {publishedParticipation !== null
-                  && ` El objetivo conjunto es ${publishedParticipation} unidades entre borde de queso, Hazlo CMB V3 Canelitas y Hazlo CMB V3 Crazy por cada 100 transacciones estimadas de Salón.`}
+                {publishedParticipation !== null && (monetaryGoal
+                  ? ` La participación mínima de cada producto es ${publishedParticipation}% de la meta de venta de su canal. El precio convierte ese importe en unidades.`
+                  : ` El objetivo conjunto es ${publishedParticipation} unidades por cada 100 transacciones estimadas de Salón.`)}
               </p>
             </div>
           </div>
@@ -164,7 +167,7 @@ export default function CollaboratorSuggestiveGoals({ staffId, storeId }) {
             <Sparkles className="mx-auto h-7 w-7 text-slate-400" />
             <p className="mt-2 text-sm font-black text-slate-700">No tienes una meta publicada para esta fecha.</p>
             <p className="mx-auto mt-1 max-w-xl text-xs leading-relaxed text-slate-500">
-              Estas metas se asignan únicamente cuando el horario publicado te posiciona en Salón. Drive Thru, Módulo, Driver, cocina y producción no reciben esta familia de metas.
+              Las metas aparecen cuando el horario publicado te asigna a una posición de los canales evaluados y el administrador publica la distribución.
             </p>
           </div>
         )}
@@ -172,12 +175,12 @@ export default function CollaboratorSuggestiveGoals({ staffId, storeId }) {
         {!loading && !error && assignments.length > 0 && (
           <>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              {SUGGESTIVE_PRODUCTS.map((product, index) => {
+              {products.map((product, index) => {
                 const styles = [
                   'border-orange-200 bg-orange-50 text-orange-700',
                   'border-amber-200 bg-amber-50 text-amber-700',
                   'border-blue-200 bg-blue-50 text-blue-700',
-                ][index];
+                ][index % 3];
                 return (
                   <article key={product.id} className={`rounded-xl border p-4 ${styles}`}>
                     <p className="text-[10px] font-black uppercase tracking-wide opacity-75">Tu meta</p>
@@ -210,7 +213,7 @@ export default function CollaboratorSuggestiveGoals({ staffId, storeId }) {
                 </summary>
                 <div className="grid grid-cols-1 gap-2 border-t border-indigo-100 p-4 sm:grid-cols-2 lg:grid-cols-3">
                   {hourlyGoals.map(({ hour, goals }) => {
-                    const total = SUGGESTIVE_PRODUCTS.reduce((sum, product) => sum + (Number(goals[product.id]) || 0), 0);
+                    const total = products.reduce((sum, product) => sum + (Number(goals[product.id]) || 0), 0);
                     return (
                       <div key={hour} className="rounded-lg border border-indigo-100 bg-white px-3 py-2">
                         <div className="flex items-center justify-between gap-2">
@@ -218,7 +221,7 @@ export default function CollaboratorSuggestiveGoals({ staffId, storeId }) {
                           <strong className="text-xs text-slate-900">{formatUnits(total)} total</strong>
                         </div>
                         <p className="mt-1 text-[9px] leading-relaxed text-slate-500">
-                          {SUGGESTIVE_PRODUCTS.map((product) => `${product.label}: ${formatUnits(goals[product.id])}`).join(' · ')}
+                          {products.map((product) => `${product.label}: ${formatUnits(goals[product.id])}`).join(' · ')}
                         </p>
                       </div>
                     );
