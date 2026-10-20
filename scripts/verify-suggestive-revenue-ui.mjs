@@ -18,7 +18,7 @@ const exactName = 'VS BORDE EXACTO';
 const port = Number(process.env.SUGGESTIVE_QA_PORT || 4182);
 const base = `http://127.0.0.1:${port}`;
 const bootstrap = `
-const key='qa_suggestive_protected_v3';
+const key='qa_suggestive_editable_v4';
 const productSales=[
  {name:'VS BORDE EXACTO',hour:9,channel:'SERV. FILA',quantity:5},
  {name:'VS BORDE EXACTO',hour:9,channel:'SERV. AUTO',quantity:7},
@@ -31,7 +31,7 @@ const productSales=[
  {name:'VS BORDE EXACTO',hour:9,channel:'CANAL NUEVO',quantity:200}
 ];
 const day=(date,extra={})=>({store_id:'qa-store',sales_date:date,sales_amount:10000,transactions:999999,hourly_data:{9:{'SERV. FILA':1000,'SALÓN':8500,'DRIVE THRU':500,DELIVERY:0,'CANAL NUEVO':0}},suggestive_products:{chosen:{9:{'SERV. FILA':999}}},...extra});
-const configuration={calculationVersion:'revenue-v1',participation:.3,products:[{id:'chosen',label:'Producto ejemplo',price:29.9,enabled:true}],channels:[{id:'SERV. FILA',enabled:true,positions:['CAJA']},{id:'SALÓN',enabled:false,positions:[]},{id:'DELIVERY',enabled:true,positions:[]},{id:'CANAL NUEVO',enabled:true,positions:[]}]};
+const configuration={calculationVersion:'revenue-v1',participation:.3,products:[...${JSON.stringify(PROTECTED_SUGGESTIVE_PRODUCTS.map(product => ({ ...product, locked: true })))},{id:'chosen',label:'Producto ejemplo',price:29.9,enabled:true}],channels:[{id:'SERV. FILA',enabled:true,positions:['CAJA']},{id:'SALÓN',enabled:false,positions:[]},{id:'DELIVERY',enabled:true,positions:[]},{id:'CANAL NUEVO',enabled:true,positions:[]}]};
 const initial={writes:[],configurations:{'suggestive_sales_goals:2026-10':configuration},history:[day('2026-10-17'),day('2026-10-18',{source_data:{productSales,productSalesRecorded:true}}),day('2026-10-19',{source_data:{productSales:[],productSalesRecorded:true}})]};
 window.__suggestiveQA={get state(){return JSON.parse(localStorage.getItem(key)||JSON.stringify(initial))},save(value){localStorage.setItem(key,JSON.stringify(value))}};
 `;
@@ -82,10 +82,12 @@ try {
         throw Error(message);
     };
     const configuration = async (month = '2026-10') => (await state()).configurations[`suggestive_sales_goals:${month}`];
-    const customName = () => page.locator('input[aria-label^="Nombre exacto en el reporte de "]:not([readonly])');
+    const customName = () => page.locator('input[aria-label^="Nombre exacto en el reporte de "]'
+        + PROTECTED_SUGGESTIVE_PRODUCTS.map(product => `:not([aria-label="Nombre exacto en el reporte de ${product.label}"])`).join(''));
     const customCard = async () => page.getByRole('article', { name: `Resultado diario de ${await customName().inputValue()}`, exact: true });
     const dailySection = () => page.getByRole('heading', { name: '3. Revisa la meta diaria', exact: true }).locator('xpath=ancestor::section');
-    const channelRow = channel => dailySection().getByRole('row').filter({ has: page.getByRole('cell', { name: channel, exact: true }) }).first();
+    const channelRow = channel => dailySection().getByRole('row').filter({ has: page.getByRole('cell', {
+        name: channel === 'SERV. FILA' ? 'Módulo (Serv. Fila)' : channel, exact: true }) }).first();
     const ready = async () => {
         await page.getByRole('button', { name: 'Guardar configuración', exact: true }).waitFor();
         await page.waitForFunction(() => document.querySelector('fieldset') && !document.querySelector('fieldset').disabled);
@@ -108,8 +110,8 @@ try {
         for (const product of PROTECTED_SUGGESTIVE_PRODUCTS) {
             const input = page.getByLabel(`Nombre exacto en el reporte de ${product.label}`, { exact: true });
             assert.equal(await input.inputValue(), product.reportName);
-            assert.equal(await input.getAttribute('readonly'), '');
-            assert.equal(await page.getByRole('button', { name: `Quitar producto ${product.label}`, exact: true }).count(), 0);
+            assert.equal(await input.evaluate(node => node.readOnly), false, 'Saved legacy locks must not prevent editing');
+            assert.equal(await page.getByRole('button', { name: `Quitar producto ${product.label}`, exact: true }).isEnabled(), true);
         }
     };
     const waitSaved = async (check, month = '2026-10') => waitUntil(async () => {
@@ -132,7 +134,7 @@ try {
     assert.deepEqual(await page.locator('input[type="checkbox"]').evaluateAll(inputs => inputs.map(input => input.getAttribute('aria-label'))), channels);
     assert.equal((await writes()).length, 0);
     await noPublication();
-    pass('Cinco productos permanentes tienen meta 30%, nombre protegido y ningún botón Quitar; sólo hay cuatro checkboxes de canal');
+    pass('Los cinco productos iniciales guardados son editables y eliminables aunque tengan lock legado; hay sólo cuatro canales evaluables');
 
     await customName().fill(exactName);
     for (const product of PROTECTED_SUGGESTIVE_PRODUCTS) await page.getByLabel(`Precio de ${product.label}`, { exact: true }).fill('29.90');
@@ -247,16 +249,23 @@ try {
     await setDate('2026-10-18'); await checkActual(5); await checkTarget(33);
     assert.equal((await writes('publication')).length, 1, 'Removing/adding custom rows must never republish');
     assert.ok((await configuration()).channels.every(channel => !channel.positions?.length));
-    pass('Quitar y volver a agregar el custom se guarda automáticamente sin borrar defaults ni volver a publicar');
+    pass('Quitar y volver a agregar el custom se guarda automáticamente sin modificar los demás productos ni volver a publicar');
+    await page.getByRole('button', { name: `Quitar producto ${protectedName}`, exact: true }).click();
+    await waitSaved(config => config.products.length === 5 && !config.products.some(product => product.id === PROTECTED_SUGGESTIVE_PRODUCTS[0].id));
+    await page.reload(); await ready(); await setDate('2026-10-18');
+    assert.equal(await page.getByLabel(`Nombre exacto en el reporte de ${protectedName}`, { exact: true }).count(), 0);
+    await checkActual(5); await checkTarget(33);
+    assert.equal((await writes('publication')).length, 1, 'Removing an initial product must never republish');
+    pass('Quitar un producto inicial persiste al recargar y conserva el cálculo33 y los vendidos5 del producto elegido');
     await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: resolve(output, 'nombre-exacto-mobile.png'), fullPage: true });
     assert.deepEqual(errors, []); assert.deepEqual(blockedRequests, []);
     results.status = 'PASS'; results.verified = { exactSold: 5, similarNotIncluded: 99, caseSensitiveSold: 8,
         punctuationSold: 9, exactAcrossEligibleChannels: 17, target: 33, split: [17, 16], channels,
-        protectedProducts: PROTECTED_SUGGESTIVE_PRODUCTS.map(product => product.reportName), defaultTargets: .30,
+        initialProducts: PROTECTED_SUGGESTIVE_PRODUCTS.map(product => product.reportName), defaultTargets: .30,
         individualTargetsPersist: true, automaticSaveBothDocuments: true, uploadPreservesConfiguration: true,
         incompleteDraftSurvivesReload: true, noPositionSelectors: true, customRemovalPreservesDefaults: true,
-        publicationRequiresExplicitClick: true };
+        initialProductRemovalPersists: true, publicationRequiresExplicitClick: true };
 } catch (error) {
     results.status = 'FAIL'; results.error = String(error);
     results.cachedDraftsAtFailure = await page?.evaluate(() => Object.fromEntries(Object.entries(localStorage)

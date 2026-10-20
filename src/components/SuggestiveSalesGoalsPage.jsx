@@ -191,7 +191,7 @@ export default function SuggestiveSalesGoalsPage() {
         setPublication({ state: 'idle', count: 0, message: '' });
     };
     const updateProduct = (id, patch) => updateDraft(current => ({ ...current, products: current.products.map(product => product.id === id ? { ...product, ...patch } : product) }));
-    const removeProduct = id => updateDraft(current => ({ ...current, products: current.products.filter(product => product.locked || product.id !== id) }));
+    const removeProduct = id => updateDraft(current => ({ ...current, products: current.products.filter(product => product.id !== id) }));
     const updateChannel = (id, patch) => updateDraft(current => ({ ...current, channels: current.channels.map(channel => channel.id === id ? { ...channel, ...patch } : channel) }));
     useEffect(() => {
         if (!dirty.current || !canSaveConfiguration || saving || importing || publication.state === 'publishing') return undefined;
@@ -292,22 +292,21 @@ export default function SuggestiveSalesGoalsPage() {
             {!storeId && !loading && <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">No hay una tienda asociada a tu usuario.</p>}
             <form onSubmit={saveConfiguration} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <h2 className="font-black text-slate-900">1. Define qué evaluar</h2>
-                <p className="mt-1 text-xs text-slate-500">Bordes y Hazlo Combo permanecen como productos predeterminados, con una meta inicial de 30% cada uno. Puedes ajustar sus metas y precios; los cambios se guardan automáticamente.</p>
+                <p className="mt-1 text-xs text-slate-500">Bordes y Hazlo Combo se cargan inicialmente con una meta de 30% cada uno. Puedes editarlos, eliminarlos o agregar otros productos; los cambios se guardan automáticamente.</p>
                 <fieldset disabled={loading || busy || !source} className="mt-5 grid min-w-0 gap-6 lg:grid-cols-2">
                     <div><h3 className="text-sm font-bold text-slate-800">Productos y precio unitario</h3><div className="mt-2 space-y-2">
                         {draft.products.map(product => <div key={product.id} className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-3">
                             <label className="min-w-0 flex-1 basis-52 text-xs font-bold text-slate-600">Nombre exacto en el reporte
-                                <input type="text" maxLength="160" list="suggestive-report-product-names" readOnly={Boolean(product.locked)} aria-describedby="suggestive-product-name-help" value={product.reportName ?? ''}
+                                <input type="text" maxLength="160" list="suggestive-report-product-names" aria-describedby="suggestive-product-name-help" value={product.reportName ?? ''}
                                     onChange={event => updateProduct(product.id, { reportName: event.target.value, label: event.target.value || product.label })}
                                     aria-label={`Nombre exacto en el reporte de ${product.label}`} placeholder="Nombre de la columna Producto"
                                     className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-900" />
                             </label>
                             <label className="text-xs font-bold text-slate-600">Precio para meta (S/)<input type="number" min="0.01" step="0.01" value={product.price} onChange={event => updateProduct(product.id, { price: event.target.value })} aria-label={`Precio de ${product.label}`} placeholder="Opcional" className="mt-1 block w-24 rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm font-normal text-slate-900" /></label>
                             <label className="text-xs font-bold text-slate-600">Meta (%)<input type="number" min="0" max="100" step="0.01" value={participationInput(product)} onChange={event => updateProduct(product.id, { participation: event.target.value === '' ? '' : Number(event.target.value) / 100 })} aria-label={`Meta de participación de ${product.label}`} className="mt-1 block w-24 rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm font-normal text-slate-900" /></label>
-                            {product.locked ? <span className="rounded bg-slate-100 px-2 py-1.5 text-[10px] font-semibold text-slate-600">Predeterminado</span>
-                                : <button type="button" onClick={() => removeProduct(product.id)} aria-label={`Quitar producto ${product.label}`} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold text-slate-600 hover:bg-red-50 hover:text-red-700"><Trash2 className="h-4 w-4" />Quitar</button>}
+                            <button type="button" onClick={() => removeProduct(product.id)} aria-label={`Quitar producto ${product.label}`} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold text-slate-600 hover:bg-red-50 hover:text-red-700"><Trash2 className="h-4 w-4" />Quitar</button>
                         </div>)}
-                    </div>{!draft.products.length && <p className="mt-3 rounded-xl bg-slate-50 p-4 text-sm text-slate-500">Aún no has agregado productos para evaluar.</p>}
+                    </div>{!draft.products.length && <p className="mt-3 rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No hay productos para evaluar. Agrega los que necesites.</p>}
                     <p id="suggestive-product-name-help" className="mt-2 text-xs leading-relaxed text-slate-600">El nombre debe coincidir con la columna Producto del reporte, incluidas mayúsculas, acentos y signos. Si escribes un nombre distinto, no se reconocerán sus ventas. Puedes elegir una sugerencia de los reportes cargados para evitar errores.</p>
                     <p className="mt-2 text-xs text-slate-500">El porcentaje semanal usa los importes reales del reporte. El precio es opcional y se usa para calcular las unidades de las metas diarias.</p>
                     <datalist id="suggestive-report-product-names">{reportProductNames.map(name => <option key={name} value={name} />)}</datalist>

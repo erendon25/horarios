@@ -19,26 +19,27 @@ const memoryStorage = () => {
     return { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
 };
 
-test('sin configuración ni reportes muestra siempre el catálogo protegido al 30%', () => {
+test('sin configuración ni reportes muestra productos iniciales editables al 30%', () => {
     const draft = buildSuggestiveSalesDraft();
     assert.equal(draft.participation, '30');
     assert.equal(draft.products.length, 5);
-    assert.ok(draft.products.every(product => product.locked && product.default && product.enabled
+    assert.ok(draft.products.every(product => !product.locked && product.default && product.enabled
         && product.participation === 0.30 && product.price === ''));
     assert.deepEqual(draft.products.map(product => product.reportName), PROTECTED_SUGGESTIVE_PRODUCTS.map(product => product.reportName));
 });
 
-test('el mes combina valores legítimos guardados con defaults de tienda y conserva productos nuevos', () => {
+test('la selección del mes prevalece sobre la de tienda sin reinsertar productos omitidos', () => {
     const resolved = resolveSuggestiveSalesConfiguration({ defaultConfiguration: settings,
         monthConfiguration: { participation: 0.45, products: [{ ...PROTECTED_SUGGESTIVE_PRODUCTS[0], price: 9, participation: 0.25 }],
             channels: [{ id: 'DRIVE THRU', enabled: true }] } });
     assert.equal(resolved.participation, 0.45);
     assert.equal(resolved.products[0].price, 9);
     assert.equal(resolved.products[0].participation, 0.25);
-    assert.deepEqual(resolved.products.find(product => product.id === custom.id), custom);
+    assert.equal(resolved.products.find(product => product.id === custom.id), undefined);
     assert.equal(resolved.channels.find(channel => channel.id === 'DRIVE THRU').enabled, true);
     assert.equal(resolved.channels.find(channel => channel.id === 'SERV. FILA').enabled, false);
-    assert.equal(resolved.products.filter(product => product.default).length, 5);
+    assert.equal(resolved.products.length, 1);
+    assert.equal(settings.products.length, 2, 'Resolving the month must not mutate store defaults');
 });
 
 test('un mes nuevo conserva productos, porcentajes, precios y canales de los defaults de tienda', async () => {
@@ -56,12 +57,16 @@ test('un mes nuevo conserva productos, porcentajes, precios y canales de los def
     assert.equal(draft.channels.find(channel => channel.id === 'SERV. FILA').enabled, true);
 });
 
-test('catálogo vacío o deshabilitado guardado no elimina los productos protegidos', () => {
+test('catálogo vacío y productos deshabilitados se conservan sin imponer productos iniciales', () => {
     const draft = buildSuggestiveSalesDraft({ products: [{ ...PROTECTED_SUGGESTIVE_PRODUCTS[0], enabled: false }], participation: 0 });
     assert.equal(draft.participation, '0');
-    assert.equal(draft.products.length, 5);
-    assert.ok(draft.products.every(product => product.enabled && product.locked));
-    assert.equal(serializeSuggestiveSalesConfiguration({ participation: '30', products: [], channels: [] }).products.length, 5);
+    assert.equal(draft.products.length, 1);
+    assert.equal(draft.products[0].enabled, false);
+    assert.equal(draft.products[0].locked, false);
+    assert.equal(buildSuggestiveSalesDraft({ products: [] }).products.length, 0);
+    assert.equal(serializeSuggestiveSalesConfiguration({ participation: '30', products: [], channels: [] }).products.length, 0);
+    assert.deepEqual(resolveSuggestiveSalesConfiguration({ defaultConfiguration: settings,
+        monthConfiguration: { products: [] } }).products, []);
 });
 
 test('serializa campos por producto sin perder precio opcional o porcentaje temporalmente vacío', () => {
@@ -71,16 +76,17 @@ test('serializa campos por producto sin perder precio opcional o porcentaje temp
     assert.equal(serialized.participation, 0.35);
     assert.equal(serialized.products[0].participation, '');
     assert.equal(serialized.products[0].price, '');
-    assert.equal(serialized.products[0].locked, true);
+    assert.equal(serialized.products[0].locked, false);
     assert.equal(serialized.products[0].reportName, PROTECTED_SUGGESTIVE_PRODUCTS[0].reportName);
     assert.deepEqual(serialized.products.find(product => product.id === custom.id), custom);
 });
 
-test('custom antiguo sin porcentaje hereda la meta global y el catálogo protegido conserva el 30%', () => {
+test('custom antiguo sin porcentaje hereda la meta global y un producto inicial conserva el 30%', () => {
     const { participation: _unused, ...legacyCustom } = custom;
-    const draft = buildSuggestiveSalesDraft({ participation: 0.25, products: [legacyCustom] });
+    const { participation: _initialTarget, ...legacyInitial } = PROTECTED_SUGGESTIVE_PRODUCTS[0];
+    const draft = buildSuggestiveSalesDraft({ participation: 0.25, products: [legacyInitial, legacyCustom] });
     assert.equal(draft.products.find(product => product.id === custom.id).participation, 0.25);
-    assert.ok(draft.products.filter(product => product.default).every(product => product.participation === 0.30));
+    assert.equal(draft.products.find(product => product.id === legacyInitial.id).participation, 0.30);
     const storage = memoryStorage();
     const legacyDraft = { ...draft, products: [legacyCustom] };
     writeSuggestiveSalesDraftCache(storage, scope, { draft: legacyDraft, dirty: true, revision: 1 });
@@ -130,7 +136,7 @@ test('fallos de uno o ambos guardados se propagan con claves parciales y el borr
     }
 });
 
-test('cache restaura inmediatamente cambios pendientes, incluidos campos vacíos y catálogo protegido', () => {
+test('cache restaura cambios pendientes, campos vacíos y la eliminación de todos los productos', () => {
     const storage = memoryStorage();
     const draft = buildSuggestiveSalesDraft(settings);
     draft.products[0].participation = '';
@@ -141,7 +147,30 @@ test('cache restaura inmediatamente cambios pendientes, incluidos campos vacíos
     assert.equal(recovered.dirty, true);
     assert.equal(recovered.revision, 4);
     writeSuggestiveSalesDraftCache(storage, scope, { draft: { ...draft, products: [] }, dirty: true, revision: 5 });
-    assert.equal(readSuggestiveSalesDraftCache(storage, scope).draft.products.length, 5);
+    assert.equal(readSuggestiveSalesDraftCache(storage, scope).draft.products.length, 0);
+});
+
+test('eliminar productos y luego todos persiste al guardar, recargar y abrir un mes nuevo', async () => {
+    const documents = new Map();
+    const read = async key => documents.get(key);
+    const write = async (key, value) => documents.set(key, value);
+    const draft = buildSuggestiveSalesDraft();
+    const removed = draft.products[0];
+    draft.products = draft.products.filter(product => product.id !== removed.id);
+    await saveSuggestiveSalesConfiguration({ month: scope.month,
+        configuration: serializeSuggestiveSalesConfiguration(draft), write });
+    for (const month of [scope.month, '2026-11']) {
+        const loaded = await loadSuggestiveSalesConfiguration({ month, read });
+        assert.equal(loaded.products.length, 4);
+        assert.ok(loaded.products.every(product => product.id !== removed.id));
+    }
+    draft.products = [];
+    await saveSuggestiveSalesConfiguration({ month: scope.month,
+        configuration: serializeSuggestiveSalesConfiguration(draft), write });
+    for (const month of [scope.month, '2026-11']) {
+        const loaded = buildSuggestiveSalesDraft(await loadSuggestiveSalesConfiguration({ month, read }));
+        assert.deepEqual(loaded.products, []);
+    }
 });
 
 test('cache separa usuario, tienda y mes y descarta envelopes ajenos o dañados', () => {

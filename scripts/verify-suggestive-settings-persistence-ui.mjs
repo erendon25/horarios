@@ -123,8 +123,8 @@ const assertCatalog = async () => {
     for (const product of PROTECTED_SUGGESTIVE_PRODUCTS) {
         const name = page.getByLabel(`Nombre exacto en el reporte de ${product.label}`, { exact: true });
         assert.equal(await name.inputValue(), product.reportName);
-        assert.equal(await name.evaluate(input => input.readOnly), true, 'Required exact report names must be protected');
-        assert.equal(await page.getByRole('button', { name: `Quitar producto ${product.label}`, exact: true }).count(), 0);
+        assert.equal(await name.evaluate(input => input.readOnly), false, 'Initial product names must remain editable');
+        assert.equal(await page.getByRole('button', { name: `Quitar producto ${product.label}`, exact: true }).isEnabled(), true);
         assert.equal(await meta(product.label).inputValue(), '30');
     }
 };
@@ -163,7 +163,7 @@ try {
         assert.equal(cells[1], 'Módulo (Serv. Fila)');
         assert.equal(cells[7], '30%');
     }
-    pass('Sin configuración se seleccionan sólo Salón y Módulo (Serv. Fila), con cinco productos protegidos y metas semanales del 30%');
+    pass('Sin lista guardada se ofrecen cinco productos editables y eliminables al 30%, con sólo Salón y Módulo seleccionados');
 
     await meta(first.label).fill('35'); await price(first.label).fill('29.90');
     await page.getByLabel('SALÓN', { exact: true }).check();
@@ -266,11 +266,65 @@ try {
     await page.screenshot({ path: `${output}/configuracion-recuperada.png`, fullPage: true });
     pass('Una lectura tardía del mes anterior no pisa los cambios ni la caché del nuevo mes, también después de recargar');
 
+    const waitProductsSaved = async (month, check) => {
+        await eventually(() => Boolean(saved(month) && saved('defaults')
+            && check(saved(month).products) && check(saved('defaults').products)), `Expected product selection to persist for ${month} and defaults`);
+        await page.getByRole('status').filter({ hasText: 'Configuración guardada automáticamente.' }).waitFor();
+    };
+    const waitProductCount = async count => eventually(async () => await reportNameInputs().count() === count
+        && await page.getByRole('button', { name: 'Guardar configuración', exact: true }).isEnabled(), `Expected loaded product count ${count}`);
+    await setMonth('2026-10'); await waitMeta(first.label, 35);
+    await page.getByRole('button', { name: `Quitar producto ${first.label}`, exact: true }).click();
+    await waitProductsSaved('2026-10', products => products.length === PROTECTED_SUGGESTIVE_PRODUCTS.length
+        && !products.some(product => product.id === first.id));
+    await page.reload(); await waitProductCount(PROTECTED_SUGGESTIVE_PRODUCTS.length);
+    assert.equal(await page.getByLabel(`Nombre exacto en el reporte de ${first.label}`, { exact: true }).count(), 0);
+    const removedPresetConfiguration = copy(saved('2026-10'));
+    for (const file of files) {
+        const beforeUploads = state.events.filter(event => event.type === 'rpc' && event.name === 'save_sales_history_batch').length;
+        await page.getByLabel('Cargar reporte de ventas', { exact: true }).setInputFiles(file);
+        await eventually(() => state.events.filter(event => event.type === 'rpc' && event.name === 'save_sales_history_batch').length === beforeUploads + 1,
+            'Report upload should finish', 120000);
+        await eventually(async () => await page.getByRole('button', { name: 'Cargar reporte de ventas', exact: true }).isEnabled(),
+            'Import should re-enable the upload control', 120000);
+        assert.equal(await page.getByLabel(`Nombre exacto en el reporte de ${first.label}`, { exact: true }).count(), 0);
+        assert.deepEqual(saved('2026-10'), removedPresetConfiguration, 'Neither report format may resurrect a removed initial product');
+    }
+    await page.reload(); await waitProductCount(PROTECTED_SUGGESTIVE_PRODUCTS.length);
+    assert.equal(await page.getByLabel(`Nombre exacto en el reporte de ${first.label}`, { exact: true }).count(), 0);
+    assert.equal(state.history.size, 18);
+    pass('Quitar un producto inicial se guarda y resiste recargas y la importación de ambos reportes sin reaparecer');
+
+    const removeButtons = page.getByRole('button', { name: /^Quitar producto / });
+    while (await removeButtons.count()) await removeButtons.first().click();
+    await waitProductsSaved('2026-10', products => products.length === 0);
+    await page.reload(); await waitProductCount(0);
+    assert.deepEqual(saved('2026-10').products, []);
+    assert.deepEqual(saved('defaults').products, []);
+    assert.equal(await page.getByRole('button', { name: 'Publicar metas del mes', exact: true }).isDisabled(), true);
+    await page.screenshot({ path: `${output}/catalogo-vacio-conservado.png`, fullPage: true });
+    await setMonth('2027-01'); await waitProductCount(0);
+    assert.equal(saved('2027-01'), undefined, 'Merely opening a new month should not save or re-seed products');
+    pass('Quitar todos guarda un array vacío intencional; recargar y abrir un mes nuevo conserva la lista vacía');
+
+    const afterEmptyName = 'QA PRODUCTO DESPUÉS DE VACIAR';
+    await page.getByLabel('Nombre exacto del nuevo producto', { exact: true }).fill(afterEmptyName);
+    await page.getByRole('button', { name: 'Agregar producto', exact: true }).click();
+    await waitProductsSaved('2027-01', products => products.length === 1 && products[0].reportName === afterEmptyName);
+    await page.reload(); await waitProductCount(0); // October's explicit [] overrides the new global selection.
+    assert.deepEqual(saved('2026-10').products, []);
+    await setMonth('2027-01'); await waitProductCount(1);
+    assert.equal(await page.getByLabel(`Nombre exacto en el reporte de ${afterEmptyName}`, { exact: true }).inputValue(), afterEmptyName);
+    assert.equal(await meta(afterEmptyName).inputValue(), '30');
+    assert.equal(await price(afterEmptyName).inputValue(), '');
+    await page.screenshot({ path: `${output}/producto-agregado-tras-vaciar.png`, fullPage: true });
+    pass('Se puede agregar y guardar un producto tras vaciar; el mes vacío conserva [] frente a la nueva selección global');
+
     assert.deepEqual(errors, []); assert.deepEqual(blockedRequests, []);
     assert.equal(state.events.filter(event => event.type === 'rpc' && event.name !== 'save_sales_history_batch').length, 0,
         'Opening, editing, saving, uploading and navigating must never publish collaborator goals');
     await writeFile(`${output}/resultado.json`, JSON.stringify({ status: 'PASS', passed, errors, blockedRequests,
-        protectedProducts: PROTECTED_SUGGESTIVE_PRODUCTS.map(({ id, reportName }) => ({ id, reportName })), historyDays: state.history.size,
+        initialProducts: PROTECTED_SUGGESTIVE_PRODUCTS.map(({ id, reportName }) => ({ id, reportName })), historyDays: state.history.size,
         documents: Object.fromEntries(state.documents), events: state.events,
         scope: 'Real React page; uploads and JSON documents stay in isolated loopback HTTP memory. No remote writes or publication.' }, null, 2));
 } catch (error) {

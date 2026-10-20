@@ -17,7 +17,7 @@ const {chromium}=await import(isAbsolute(moduleName)?pathToFileURL(moduleName).h
 const legacyRpc=process.env.SALES_QA_LEGACY_RPC==='1';
 const output=resolve(legacyRpc?'output/weekly-suggestive-product-legacy':'output/weekly-suggestive-product');await mkdir(output,{recursive:true});
 const port=Number(process.env.WEEKLY_SUGGESTIVE_QA_PORT||(legacyRpc?4184:4183)),base=`http://127.0.0.1:${port}`;
-const state={configuration:{calculationVersion:'revenue-v1',participation:.3,products:[],channels:[{id:'SALÓN',enabled:true},{id:'DRIVE THRU',enabled:false},{id:'SERV. FILA',enabled:true},{id:'SERV. AUTO',enabled:false}]},history:new Map(),archives:new Map(),writes:[]};
+const state={configuration:{calculationVersion:'revenue-v1',participation:.3,channels:[{id:'SALÓN',enabled:true},{id:'DRIVE THRU',enabled:false},{id:'SERV. FILA',enabled:true},{id:'SERV. AUTO',enabled:false}]},history:new Map(),archives:new Map(),writes:[]};
 const archivedMonth={store_id:'qa-store',month_start:'2026-10-01',monthly_data:{18:{vta:32399.83,txs:123}},daily_hourly_parts:{'2026-10-18':{'09:00':100}},real_sales_data:{savedFormValue:'preserved'}};
 if(legacyRpc)state.archives.set('qa-store|2026-10-01',structuredClone(archivedMonth));
 const transport=`export const db={};export const doc=(db,...path)=>({path:path.join('/')});export const collection=doc;export const where=(...v)=>v;export const query=(ref,...filters)=>({...ref,filters});
@@ -73,11 +73,11 @@ try{
  await page.getByText(/No hay reportes para esta semana/).waitFor();
  assert.equal(await page.locator('input[aria-label^="Nombre exacto en el reporte de "]').count(),5);
  for(const name of targets){
-  assert.equal(await page.getByLabel(`Nombre exacto en el reporte de ${name}`,{exact:true}).evaluate(input=>input.readOnly),true);
+  assert.equal(await page.getByLabel(`Nombre exacto en el reporte de ${name}`,{exact:true}).evaluate(input=>input.readOnly),false);
   assert.equal(await page.getByLabel(`Meta de participación de ${name}`,{exact:true}).inputValue(),'30');
-  assert.equal(await page.getByRole('button',{name:`Quitar producto ${name}`,exact:true}).count(),0);
+  assert.equal(await page.getByRole('button',{name:`Quitar producto ${name}`,exact:true}).isEnabled(),true);
  }
- pass('La página real abre con cinco productos protegidos al 30%, sin escrituras ni historial y con semana 43 sin reportes');
+ pass('La página sin lista guardada ofrece cinco productos iniciales editables y eliminables al 30%, sin historial ni escrituras');
  const upload=async(file,expectedDays,expectedWrites)=>{
   await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(button=>button.textContent.trim()==='Cargar reporte de ventas'&&!button.disabled));
   await page.getByLabel('Cargar reporte de ventas',{exact:true}).setInputFiles(file);
@@ -103,7 +103,7 @@ try{
  pass('La carga .xls incluye madrugada del 19 en la jornada 18; repetir el archivo no duplica fechas, unidades ni importes');
  assert.equal(await page.locator('input[aria-label^="Nombre exacto en el reporte de "]').count(),5);
  assert.ok((await page.locator('input[aria-label^="Precio de "]').evaluateAll(inputs=>inputs.map(input=>input.value))).every(value=>value===''));
- // Editing a required target preserves its exact name; weekly tracking does not require prices.
+ // Editing a starter target persists independently; weekly tracking does not require prices.
  await page.getByLabel(`Meta de participación de ${targets[0]}`,{exact:true}).fill('31');
  await page.getByLabel(`Meta de participación de ${targets[0]}`,{exact:true}).fill('30');
  await page.getByText('Configuración guardada automáticamente.',{exact:true}).waitFor();

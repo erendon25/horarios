@@ -13,25 +13,15 @@ export function suggestiveSalesConfigurationKeys(month) {
     return { defaults: 'suggestive_sales_goals:defaults', month: `suggestive_sales_goals:${month}` };
 }
 
-function mergeProducts(defaults, monthly) {
-    const products = (Array.isArray(defaults) ? defaults : []).map(product => ({ ...product }));
-    for (const product of Array.isArray(monthly) ? monthly : []) {
-        if (!product || typeof product !== 'object') continue;
-        const name = exactReportProductName(product.reportName);
-        const index = products.findIndex(previous => (product.id && previous.id === product.id)
-            || (name && name === exactReportProductName(previous.reportName)));
-        if (index < 0) products.push({ ...product });
-        else products[index] = { ...products[index], ...product };
-    }
-    return mergeSuggestiveSalesDefaults(products);
-}
-
 export function resolveSuggestiveSalesConfiguration({ defaultConfiguration, monthConfiguration } = {}) {
     const defaults = object(defaultConfiguration), monthly = object(monthConfiguration);
     const participation = validParticipation(monthly.participation) ? Number(monthly.participation)
         : validParticipation(defaults.participation) ? Number(defaults.participation) : 0.30;
     return { ...defaults, ...monthly, calculationVersion: 'revenue-v1', participation,
-        products: mergeProducts(defaults.products, monthly.products),
+        // Each saved list is a complete selection. An empty list records the
+        // user's deletion and must not inherit products from another month.
+        products: mergeSuggestiveSalesDefaults(Array.isArray(monthly.products) ? monthly.products
+            : Array.isArray(defaults.products) ? defaults.products : undefined),
         channels: suggestiveChannelSettings(Array.isArray(monthly.channels) && monthly.channels.length
             ? monthly.channels : defaults.channels), unitTargets: null };
 }
@@ -92,8 +82,8 @@ export function readSuggestiveSalesDraftCache(storage, scope) {
         if (saved?.version !== 1 || !sameScope(saved.scope, scope) || !saved.draft
             || !Array.isArray(saved.draft.products) || !Array.isArray(saved.draft.channels)) return null;
         const draft = clone(saved.draft);
-        // Protect the required catalogue, while preserving incomplete local
-        // edits such as a blank percentage until the user finishes typing.
+        // Keep the complete local selection, including intentional deletions
+        // and unfinished fields, until the user finishes editing.
         const participation = String(draft.participation ?? '').trim() !== '' && validParticipation(Number(draft.participation) / 100)
             ? Number(draft.participation) / 100 : 0.30;
         draft.products = mergeSuggestiveSalesDefaults(draft.products).map(product => ({ ...product,
