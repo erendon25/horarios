@@ -38,7 +38,8 @@ import {
     Bell,
     ClipboardList,
     Upload,
-    Target
+    Target,
+    ArrowUpDown
 } from "lucide-react";
 import {
     doc,
@@ -51,7 +52,6 @@ import {
     where,
     getDoc,
     setDoc,
-    saveGeoVictoriaExtraHours,
     onSnapshot
 } from "../lib/supabase/firestoreCompat";
 import { db } from "../supabase";
@@ -60,42 +60,21 @@ import ModalSelectorDePosiciones from './ModalSelectorDePosiciones';
 import StaffModal from './StaffModal';
 import SanitaryCardQuickEdit from './SanitaryCardQuickEdit';
 import ArchivedStaffHistory from './ArchivedStaffHistory';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import VHLConsultation from './VHLConsultation';
 import ScheduleRequestsManager from './ScheduleRequestsManager';
 import { isStaffActive } from './Training/staffStatus';
-import { exportExtraHoursPDF, exportExtraHoursGroupedPDF } from "../services/exportExtraHoursPDF";
-import GeoVictoriaUpload from './GeoVictoriaUpload';
+import TrainingProgressReport from './TrainingProgressReport';
+import { summarizeStaffDashboard, sortStaffBySanitaryCard } from './staffDashboardSummary';
 
 
 
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
 
 const normalizeDni = (value) => String(value ?? '').trim().replace(/\.0+$/, '').replace(/\D/g, '').trim();
 
-const parseGeoVictoriaDate = (value) => {
-    if (!value) return '';
-    if (value instanceof Date && !isNaN(value.getTime())) {
-        return value.toISOString().split('T')[0];
-    }
-
-    const text = String(value).trim();
-    const match = text.match(/(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})/);
-    if (!match) return '';
-
-    const day = String(match[1]).padStart(2, '0');
-    const month = String(match[2]).padStart(2, '0');
-    let year = match[3];
-    if (year.length === 2) year = `20${year}`;
-
-    return `${year}-${month}-${day}`;
-};
-
-const readGeoVictoriaRows = (workbook) => {
+const readWorkbookRows = (workbook) => {
     const sheetName = workbook.SheetNames[0];
     if (!sheetName) return [];
     return XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '', raw: true });
@@ -113,27 +92,6 @@ const getRowValue = (row, labels) => {
     const targets = labels.map(normalizeHeader);
     const match = Object.keys(row || {}).find((key) => targets.includes(normalizeHeader(key)));
     return match ? row[match] : '';
-};
-
-const getRepeatedRowValue = (row, label, index = 0) => {
-    const target = normalizeHeader(label);
-    const matches = Object.keys(row || {}).filter((key) => {
-        const normalized = normalizeHeader(key);
-        return normalized === target || normalized.replace(/[._]\d+$/, '') === target;
-    });
-    const match = matches[index];
-    return match ? row[match] : '';
-};
-
-const getRowValueWithFallback = (row, labels, fallbackKeys = []) => {
-    const direct = getRowValue(row, labels);
-    if (direct !== '') return direct;
-
-    for (const key of fallbackKeys) {
-        if (row && row[key] !== undefined && row[key] !== '') return row[key];
-    }
-
-    return '';
 };
 
 const parseActivationDate = (value) => {
@@ -162,134 +120,6 @@ const parseActivationDate = (value) => {
     return isNaN(fallback.getTime())
         ? null
         : new Date(fallback.getFullYear(), fallback.getMonth(), fallback.getDate());
-};
-
-const formatDateInput = (date) => {
-    if (!date || isNaN(date.getTime())) return '';
-    const yyyy = date.getFullYear();
-    const mm = String(date.getMonth() + 1).padStart(2, '0');
-    const dd = String(date.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
-};
-
-const parseGeoVictoriaTimeValue = (value) => {
-    if (value === null || value === undefined || value === '') return '';
-
-    if (value instanceof Date && !isNaN(value.getTime())) {
-        return `${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`;
-    }
-
-    if (typeof value === 'number') {
-        const totalMinutes = Math.round(((value % 1) + Number.EPSILON) * 24 * 60);
-        return `${String(Math.floor(totalMinutes / 60) % 24).padStart(2, '0')}:${String(totalMinutes % 60).padStart(2, '0')}`;
-    }
-
-    const match = String(value).trim().match(/(\d{1,2}):(\d{2})/);
-    if (!match) return '';
-    return `${String(Number(match[1])).padStart(2, '0')}:${match[2]}`;
-};
-
-const parseGeoVictoriaDurationMinutes = (value) => {
-    if (value === null || value === undefined || value === '') return 0;
-
-    if (typeof value === 'number') {
-        return Math.max(0, Math.round(value * 24 * 60));
-    }
-
-    if (value instanceof Date && !isNaN(value.getTime())) {
-        return Math.max(0, value.getHours() * 60 + value.getMinutes());
-    }
-
-    const text = String(value).trim().toLowerCase().replace(',', '.');
-    if (!text || text === '0') return 0;
-
-    const daysMatch = text.match(/(\d+)\s*days?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
-    if (daysMatch) {
-        return (Number(daysMatch[1]) * 24 * 60) + (Number(daysMatch[2]) * 60) + Number(daysMatch[3]);
-    }
-
-    const clockMatch = text.match(/(\d{1,3}):(\d{2})(?::(\d{2}))?/);
-    if (clockMatch) {
-        return (Number(clockMatch[1]) * 60) + Number(clockMatch[2]);
-    }
-
-    const hourMatch = text.match(/(\d+(?:\.\d+)?)\s*h/);
-    const minuteMatch = text.match(/(\d+)\s*m/);
-    if (hourMatch || minuteMatch) {
-        return Math.round((hourMatch ? Number(hourMatch[1]) * 60 : 0) + (minuteMatch ? Number(minuteMatch[1]) : 0));
-    }
-
-    const numeric = Number(text);
-    if (!isNaN(numeric)) {
-        return Math.max(0, Math.round((numeric <= 1 ? numeric * 24 : numeric) * 60));
-    }
-
-    return 0;
-};
-
-const parseTurnoRange = (value) => {
-    const matches = String(value || '').match(/\d{1,2}:\d{2}/g) || [];
-    return {
-        scheduledStart: parseGeoVictoriaTimeValue(matches[0] || ''),
-        scheduledEnd: parseGeoVictoriaTimeValue(matches[1] || ''),
-    };
-};
-
-const formatDurationMinutes = (minutes) => {
-    const total = Math.max(0, Math.round(Number(minutes) || 0));
-    const hours = Math.floor(total / 60);
-    const mins = total % 60;
-    return `${hours}h ${mins}m`;
-};
-
-const minutesToHours = (minutes) => Math.round(((Number(minutes) || 0) / 60) * 100) / 100;
-
-const getExtraRecordMinutes = (record) => {
-    if (record?.totalExtraMinutes !== undefined) return Number(record.totalExtraMinutes) || 0;
-    if (record?.durationMinutes !== undefined) return Number(record.durationMinutes) || 0;
-    return parseGeoVictoriaDurationMinutes(record?.duracion);
-};
-
-const geoVictoriaDayNames = ['Domingo', 'Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado'];
-
-const getGeoVictoriaDayLabel = (dateString) => {
-    if (!dateString) return '';
-    const date = new Date(`${dateString}T00:00:00`);
-    if (isNaN(date.getTime())) return dateString;
-    const day = geoVictoriaDayNames[date.getDay()];
-    const dd = String(date.getDate()).padStart(2, '0');
-    const mm = String(date.getMonth() + 1).padStart(2, '0');
-    return `${day} ${dd}/${mm}`;
-};
-
-const getClosedWeekKey = (dateString) => {
-    const date = new Date(`${dateString}T00:00:00`);
-    if (isNaN(date.getTime())) return '';
-    const day = date.getDay();
-    const mondayOffset = day === 0 ? -6 : 1 - day;
-    const monday = new Date(date);
-    monday.setDate(date.getDate() + mondayOffset);
-    const sunday = new Date(monday);
-    sunday.setDate(monday.getDate() + 6);
-    return `${formatDateInput(monday)}_to_${formatDateInput(sunday)}`;
-};
-
-const addMinutesToTime = (time, minutes) => {
-    const match = String(time || '').match(/^(\d{1,2}):(\d{2})$/);
-    if (!match) return time || '';
-    const base = Number(match[1]) * 60 + Number(match[2]);
-    const total = base + Math.round(Number(minutes) || 0);
-    const normalized = ((total % 1440) + 1440) % 1440;
-    return `${String(Math.floor(normalized / 60)).padStart(2, '0')}:${String(normalized % 60).padStart(2, '0')}`;
-};
-
-const getShiftWithGeoVictoriaExtras = (detail) => {
-    const baseStart = detail?.scheduledStart || detail?.entrada || '';
-    const baseEnd = detail?.scheduledEnd || detail?.salida || '';
-    const start = detail?.extraMinutesPre > 0 ? addMinutesToTime(baseStart, -detail.extraMinutesPre) : baseStart;
-    const end = detail?.extraMinutesPost > 0 ? addMinutesToTime(baseEnd, detail.extraMinutesPost) : baseEnd;
-    if (!start && !end) return detail?.turno || '';
-    return `${start || '--'} - ${end || '--'}`;
 };
 
 const formatHrDate = (date) =>
@@ -369,11 +199,8 @@ function AdminDashboard() {
     const { logout, currentUser, userRole, userData } = useAuth();
     const navigate = useNavigate();
     const [staff, setStaff] = useState([]);
-    const [fullTimeCount, setFullTimeCount] = useState(0);
-    const [partTimeCount, setPartTimeCount] = useState(0);
-    const [traineeCount, setTraineeCount] = useState(0);
-    const [traineeFTCount, setTraineeFTCount] = useState(0);
-    const [traineePTCount, setTraineePTCount] = useState(0);
+    const staffSummary = useMemo(() => summarizeStaffDashboard(staff), [staff]);
+    const [carnetSort, setCarnetSort] = useState('default');
     const [editModal, setEditModal] = useState(null);
     const [modalityFilter, setModalityFilter] = useState("Todos");
     const [searchTerm, setSearchTerm] = useState("");
@@ -404,7 +231,6 @@ function AdminDashboard() {
     const [cesosRegistros, setCesosRegistros] = useState([]);
     const [cesosFilterMonth, setCesosFilterMonth] = useState('');
     const [cesosLoading, setCesosLoading] = useState(false);
-    const [showTrainingReport, setShowTrainingReport] = useState(false);
     const [storeRequirements, setStoreRequirements] = useState([]);
     const [reporteBajaColaborador, setReporteBajaColaborador] = useState(null);
     const [reporteBajaForm, setReporteBajaForm] = useState({
@@ -428,91 +254,10 @@ function AdminDashboard() {
     const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
     const [showRequestsModal, setShowRequestsModal] = useState(false);
     const [showHRPanel, setShowHRPanel] = useState(false);
-    const geoVictoriaInputRef = useRef(null);
     const hrAnalysisInputRef = useRef(null);
-    const geoVictoriaExtraInputRef = useRef(null);
-    const geoVictoriaLateInputRef = useRef(null);
-    const [geoVictoriaImporting, setGeoVictoriaImporting] = useState(false);
-    const [geoVictoriaImportResult, setGeoVictoriaImportResult] = useState(null);
     const [hrAnalysisLoading, setHrAnalysisLoading] = useState(false);
     const [hrAnalysisError, setHrAnalysisError] = useState('');
     const [hrTimeAnalysis, setHrTimeAnalysis] = useState(null);
-    const [geoVictoriaExtraImporting, setGeoVictoriaExtraImporting] = useState(false);
-    const [geoVictoriaLateImporting, setGeoVictoriaLateImporting] = useState(false);
-    const [geoVictoriaExtraImportResult, setGeoVictoriaExtraImportResult] = useState(null);
-    const [geoVictoriaExtraRecords, setGeoVictoriaExtraRecords] = useState([]);
-    const [geoVictoriaExtraLoading, setGeoVictoriaExtraLoading] = useState(false);
-    const [geoVictoriaExtraDateFrom, setGeoVictoriaExtraDateFrom] = useState('');
-    const [geoVictoriaExtraDateTo, setGeoVictoriaExtraDateTo] = useState('');
-    const [geoVictoriaExtraStaffFilter, setGeoVictoriaExtraStaffFilter] = useState('');
-    const [geoVictoriaTurnoMap, setGeoVictoriaTurnoMap] = useState({});
-    const [geoVictoriaTurnoMeta, setGeoVictoriaTurnoMeta] = useState(null);
-    const [geoVictoriaTurnoSaving, setGeoVictoriaTurnoSaving] = useState(false);
-
-    const skillStats = useMemo(() => {
-        const stats = {};
-        const activeStaff = staff.filter(person => isStaffActive(person));
-
-        const totalActive = activeStaff.length || 1;
-
-        activeStaff.forEach(s => {
-            const abilities = s.skills || [];
-            abilities.forEach(skill => {
-                if (skill) {
-                    stats[skill] = (stats[skill] || 0) + 1;
-                }
-            });
-        });
-
-        return Object.entries(stats)
-            .map(([name, count]) => ({
-                name,
-                count,
-                percentage: Math.round((count / totalActive) * 100)
-            }))
-            .sort((a, b) => b.percentage - a.percentage);
-    }, [staff]);
-
-    const geoVictoriaExtraFilteredRecords = useMemo(() => {
-        return geoVictoriaExtraRecords.filter((record) => {
-            const recordStart = record.periodStart || record.fecha || '';
-            const recordEnd = record.periodEnd || record.fecha || recordStart;
-            if (geoVictoriaExtraDateFrom && recordEnd < geoVictoriaExtraDateFrom) return false;
-            if (geoVictoriaExtraDateTo && recordStart > geoVictoriaExtraDateTo) return false;
-            if (geoVictoriaExtraStaffFilter) {
-                const key = record.staffId || record.uid || record.dni;
-                if (key !== geoVictoriaExtraStaffFilter) return false;
-            }
-            return true;
-        });
-    }, [geoVictoriaExtraRecords, geoVictoriaExtraDateFrom, geoVictoriaExtraDateTo, geoVictoriaExtraStaffFilter]);
-
-    const geoVictoriaExtraTotals = useMemo(() => {
-        const collaboratorKeys = new Set();
-        return geoVictoriaExtraFilteredRecords.reduce((acc, record) => {
-            collaboratorKeys.add(record.staffId || record.uid || record.dni);
-            acc.records += 1;
-            acc.preMinutes += Number(record.extraMinutesPre) || 0;
-            acc.postMinutes += Number(record.extraMinutesPost) || 0;
-            acc.totalMinutes += getExtraRecordMinutes(record);
-            acc.collaborators = collaboratorKeys.size;
-            return acc;
-        }, { records: 0, collaborators: 0, preMinutes: 0, postMinutes: 0, totalMinutes: 0 });
-    }, [geoVictoriaExtraFilteredRecords]);
-
-    const geoVictoriaExtraCollaborators = useMemo(() => {
-        const options = new Map();
-        geoVictoriaExtraRecords.forEach((record) => {
-            const key = record.staffId || record.uid || record.dni;
-            if (!key || options.has(key)) return;
-            options.set(key, {
-                key,
-                label: `${record.name || ''} ${record.lastName || ''}`.trim() || record.dni || 'Sin nombre',
-                dni: record.dni || '',
-            });
-        });
-        return Array.from(options.values()).sort((a, b) => a.label.localeCompare(b.label));
-    }, [geoVictoriaExtraRecords]);
 
     const fetchScheduleLock = async () => {
         if (!userData?.storeId) return;
@@ -524,59 +269,6 @@ function AdminDashboard() {
             }
         } catch (err) {
             console.error("Error al cargar configuración de bloqueo:", err);
-        }
-    };
-
-    const fetchGeoVictoriaTurnos = async () => {
-        if (!userData?.storeId) return;
-        try {
-            const docRef = doc(db, "stores", userData.storeId, "config", "geovictoria_turnos");
-            const snap = await getDoc(docRef);
-            if (snap.exists()) {
-                const data = snap.data();
-                setGeoVictoriaTurnoMap(data.turnoMap || {});
-                setGeoVictoriaTurnoMeta({
-                    fileName: data.fileName || '',
-                    count: data.count || Object.keys(data.turnoMap || {}).length,
-                    updatedAt: data.updatedAt || '',
-                });
-            } else {
-                setGeoVictoriaTurnoMap({});
-                setGeoVictoriaTurnoMeta(null);
-            }
-        } catch (err) {
-            console.error("Error al cargar turnos GeoVictoria:", err);
-        }
-    };
-
-    const handleGeoVictoriaTurnosLoaded = async (turnoMap, file) => {
-        if (!userData?.storeId) {
-            alert('No se pudo identificar la tienda.');
-            return;
-        }
-
-        setGeoVictoriaTurnoSaving(true);
-        try {
-            const payload = {
-                turnoMap,
-                count: Object.keys(turnoMap).length,
-                fileName: file?.name || '',
-                updatedAt: new Date().toISOString(),
-                storeId: userData.storeId,
-            };
-
-            await setDoc(doc(db, "stores", userData.storeId, "config", "geovictoria_turnos"), payload);
-            setGeoVictoriaTurnoMap(turnoMap);
-            setGeoVictoriaTurnoMeta({
-                fileName: payload.fileName,
-                count: payload.count,
-                updatedAt: payload.updatedAt,
-            });
-        } catch (err) {
-            console.error("Error guardando turnos GeoVictoria:", err);
-            alert('No se pudo guardar el archivo de turnos GeoVictoria.');
-        } finally {
-            setGeoVictoriaTurnoSaving(false);
         }
     };
 
@@ -613,18 +305,6 @@ function AdminDashboard() {
         }
     };
 
-    const isCardExpiringSoon = (dateString) => {
-        if (!dateString) return false;
-        const now = new Date();
-        const expiry = new Date(dateString);
-        const diffDays = (expiry - now) / (1000 * 60 * 60 * 24);
-        return diffDays <= 15;
-    };
-
-    const isActiveInSystem = (person) => {
-        return isStaffActive(person);
-    };
-
     const openPositionModal = (colab) => {
         setPositionTarget(colab);
         setTempAbilities(colab.positionAbilities || []);
@@ -653,33 +333,6 @@ function AdminDashboard() {
             posList.forEach(pos => positions.add(pos));
         });
         setPositionList(Array.from(positions));
-    };
-
-
-    const exportCarnetExpiringPDF = () => {
-        const doc = new jsPDF();
-        doc.text("Colaboradores con carnet de sanidad próximo a vencer", 14, 14);
-
-        const filtered = staff.filter(s => isActiveInSystem(s) && isCardExpiringSoon(s.sanitaryCardDate));
-        if (filtered.length === 0) {
-            doc.text("No hay colaboradores con carnet próximo a vencer.", 14, 30);
-        } else {
-            const rows = filtered.map(s => [
-                s.name + " " + s.lastName,
-                (() => {
-                    const [y, m, d] = s.sanitaryCardDate.split("-");
-                    return `${d}/${m}/${y}`;
-                })()
-            ]);
-
-            autoTable(doc, {
-                head: [["Nombre", "Fecha de Vencimiento"]],
-                body: rows,
-                startY: 20
-            });
-        }
-
-        doc.save("carnets_por_vencer.pdf");
     };
 
 
@@ -802,17 +455,6 @@ function AdminDashboard() {
 
             setStaff(enriched);
 
-            // Un colaborador se considera activo si NO tiene fecha de cese,
-            // o si su fecha de cese es HOY o en el futuro (se resta a partir del día siguiente).
-            const activePlantilla = enriched.filter(u => !u.isTrainee && isStaffActive(u));
-            const activeTrainees = enriched.filter(u => u.isTrainee && isStaffActive(u));
-
-            setFullTimeCount(activePlantilla.filter(u => u.modality === "Full-Time").length);
-            setPartTimeCount(activePlantilla.filter(u => u.modality === "Part-Time").length);
-            setTraineeCount(activeTrainees.length);
-            setTraineeFTCount(activeTrainees.filter(u => u.modality === "Full-Time").length);
-            setTraineePTCount(activeTrainees.filter(u => u.modality === "Part-Time").length);
-
         } catch (error) {
             console.error("Error:", error);
             setError(`Error: ${error.message}`);
@@ -827,7 +469,6 @@ function AdminDashboard() {
             fetchAllStaffProfiles();
             fetchScheduleLock();
             fetchStoreRequirements();
-            fetchGeoVictoriaTurnos();
 
             // Notify listener for pending requests
             const q = query(
@@ -870,624 +511,8 @@ function AdminDashboard() {
         });
     };
 
-    const handleGeoVictoriaImport = async (event) => {
-        const file = event.target.files?.[0];
-        if (!file) return;
-        if (!userData?.storeId) {
-            alert("No se pudo identificar la tienda para importar usuarios.");
-            event.target.value = '';
-            return;
-        }
-
-        setGeoVictoriaImporting(true);
-        setGeoVictoriaImportResult(null);
-
-        try {
-            const buffer = await file.arrayBuffer();
-            const workbook = XLSX.read(buffer, { type: 'array', cellDates: false });
-            const rows = readGeoVictoriaRows(workbook);
-
-            const existingByDni = new Map();
-            staff.forEach((person) => {
-                const dni = normalizeDni(person.dni);
-                if (dni) existingByDni.set(dni, person);
-            });
-
-            const seenInFile = new Set();
-            const created = [];
-            let existingCount = 0;
-            let skippedCount = 0;
-
-            for (const row of rows) {
-                const estado = String(row.Estado || '').trim().toLowerCase();
-                if (estado && !estado.includes('activ')) {
-                    skippedCount++;
-                    continue;
-                }
-
-                const dni = normalizeDni(row.Identificador);
-                if (!dni || seenInFile.has(dni)) {
-                    skippedCount++;
-                    continue;
-                }
-                seenInFile.add(dni);
-
-                if (existingByDni.has(dni)) {
-                    existingCount++;
-                    continue;
-                }
-
-                const name = String(row.Nombre || '').trim();
-                const lastName = String(row.Apellidos || '').trim();
-                if (!name || !lastName) {
-                    skippedCount++;
-                    continue;
-                }
-
-                const payload = {
-                    name,
-                    lastName,
-                    dni,
-                    email: String(row.Email || '').trim(),
-                    modality: '',
-                    position: 'COLABORADOR',
-                    storeId: userData.storeId,
-                    storeName: storeName || '',
-                    joinDate: parseGeoVictoriaDate(row['Fecha inicio contrato']),
-                    sanitaryCardDate: '',
-                    sanitaryCardUnlock: false,
-                    isTrainee: false,
-                    importedFrom: 'geovictoria',
-                    importedAt: new Date().toISOString(),
-                    needsCompletion: true,
-                    status: 'pending',
-                };
-
-                const docRef = await addDoc(collection(db, "staff_profiles"), payload);
-                const newStaff = { id: docRef.id, ...payload };
-                created.push(newStaff);
-                existingByDni.set(dni, newStaff);
-            }
-
-            setGeoVictoriaImportResult({
-                created,
-                existingCount,
-                skippedCount,
-                fileName: file.name,
-            });
-
-            if (created.length > 0) {
-                alert(`Se agregaron ${created.length} ingresos nuevos desde Geovictoria. Revisa la notificación para completar modalidad y carnet.`);
-            } else {
-                alert(`No se encontraron ingresos nuevos. ${existingCount} usuarios ya existían por DNI.`);
-            }
-
-            await fetchAllStaffProfiles();
-        } catch (err) {
-            console.error("Error importando usuarios de Geovictoria:", err);
-            alert(`No se pudo procesar el Excel de Geovictoria: ${err.message}`);
-        } finally {
-            setGeoVictoriaImporting(false);
-            event.target.value = '';
-        }
-    };
-
     const isStaffActiveForHr = (person) => {
         return isStaffActive(person);
-    };
-
-    const getGeoVictoriaExtraPeriodLabel = (record) => {
-        if (record?.periodStart && record?.periodEnd) {
-            return `${record.periodStart} a ${record.periodEnd}`;
-        }
-        return record?.fecha || '';
-    };
-
-    const getGeoVictoriaExtraStaffProfile = (record) => {
-        const recordDni = normalizeDni(record?.dni);
-        return staff.find((person) =>
-            person.id === record?.staffId
-            || (record?.uid && person.uid === record.uid)
-            || (recordDni && normalizeDni(person.dni) === recordDni)
-        ) || {};
-    };
-
-    const buildGeoVictoriaExtraPdfData = (record) => {
-        const profile = getGeoVictoriaExtraStaffProfile(record);
-        const totalMinutes = getExtraRecordMinutes(record);
-        const periodLabel = getGeoVictoriaExtraPeriodLabel(record);
-        const activityParts = [];
-        if ((Number(record.extraMinutesPre) || 0) > 0) {
-            activityParts.push(`Entrada: ${formatDurationMinutes(record.extraMinutesPre)}`);
-        }
-        if ((Number(record.extraMinutesPost) || 0) > 0) {
-            activityParts.push(`Salida: ${formatDurationMinutes(record.extraMinutesPost)}`);
-        }
-
-        return {
-            name: record.name || profile.name || '',
-            lastName: record.lastName || profile.lastName || '',
-            dni: record.dni || profile.dni || '',
-            cargo: record.cargo || record.position || profile.cargo || profile.position || '',
-            modality: record.modality || profile.modality || '',
-            storeName: record.storeName || profile.storeName || storeName || '',
-            periodLabel,
-            fileName: `Horas_Extras_${normalizeDni(record.dni) || record.staffId || 'colaborador'}_${(record.periodStart || record.fecha || '').replaceAll('-', '')}.pdf`,
-            registros: [{
-                fecha: periodLabel,
-                fechaLabel: periodLabel,
-                inicio: record.entrada || record.inicio || '',
-                fin: record.salida || record.fin || '',
-                duracion: formatDurationMinutes(totalMinutes),
-                totalExtraMinutes: totalMinutes,
-                durationMinutes: totalMinutes,
-                actividad: record.actividad || `Tiempo extra GeoVictoria (${activityParts.join(' | ')})`,
-            }],
-        };
-    };
-
-    const handleExportGeoVictoriaExtraPDF = async (record) => {
-        await exportExtraHoursPDF(buildGeoVictoriaExtraPdfData(record));
-    };
-
-    const handleExportGeoVictoriaExtraFilteredPDF = async () => {
-        if (geoVictoriaExtraFilteredRecords.length === 0) {
-            alert('No hay registros para descargar con los filtros seleccionados.');
-            return;
-        }
-
-        const datePart = new Date().toLocaleDateString('es-PE').replace(/\//g, '.');
-        const detailDates = geoVictoriaExtraFilteredRecords
-            .flatMap((record) => (record.dailyDetails || []).map((detail) => detail.fecha).filter(Boolean));
-        const periodStart = (geoVictoriaExtraDateFrom || detailDates.sort()[0]) || geoVictoriaExtraFilteredRecords
-            .map((record) => record.periodStart || record.fecha)
-            .filter(Boolean)
-            .sort()[0] || geoVictoriaExtraDateFrom || '';
-        const periodEnd = (geoVictoriaExtraDateTo || detailDates.sort().slice(-1)[0]) || geoVictoriaExtraFilteredRecords
-            .map((record) => record.periodEnd || record.fecha)
-            .filter(Boolean)
-            .sort()
-            .slice(-1)[0] || geoVictoriaExtraDateTo || '';
-        const periodLabel = periodStart && periodEnd ? `${periodStart}_to_${periodEnd}` : 'GeoVictoria';
-
-        const groupedRows = geoVictoriaExtraFilteredRecords.flatMap((record) => {
-            const profile = getGeoVictoriaExtraStaffProfile(record);
-            const baseName = `${record.name || profile.name || ''} ${record.lastName || profile.lastName || ''}`.trim();
-            const modality = record.modality || profile.modality || '';
-            const details = Array.isArray(record.dailyDetails) ? record.dailyDetails : [];
-
-            return details
-                .filter((detail) => {
-                    const fecha = detail.fecha || record.fecha || '';
-                    if (geoVictoriaExtraDateFrom && fecha < geoVictoriaExtraDateFrom) return false;
-                    if (geoVictoriaExtraDateTo && fecha > geoVictoriaExtraDateTo) return false;
-                    return (Number(detail.totalExtraMinutes) || 0) > 0;
-                })
-                .map((detail) => ({
-                    name: baseName,
-                    modality,
-                    day: detail.day || getGeoVictoriaDayLabel(detail.fecha),
-                    shift: getShiftWithGeoVictoriaExtras(detail),
-                    extraMinutes: Number(detail.totalExtraMinutes) || 0,
-                    weekKey: periodLabel,
-                    sortKey: `${detail.fecha || record.fecha || ''}_${baseName}`,
-                }));
-        }).sort((a, b) => a.sortKey.localeCompare(b.sortKey));
-
-        if (groupedRows.length === 0) {
-            alert('No hay detalle diario de horas extra para el rango seleccionado. Vuelve a subir el Excel de GeoVictoria para guardar el detalle por dia.');
-            return;
-        }
-
-        await exportExtraHoursGroupedPDF(groupedRows, {
-            weekKey: periodLabel,
-            fileName: `Reporte_Extras_${periodLabel}_GeoVictoria_${datePart}.pdf`,
-        });
-    };
-
-    const handleGeoVictoriaLateUpload = async (event) => {
-        const file = event.target.files?.[0];
-        if (!file) return;
-
-        setGeoVictoriaLateImporting(true);
-        try {
-            const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
-            const rows = readGeoVictoriaRows(workbook);
-            const reportRows = rows.filter((row) => {
-                const justifiedBy = String(getRowValue(row, ['Justificado por']) || '').trim();
-                return !justifiedBy;
-            }).map((row) => {
-                const dni = normalizeDni(getRowValue(row, ['DNI', 'Identificador']));
-                const profile = staff.find((person) => normalizeDni(person.dni) === dni) || {};
-                const rawDate = getRowValue(row, ['Fecha']);
-                const parsedDate = parseActivationDate(rawDate);
-                const date = parsedDate ? formatDateInput(parsedDate) : parseGeoVictoriaDate(rawDate);
-                const scheduledStart = parseGeoVictoriaTimeValue(getRowValue(row, ['Hora Inicio Turno']));
-                const arrival = parseGeoVictoriaTimeValue(getRowValue(row, ['Hora Llegada']));
-                const lateMinutes = parseGeoVictoriaDurationMinutes(getRowValue(row, ['Minutos de Atraso']));
-
-                return {
-                    name: `${getRowValue(row, ['Nombre'])} ${getRowValue(row, ['Apellidos'])}`.trim(),
-                    modality: profile.modality || (String(getRowValue(row, ['Grupo Usuario', 'Grupo marcacion'])).toUpperCase().includes('ENTRENADOR') ? 'Full-Time' : 'Part-Time'),
-                    day: getGeoVictoriaDayLabel(date),
-                    shift: `${scheduledStart || '--'} - ${arrival || '--'}`,
-                    extraMinutes: lateMinutes,
-                    sortKey: `${date}_${getRowValue(row, ['Apellidos'])}_${getRowValue(row, ['Nombre'])}`,
-                    date,
-                };
-            }).filter((row) => row.name && row.date && row.extraMinutes > 0);
-
-            if (reportRows.length === 0) {
-                alert('El archivo no contiene minutos de atraso válidos.');
-                return;
-            }
-
-            reportRows.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
-            const dates = reportRows.map((row) => row.date).sort();
-            const periodLabel = `${dates[0]}_to_${dates[dates.length - 1]}`;
-            reportRows.forEach((row) => { row.weekKey = periodLabel; });
-            const datePart = new Date().toLocaleDateString('es-PE').replace(/\//g, '.');
-
-            await exportExtraHoursGroupedPDF(reportRows, {
-                weekKey: periodLabel,
-                fileName: `Reporte_Tardanzas_${periodLabel}_GeoVictoria_${datePart}.pdf`,
-                reportTitle: 'REPORTE DE TARDANZAS',
-                periodCaption: 'Periodo',
-                shiftHeader: 'Turno - Llegada',
-                durationHeader: 'Ingreso tarde',
-                collaboratorTotalHeader: 'Sumatoria tardanzas',
-                generalTotalLabel: 'TOTAL GENERAL TARDANZAS',
-                summaryOnly: true,
-            });
-        } catch (err) {
-            console.error('Error importando tardanzas GeoVictoria:', err);
-            alert(`No se pudo procesar el reporte de tardanzas: ${err.message}`);
-        } finally {
-            setGeoVictoriaLateImporting(false);
-            event.target.value = '';
-        }
-    };
-
-    const loadGeoVictoriaExtraHours = async () => {
-        if (!userData?.storeId) return;
-        setGeoVictoriaExtraLoading(true);
-        try {
-            const snap = await getDocs(collection(db, 'extra_hours'));
-            const storeStaffIds = new Set(staff.map((person) => person.id));
-            const storeUids = new Set(staff.map((person) => person.uid).filter(Boolean));
-            const records = snap.docs
-                .map((d) => ({ id: d.id, ...d.data() }))
-                .filter((record) => {
-                    const isGeoVictoriaExtra = record.source === 'geovictoria_extra_hours'
-                        || record.importedFrom === 'geovictoria_tiempo_extra';
-                    if (!isGeoVictoriaExtra) return false;
-                    if (record.isPeriodTotal !== true) return false;
-                    if (record.storeId) return record.storeId === userData.storeId;
-                    return storeStaffIds.has(record.staffId) || storeUids.has(record.uid);
-                })
-                .sort((a, b) => String(b.fecha || '').localeCompare(String(a.fecha || '')));
-            setGeoVictoriaExtraRecords(records);
-        } catch (err) {
-            console.error('Error cargando horas extra GeoVictoria:', err);
-            alert(`No se pudo cargar el historial de horas extra: ${err.message}`);
-        } finally {
-            setGeoVictoriaExtraLoading(false);
-        }
-    };
-
-    useEffect(() => {
-        if (showHRPanel && userData?.storeId) {
-            loadGeoVictoriaExtraHours();
-        }
-    }, [showHRPanel, userData?.storeId, staff.length]);
-
-    const handleGeoVictoriaExtraHoursUpload = async (event) => {
-        const file = event.target.files?.[0];
-        if (!file) return;
-        if (!userData?.storeId) {
-            alert('No se pudo identificar la tienda para importar horas extra.');
-            event.target.value = '';
-            return;
-        }
-
-        setGeoVictoriaExtraImporting(true);
-        setGeoVictoriaExtraImportResult(null);
-
-        try {
-            const buffer = await file.arrayBuffer();
-            const workbook = XLSX.read(buffer, { type: 'array', cellDates: false });
-            const rows = readGeoVictoriaRows(workbook);
-
-            const staffByDni = new Map();
-            staff.forEach((person) => {
-                const dni = normalizeDni(person.dni);
-                if (!dni) return;
-                const current = staffByDni.get(dni);
-                if (!current || isStaffActiveForHr(person)) {
-                    staffByDni.set(dni, person);
-                }
-            });
-
-            const grouped = new Map();
-            let matchedRows = 0;
-            let skippedNoDni = 0;
-            let unmatchedRows = 0;
-            let invalidDateRows = 0;
-            let noExtraRows = 0;
-            let lastExtraContext = null;
-            const unmatchedDnis = new Set();
-
-            rows.forEach((row, rowIndex) => {
-                const rawDni = normalizeDni(getRowValueWithFallback(row, ['Identificador', 'DNI', 'Documento'], ['_3']));
-                if (rawDni) {
-                    const person = staffByDni.get(rawDni);
-                    if (!person) {
-                        if (!unmatchedDnis.has(rawDni)) {
-                            unmatchedRows += 1;
-                            unmatchedDnis.add(rawDni);
-                        }
-                        lastExtraContext = null;
-                        return;
-                    }
-
-                    const rowDate = parseActivationDate(getRowValueWithFallback(row, ['Fecha'], ['', '_0']));
-                    const rowFecha = formatDateInput(rowDate);
-                    if (!rowFecha) {
-                        invalidDateRows += 1;
-                        lastExtraContext = null;
-                        return;
-                    }
-
-                    const turno = String(getRowValueWithFallback(row, ['Turno'], ['_5']) || '').trim();
-                    const { scheduledStart, scheduledEnd } = parseTurnoRange(turno);
-                    const entrada = parseGeoVictoriaTimeValue(getRowValueWithFallback(row, ['Entrada'], ['_6']));
-                    const salida = parseGeoVictoriaTimeValue(getRowValueWithFallback(row, ['Salio', 'Salió'], ['_10']));
-                    const detailExtraMinutesPre = parseGeoVictoriaDurationMinutes(getRepeatedRowValue(row, 'TE', 0) || getRowValueWithFallback(row, ['TE Entrada'], ['_7']));
-                    const detailExtraMinutesPost = parseGeoVictoriaDurationMinutes(getRepeatedRowValue(row, 'TE', 1) || getRowValueWithFallback(row, ['TE Salida'], ['_11']));
-                    const dailyDetail = detailExtraMinutesPre + detailExtraMinutesPost > 0
-                        ? {
-                            rowIndex: rowIndex + 2,
-                            fecha: rowFecha,
-                            day: getGeoVictoriaDayLabel(rowFecha),
-                            turno,
-                            entrada,
-                            salida,
-                            scheduledStart,
-                            scheduledEnd,
-                            extraMinutesPre: detailExtraMinutesPre,
-                            extraMinutesPost: detailExtraMinutesPost,
-                            totalExtraMinutes: detailExtraMinutesPre + detailExtraMinutesPost,
-                        }
-                        : null;
-
-                    if (!lastExtraContext || lastExtraContext.dni !== rawDni) {
-                        lastExtraContext = {
-                            dni: rawDni,
-                            person,
-                            date: rowDate,
-                            fecha: rowFecha,
-                            periodStart: rowFecha,
-                            periodEnd: rowFecha,
-                            turno,
-                            entrada,
-                            salida,
-                            scheduledStart,
-                            scheduledEnd,
-                            detailRows: 1,
-                            dailyDetails: dailyDetail ? [dailyDetail] : [],
-                        };
-                    } else {
-                        lastExtraContext.date = rowDate;
-                        lastExtraContext.fecha = rowFecha;
-                        lastExtraContext.periodStart = rowFecha < lastExtraContext.periodStart ? rowFecha : lastExtraContext.periodStart;
-                        lastExtraContext.periodEnd = rowFecha > lastExtraContext.periodEnd ? rowFecha : lastExtraContext.periodEnd;
-                        lastExtraContext.turno = turno || lastExtraContext.turno;
-                        lastExtraContext.entrada = entrada || lastExtraContext.entrada;
-                        lastExtraContext.salida = salida || lastExtraContext.salida;
-                        lastExtraContext.scheduledStart = scheduledStart || lastExtraContext.scheduledStart;
-                        lastExtraContext.scheduledEnd = scheduledEnd || lastExtraContext.scheduledEnd;
-                        lastExtraContext.detailRows += 1;
-                        if (dailyDetail) lastExtraContext.dailyDetails.push(dailyDetail);
-                    }
-                    return;
-                }
-
-                const dni = rawDni || lastExtraContext?.dni || '';
-                if (!dni) {
-                    skippedNoDni += 1;
-                    return;
-                }
-
-                const person = rawDni
-                    ? staffByDni.get(dni)
-                    : (lastExtraContext?.person || staffByDni.get(dni));
-                if (!person) {
-                    unmatchedRows += 1;
-                    return;
-                }
-
-                const rawDate = parseActivationDate(getRowValueWithFallback(row, ['Fecha'], ['', '_0']));
-                const date = rawDate || lastExtraContext?.date;
-                const fecha = formatDateInput(date);
-                if (!fecha) {
-                    invalidDateRows += 1;
-                    return;
-                }
-                const turno = String(getRowValueWithFallback(row, ['Turno'], ['_5']) || lastExtraContext?.turno || '').trim();
-                const { scheduledStart, scheduledEnd } = parseTurnoRange(turno);
-                const entrada = parseGeoVictoriaTimeValue(getRowValueWithFallback(row, ['Entrada'], ['_6'])) || lastExtraContext?.entrada || '';
-
-                const salida = parseGeoVictoriaTimeValue(getRowValueWithFallback(row, ['Salio', 'Salió'], ['_10'])) || lastExtraContext?.salida || '';
-                const teEntrada = getRepeatedRowValue(row, 'TE', 0) || getRowValueWithFallback(row, ['TE Entrada'], ['_7']);
-                const teSalida = getRepeatedRowValue(row, 'TE', 1) || getRowValueWithFallback(row, ['TE Salida'], ['_11']);
-                const extraMinutesPre = parseGeoVictoriaDurationMinutes(teEntrada);
-                const extraMinutesPost = parseGeoVictoriaDurationMinutes(teSalida);
-                const totalExtraMinutes = extraMinutesPre + extraMinutesPost;
-                if (totalExtraMinutes <= 0) {
-                    lastExtraContext = null;
-                    noExtraRows += 1;
-                    return;
-                }
-
-                matchedRows += 1;
-                const periodStart = lastExtraContext?.periodStart || fecha;
-                const periodEnd = lastExtraContext?.periodEnd || fecha;
-                const key = `${person.id}_${periodStart}_${periodEnd}`;
-                const existing = grouped.get(key) || {
-                    person,
-                    dni,
-                    fecha: periodEnd,
-                    periodStart,
-                    periodEnd,
-                    isPeriodTotal: true,
-                    turno,
-                    entrada,
-                    salida,
-                    scheduledStart,
-                    scheduledEnd,
-                    extraMinutesPre: 0,
-                    extraMinutesPost: 0,
-                    totalExtraMinutes: 0,
-                    segments: [],
-                    dailyDetails: [],
-                };
-
-                existing.extraMinutesPre += extraMinutesPre;
-                existing.extraMinutesPost += extraMinutesPost;
-                existing.totalExtraMinutes += totalExtraMinutes;
-                existing.turno = existing.turno || turno;
-                existing.entrada = existing.entrada || entrada;
-                existing.salida = salida || existing.salida;
-                existing.scheduledStart = existing.scheduledStart || scheduledStart;
-                existing.scheduledEnd = existing.scheduledEnd || scheduledEnd;
-                existing.dailyDetails = lastExtraContext?.dailyDetails || [];
-                existing.segments.push({
-                    rowIndex: rowIndex + 2,
-                    type: 'subtotal',
-                    periodStart,
-                    periodEnd,
-                    detailRows: lastExtraContext?.detailRows || 0,
-                    turno,
-                    entrada,
-                    salida,
-                    scheduledStart,
-                    scheduledEnd,
-                    extraMinutesPre,
-                    extraMinutesPost,
-                    totalExtraMinutes,
-                });
-                grouped.set(key, existing);
-                lastExtraContext = null;
-            });
-
-            let created = 0;
-            let updated = 0;
-            const totalByStaff = new Map();
-
-            for (const item of grouped.values()) {
-                const person = item.person;
-                const totalExtraMinutes = item.totalExtraMinutes;
-                const extraMinutesPre = item.extraMinutesPre;
-                const extraMinutesPost = item.extraMinutesPost;
-                const inicio = extraMinutesPre > 0
-                    ? (item.entrada || item.scheduledStart || '')
-                    : (item.scheduledEnd || item.salida || '');
-                const fin = extraMinutesPost > 0
-                    ? (item.salida || item.scheduledEnd || '')
-                    : (item.scheduledStart || item.entrada || '');
-                const activityParts = [];
-                if (extraMinutesPre > 0) activityParts.push(`Entrada: ${formatDurationMinutes(extraMinutesPre)}`);
-                if (extraMinutesPost > 0) activityParts.push(`Salida: ${formatDurationMinutes(extraMinutesPost)}`);
-
-                const payload = {
-                    // user_id (extra_hours.user_id) referencia auth.users; el personal
-                    // emparejado por DNI puede no tener cuenta vinculada, en cuyo caso
-                    // person.uid es null. Nunca usar person.id (id de staff_profiles)
-                    // como fallback: violaria la FK extra_hours_user_id_fkey.
-                    uid: person.uid || null,
-                    staffId: person.id,
-                    dni: item.dni,
-                    name: person.name || '',
-                    lastName: person.lastName || '',
-                    cargo: person.cargo || person.position || '',
-                    position: person.position || '',
-                    modality: person.modality || '',
-                    storeId: userData.storeId,
-                    storeName: storeName || person.storeName || '',
-                    fecha: item.fecha,
-                    periodStart: item.periodStart || item.fecha,
-                    periodEnd: item.periodEnd || item.fecha,
-                    isPeriodTotal: true,
-                    inicio,
-                    fin,
-                    entrada: item.entrada || '',
-                    salida: item.salida || '',
-                    turno: item.turno || '',
-                    scheduledStart: item.scheduledStart || '',
-                    scheduledEnd: item.scheduledEnd || '',
-                    extraMinutesPre,
-                    extraMinutesPost,
-                    totalExtraMinutes,
-                    durationMinutes: totalExtraMinutes,
-                    extraHoursPre: minutesToHours(extraMinutesPre),
-                    extraHoursPost: minutesToHours(extraMinutesPost),
-                    totalExtraHours: minutesToHours(totalExtraMinutes),
-                    duracion: formatDurationMinutes(totalExtraMinutes),
-                    actividad: `Tiempo extra GeoVictoria (${activityParts.join(' | ')})`,
-                    source: 'geovictoria_extra_hours',
-                    importedFrom: 'geovictoria_tiempo_extra',
-                    sourceFile: file.name,
-                    importedAt: new Date().toISOString(),
-                    segments: item.segments,
-                    dailyDetails: item.dailyDetails || [],
-                };
-
-                const saved = await saveGeoVictoriaExtraHours(payload);
-                if (saved.created) created += 1;
-                else updated += 1;
-
-                const staffKey = person.id;
-                const current = totalByStaff.get(staffKey) || {
-                    staffId: staffKey,
-                    name: `${person.name || ''} ${person.lastName || ''}`.trim(),
-                    dni: item.dni,
-                    totalMinutes: 0,
-                    preMinutes: 0,
-                    postMinutes: 0,
-                };
-                current.totalMinutes += totalExtraMinutes;
-                current.preMinutes += extraMinutesPre;
-                current.postMinutes += extraMinutesPost;
-                totalByStaff.set(staffKey, current);
-            }
-
-            const importedTotalMinutes = Array.from(grouped.values())
-                .reduce((acc, item) => acc + item.totalExtraMinutes, 0);
-
-            setGeoVictoriaExtraImportResult({
-                fileName: file.name,
-                created,
-                updated,
-                matchedRows,
-                uploadedRecords: grouped.size,
-                skippedNoDni,
-                unmatchedRows,
-                invalidDateRows,
-                noExtraRows,
-                totalMinutes: importedTotalMinutes,
-                totalByStaff: Array.from(totalByStaff.values())
-                    .sort((a, b) => b.totalMinutes - a.totalMinutes),
-            });
-
-            await loadGeoVictoriaExtraHours();
-            alert(`Horas extra importadas: ${grouped.size} registro(s), total ${formatDurationMinutes(importedTotalMinutes)}.`);
-        } catch (err) {
-            console.error('Error importando tiempo extra GeoVictoria:', err);
-            alert(`No se pudo procesar el Excel de tiempo extra: ${err.message}`);
-        } finally {
-            setGeoVictoriaExtraImporting(false);
-            event.target.value = '';
-        }
     };
 
     const handleHrTimeAnalysisUpload = async (event) => {
@@ -1500,7 +525,7 @@ function AdminDashboard() {
         try {
             const buffer = await file.arrayBuffer();
             const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
-            const rows = readGeoVictoriaRows(workbook);
+            const rows = readWorkbookRows(workbook);
             const today = new Date();
 
             const excelByDni = new Map();
@@ -2239,7 +1264,7 @@ function AdminDashboard() {
         }
     };
 
-    const filteredStaff = staff.filter(s => {
+    const filteredStaff = sortStaffBySanitaryCard(staff.filter(s => {
         if (!isStaffActive(s)) return false;
 
         const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -2252,9 +1277,9 @@ function AdminDashboard() {
         const matchesModality = modalityFilter === "Todos"
             || (modalityFilter === "Trainee" ? s.isTrainee : s.modality === modalityFilter && !s.isTrainee);
         const fullName = (s.name + " " + s.lastName).toLowerCase();
-        const matchesSearch = fullName.includes(searchTerm.toLowerCase());
+        const matchesSearch = fullName.includes(searchTerm.toLowerCase()) || String(s.dni || '').includes(searchTerm.trim());
         return matchesModality && matchesSearch;
-    });
+    }), carnetSort);
 
     return (
         <div className="admin-dashboard min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
@@ -2337,32 +1362,11 @@ function AdminDashboard() {
                             {/* Grupo: Administración */}
                             <div className="flex items-center bg-gray-50 p-1 rounded-2xl border border-gray-100">
                                 <input
-                                    ref={geoVictoriaInputRef}
-                                    type="file"
-                                    accept=".xlsx,.xls"
-                                    className="hidden"
-                                    onChange={handleGeoVictoriaImport}
-                                />
-                                <input
                                     ref={hrAnalysisInputRef}
                                     type="file"
                                     accept=".xlsx,.xls"
                                     className="hidden"
                                     onChange={handleHrTimeAnalysisUpload}
-                                />
-                                <input
-                                    ref={geoVictoriaExtraInputRef}
-                                    type="file"
-                                    accept=".xlsx,.xls"
-                                    className="hidden"
-                                    onChange={handleGeoVictoriaExtraHoursUpload}
-                                />
-                                <input
-                                    ref={geoVictoriaLateInputRef}
-                                    type="file"
-                                    accept=".xlsx,.xls"
-                                    className="hidden"
-                                    onChange={handleGeoVictoriaLateUpload}
                                 />
                                 <button
                                     onClick={() => setShowRequestsModal(true)}
@@ -2454,12 +1458,6 @@ function AdminDashboard() {
 
             {/* Main Content */}
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                {userData?.storeId && ['admin', 'superadmin'].includes(userRole) && (
-                    <HolidayPaymentSettings storeId={userData.storeId} onSaved={() => {
-                        setHolidayRefresh(value => value + 1);
-                        fetchAllStaffProfiles();
-                    }} />
-                )}
                 {/* Error Message */}
                 {error && (
                     <div className="mb-6 p-4 bg-red-50 border-l-4 border-red-500 rounded-r-lg shadow-md flex items-start gap-3">
@@ -2470,11 +1468,11 @@ function AdminDashboard() {
 
                 {showHRPanel && (
                     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
-                        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-6xl max-h-[92vh] overflow-hidden flex flex-col">
+                        <div role="dialog" aria-modal="true" aria-labelledby="hr-panel-title" className="bg-white rounded-3xl shadow-2xl w-full max-w-6xl max-h-[92vh] overflow-hidden flex flex-col">
                             <div className="px-6 py-5 bg-gradient-to-r from-emerald-700 to-slate-900 text-white flex items-start justify-between gap-4">
                                 <div>
                                     <p className="text-xs font-black uppercase tracking-[0.24em] text-emerald-200">Recursos Humanos</p>
-                                    <h2 className="text-2xl font-black mt-1">Panel RRHH</h2>
+                                    <h2 id="hr-panel-title" className="text-2xl font-black mt-1">Panel RRHH</h2>
                                     <p className="text-sm text-emerald-50 mt-1">
                                         Gestiona ingresos, ceses, validaciones y permanencia del personal.
                                     </p>
@@ -2490,26 +1488,6 @@ function AdminDashboard() {
 
                             <div className="overflow-y-auto p-6 bg-slate-50 space-y-6">
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                    <button
-                                        onClick={() => geoVictoriaInputRef.current?.click()}
-                                        disabled={geoVictoriaImporting}
-                                        className="bg-white border border-emerald-100 rounded-2xl p-5 text-left hover:border-emerald-300 hover:shadow-md transition-all disabled:opacity-60 disabled:cursor-not-allowed"
-                                    >
-                                        <div className="flex items-center justify-between gap-3">
-                                            <div className="p-3 bg-emerald-50 text-emerald-700 rounded-xl">
-                                                <Upload className="w-6 h-6" />
-                                            </div>
-                                            <span className="text-[10px] font-black uppercase tracking-widest text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
-                                                Excel
-                                            </span>
-                                        </div>
-                                        <h3 className="font-black text-slate-900 mt-4">
-                                            {geoVictoriaImporting ? 'Importando GeoVictoria...' : 'GeoVictoria'}
-                                        </h3>
-                                        <p className="text-sm text-slate-500 mt-1">
-                                            Importa usuarios activos nuevos y completa luego su modalidad y carnet.
-                                        </p>
-                                    </button>
 
                                     <button onClick={() => { setShowHRPanel(false); setShowArchivedHistory(true); }} className="bg-white border border-slate-200 rounded-2xl p-5 text-left hover:shadow-md">
                                         <h3 className="font-black text-slate-900">Archivo de horarios</h3>
@@ -2557,247 +1535,14 @@ function AdminDashboard() {
                                     </button>
                                 </div>
 
-                                <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-                                    <div className="px-5 py-4 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-                                        <div>
-                                            <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                                                <Download className="w-5 h-5 text-teal-600" />
-                                                Turnos GeoVictoria
-                                            </h3>
-                                            <p className="text-sm text-slate-500 mt-1">
-                                                Sube una sola vez el Excel maestro de turnos. Se guardara para futuras exportaciones.
-                                            </p>
-                                            {geoVictoriaTurnoMeta && (
-                                                <p className="text-xs text-teal-700 font-bold mt-2">
-                                                    {geoVictoriaTurnoMeta.count} turnos guardados
-                                                    {geoVictoriaTurnoMeta.fileName ? ` | ${geoVictoriaTurnoMeta.fileName}` : ''}
-                                                </p>
-                                            )}
-                                        </div>
-                                        <div className="bg-slate-50 border border-slate-100 rounded-xl p-3">
-                                            <GeoVictoriaUpload
-                                                onTurnosLoaded={handleGeoVictoriaTurnosLoaded}
-                                                initialCount={Object.keys(geoVictoriaTurnoMap).length}
-                                                label={geoVictoriaTurnoSaving ? 'Guardando turnos...' : 'Actualizar Excel de turnos'}
-                                                compact
-                                            />
-                                        </div>
-                                    </div>
+                                <TrainingProgressReport staff={staff} storeRequirements={storeRequirements} />
 
-                                    {geoVictoriaTurnoSaving && (
-                                        <div className="px-5 py-3 bg-teal-50 text-teal-700 text-sm font-bold border-b border-teal-100">
-                                            Guardando configuracion GeoVictoria...
-                                        </div>
-                                    )}
-                                </div>
-
-                                <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-                                    <div className="px-5 py-4 border-b border-slate-100 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
-                                        <div>
-                                            <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                                                <Clock className="w-5 h-5 text-red-600" />
-                                                Tiempo extra GeoVictoria
-                                            </h3>
-                                            <p className="text-sm text-slate-500 mt-1">
-                                                Sube el Excel de tiempo extra y cruza las marcaciones por DNI contra usuarios del sistema.
-                                            </p>
-                                        </div>
-                                        <div className="flex flex-wrap gap-2">
-                                            <button
-                                                onClick={() => geoVictoriaExtraInputRef.current?.click()}
-                                                disabled={geoVictoriaExtraImporting}
-                                                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-red-600 text-white text-sm font-bold hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-                                            >
-                                                <Upload className="w-4 h-4" />
-                                                {geoVictoriaExtraImporting ? 'Importando...' : 'Subir Tiempo Extra'}
-                                            </button>
-                                            <button
-                                                onClick={() => geoVictoriaLateInputRef.current?.click()}
-                                                disabled={geoVictoriaLateImporting}
-                                                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 text-white text-sm font-bold hover:bg-amber-600 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-                                            >
-                                                <Clock className="w-4 h-4" />
-                                                {geoVictoriaLateImporting ? 'Procesando tardanzas...' : 'Tardanzas'}
-                                            </button>
-                                            <button
-                                                onClick={loadGeoVictoriaExtraHours}
-                                                disabled={geoVictoriaExtraLoading}
-                                                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 text-sm font-bold hover:bg-slate-200 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-                                            >
-                                                <RefreshCw className={`w-4 h-4 ${geoVictoriaExtraLoading ? 'animate-spin' : ''}`} />
-                                                Actualizar
-                                            </button>
-                                            <button
-                                                onClick={handleExportGeoVictoriaExtraFilteredPDF}
-                                                disabled={geoVictoriaExtraLoading || geoVictoriaExtraFilteredRecords.length === 0}
-                                                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-red-50 text-red-700 text-sm font-bold hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors border border-red-100"
-                                            >
-                                                <FaFilePdf className="w-4 h-4" />
-                                                PDF filtrado
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    <div className="p-5 space-y-5">
-                                        {geoVictoriaExtraImportResult && (
-                                            <div className="rounded-xl border border-red-100 bg-red-50 p-4">
-                                                <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
-                                                    <div>
-                                                        <p className="text-sm font-black text-red-900 uppercase tracking-wide">Ultima importacion</p>
-                                                        <p className="text-sm text-red-800 mt-1">
-                                                            {geoVictoriaExtraImportResult.uploadedRecords} registro(s) subido(s), total {formatDurationMinutes(geoVictoriaExtraImportResult.totalMinutes)}.
-                                                        </p>
-                                                        <p className="text-xs text-red-700 mt-1">
-                                                            Archivo: {geoVictoriaExtraImportResult.fileName} | Nuevos: {geoVictoriaExtraImportResult.created} | Actualizados: {geoVictoriaExtraImportResult.updated}
-                                                        </p>
-                                                        <p className="text-xs text-red-600 mt-1">
-                                                            Sin DNI: {geoVictoriaExtraImportResult.skippedNoDni} | Sin usuario: {geoVictoriaExtraImportResult.unmatchedRows} | Sin fecha: {geoVictoriaExtraImportResult.invalidDateRows} | Sin TE: {geoVictoriaExtraImportResult.noExtraRows}
-                                                        </p>
-                                                    </div>
-                                                    <button
-                                                        onClick={() => setGeoVictoriaExtraImportResult(null)}
-                                                        className="self-start p-1.5 rounded-lg text-red-500 hover:text-red-800 hover:bg-white transition-colors"
-                                                        title="Cerrar resumen"
-                                                    >
-                                                        <X className="w-4 h-4" />
-                                                    </button>
-                                                </div>
-
-                                                {geoVictoriaExtraImportResult.totalByStaff.length > 0 && (
-                                                    <div className="mt-3 flex flex-wrap gap-2">
-                                                        {geoVictoriaExtraImportResult.totalByStaff.slice(0, 8).map((row) => (
-                                                            <span key={row.staffId} className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white border border-red-100 text-xs font-bold text-red-800">
-                                                                {row.name}
-                                                                <span className="font-black">{formatDurationMinutes(row.totalMinutes)}</span>
-                                                            </span>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        )}
-
-                                        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-                                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Registros</p>
-                                                <p className="text-2xl font-black text-slate-900">{geoVictoriaExtraTotals.records}</p>
-                                            </div>
-                                            <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
-                                                <p className="text-[10px] font-black uppercase tracking-widest text-blue-700">Colaboradores</p>
-                                                <p className="text-2xl font-black text-blue-900">{geoVictoriaExtraTotals.collaborators}</p>
-                                            </div>
-                                            <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
-                                                <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">TE Entrada</p>
-                                                <p className="text-2xl font-black text-emerald-900">{formatDurationMinutes(geoVictoriaExtraTotals.preMinutes)}</p>
-                                            </div>
-                                            <div className="rounded-xl border border-orange-100 bg-orange-50 px-4 py-3">
-                                                <p className="text-[10px] font-black uppercase tracking-widest text-orange-700">TE Salida</p>
-                                                <p className="text-2xl font-black text-orange-900">{formatDurationMinutes(geoVictoriaExtraTotals.postMinutes)}</p>
-                                            </div>
-                                            <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3">
-                                                <p className="text-[10px] font-black uppercase tracking-widest text-red-700">Total HE</p>
-                                                <p className="text-2xl font-black text-red-900">{formatDurationMinutes(geoVictoriaExtraTotals.totalMinutes)}</p>
-                                            </div>
-                                        </div>
-
-                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                                            <div>
-                                                <label className="text-xs font-black uppercase tracking-widest text-slate-500">Desde</label>
-                                                <input
-                                                    type="date"
-                                                    value={geoVictoriaExtraDateFrom}
-                                                    onChange={(e) => setGeoVictoriaExtraDateFrom(e.target.value)}
-                                                    className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-300"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="text-xs font-black uppercase tracking-widest text-slate-500">Hasta</label>
-                                                <input
-                                                    type="date"
-                                                    value={geoVictoriaExtraDateTo}
-                                                    onChange={(e) => setGeoVictoriaExtraDateTo(e.target.value)}
-                                                    className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-300"
-                                                />
-                                            </div>
-                                            <div className="md:col-span-2">
-                                                <label className="text-xs font-black uppercase tracking-widest text-slate-500">Colaborador</label>
-                                                <select
-                                                    value={geoVictoriaExtraStaffFilter}
-                                                    onChange={(e) => setGeoVictoriaExtraStaffFilter(e.target.value)}
-                                                    className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-red-300"
-                                                >
-                                                    <option value="">Todos</option>
-                                                    {geoVictoriaExtraCollaborators.map((person) => (
-                                                        <option key={person.key} value={person.key}>
-                                                            {person.label}{person.dni ? ` - ${person.dni}` : ''}
-                                                        </option>
-                                                    ))}
-                                                </select>
-                                            </div>
-                                        </div>
-
-                                        <div className="overflow-x-auto rounded-xl border border-slate-200">
-                                            <table className="w-full text-sm">
-                                                <thead className="bg-slate-100 text-slate-600 text-[11px] uppercase tracking-wider">
-                                                    <tr>
-                                                        <th className="px-4 py-3 text-left">Periodo</th>
-                                                        <th className="px-4 py-3 text-left">Colaborador</th>
-                                                        <th className="px-4 py-3 text-left">DNI</th>
-                                                        <th className="px-4 py-3 text-left">Turno</th>
-                                                        <th className="px-4 py-3 text-left">Entrada</th>
-                                                        <th className="px-4 py-3 text-left">TE Entrada</th>
-                                                        <th className="px-4 py-3 text-left">Salio</th>
-                                                        <th className="px-4 py-3 text-left">TE Salida</th>
-                                                        <th className="px-4 py-3 text-left">Total</th>
-                                                        <th className="px-4 py-3 text-left">PDF</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody className="divide-y divide-slate-100 bg-white">
-                                                    {geoVictoriaExtraLoading ? (
-                                                        <tr>
-                                                            <td colSpan={10} className="px-4 py-8 text-center text-slate-500 font-semibold">Cargando registros...</td>
-                                                        </tr>
-                                                    ) : geoVictoriaExtraFilteredRecords.length === 0 ? (
-                                                        <tr>
-                                                            <td colSpan={10} className="px-4 py-8 text-center text-slate-500 font-semibold">No hay horas extra para los filtros seleccionados.</td>
-                                                        </tr>
-                                                    ) : (
-                                                        geoVictoriaExtraFilteredRecords.map((record) => (
-                                                            <tr key={record.id} className="hover:bg-slate-50">
-                                                                <td className="px-4 py-3 font-semibold text-slate-800">
-                                                                    {record.periodStart && record.periodEnd
-                                                                        ? `${record.periodStart} a ${record.periodEnd}`
-                                                                        : (record.fecha || '-')}
-                                                                </td>
-                                                                <td className="px-4 py-3 text-slate-800">{`${record.name || ''} ${record.lastName || ''}`.trim() || '-'}</td>
-                                                                <td className="px-4 py-3 font-mono text-xs text-slate-500">{record.dni || '-'}</td>
-                                                                <td className="px-4 py-3 text-slate-600">{record.turno || '-'}</td>
-                                                                <td className="px-4 py-3 text-slate-600">{record.entrada || record.inicio || '-'}</td>
-                                                                <td className="px-4 py-3 font-bold text-emerald-700">{formatDurationMinutes(record.extraMinutesPre)}</td>
-                                                                <td className="px-4 py-3 text-slate-600">{record.salida || record.fin || '-'}</td>
-                                                                <td className="px-4 py-3 font-bold text-orange-700">{formatDurationMinutes(record.extraMinutesPost)}</td>
-                                                                <td className="px-4 py-3">
-                                                                    <span className="inline-flex px-2 py-1 rounded-full bg-red-50 text-red-700 text-xs font-black">
-                                                                        {formatDurationMinutes(getExtraRecordMinutes(record))}
-                                                                    </span>
-                                                                </td>
-                                                                <td className="px-4 py-3">
-                                                                    <button
-                                                                        onClick={() => handleExportGeoVictoriaExtraPDF(record)}
-                                                                        className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-black hover:bg-red-700 transition-colors"
-                                                                        title="Descargar PDF"
-                                                                    >
-                                                                        <FaFilePdf className="w-3.5 h-3.5" />
-                                                                        PDF
-                                                                    </button>
-                                                                </td>
-                                                            </tr>
-                                                        ))
-                                                    )}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    </div>
-                                </div>
+                                {userData?.storeId && ['admin', 'superadmin'].includes(userRole) && (
+                                    <HolidayPaymentSettings storeId={userData.storeId} onSaved={() => {
+                                        setHolidayRefresh(value => value + 1);
+                                        fetchAllStaffProfiles();
+                                    }} />
+                                )}
 
                                 <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
                                     <div className="px-5 py-4 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
@@ -2958,133 +1703,36 @@ function AdminDashboard() {
                     </div>
                 )}
 
-                {geoVictoriaImportResult && (
-                    <div className={`mb-6 p-4 border rounded-2xl shadow-sm flex flex-col gap-3 ${geoVictoriaImportResult.created.length > 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-blue-50 border-blue-200'}`}>
-                        <div className="flex items-start justify-between gap-4">
-                            <div className="flex items-start gap-3">
-                                <div className={`p-2 rounded-xl ${geoVictoriaImportResult.created.length > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'}`}>
-                                    {geoVictoriaImportResult.created.length > 0 ? <UserCheck className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
+                <section aria-label="Resumen de plantilla" className="mb-8 overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+                    <div className="flex flex-col gap-6 p-6 xl:flex-row xl:items-center">
+                        <div className="flex items-center gap-4 xl:min-w-[200px] xl:border-r xl:border-gray-100 xl:pr-6">
+                            <div className="rounded-xl bg-indigo-50 p-3"><Users className="h-6 w-6 text-indigo-600" /></div>
+                            <div>
+                                <p className="text-xs font-bold uppercase tracking-wider text-gray-500">Total en plantilla</p>
+                                <p className="mt-1 text-4xl font-black tracking-tight text-gray-900">{staffSummary.total}</p>
+                                <p className="mt-1 text-xs text-gray-500">Personal activo</p>
+                            </div>
+                        </div>
+                        <div className="grid flex-1 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                            {[
+                                { label: 'Gerente', value: staffSummary.manager, color: 'bg-indigo-50 text-indigo-700' },
+                                { label: 'Asistente', value: staffSummary.assistant, color: 'bg-blue-50 text-blue-700' },
+                                { label: 'Full-Time', value: staffSummary.fullTime, color: 'bg-emerald-50 text-emerald-700' },
+                                { label: 'Part-Time', value: staffSummary.partTime, color: 'bg-purple-50 text-purple-700' },
+                                { label: 'Entrenamiento', value: staffSummary.training, color: 'bg-orange-50 text-orange-700', detail: `FT ${staffSummary.trainingFullTime} · PT ${staffSummary.trainingPartTime}` },
+                            ].map(group => (
+                                <div key={group.label} className={`rounded-xl p-4 ${group.color}`}>
+                                    <p className="text-[11px] font-bold uppercase tracking-wide">{group.label}</p>
+                                    <p className="mt-2 text-2xl font-black">{group.value}</p>
+                                    {group.detail && <p className="mt-1 text-[10px] font-semibold">{group.detail}</p>}
                                 </div>
-                                <div>
-                                    <p className={`font-black text-sm uppercase tracking-wide ${geoVictoriaImportResult.created.length > 0 ? 'text-emerald-900' : 'text-blue-900'}`}>
-                                        Importación Geovictoria
-                                    </p>
-                                    <p className="text-sm text-gray-700">
-                                        {geoVictoriaImportResult.created.length > 0
-                                            ? `${geoVictoriaImportResult.created.length} ingreso(s) nuevo(s) detectado(s). Haz click en un nombre para completar modalidad y carnet.`
-                                            : `No hubo ingresos nuevos. ${geoVictoriaImportResult.existingCount} usuario(s) ya existían por DNI.`}
-                                    </p>
-                                    <p className="text-xs text-gray-500 mt-1">
-                                        Archivo: {geoVictoriaImportResult.fileName} · Omitidos: {geoVictoriaImportResult.skippedCount}
-                                    </p>
-                                </div>
-                            </div>
-                            <button
-                                onClick={() => setGeoVictoriaImportResult(null)}
-                                className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-white rounded-lg transition-colors"
-                                title="Cerrar notificación"
-                            >
-                                <X className="w-4 h-4" />
-                            </button>
-                        </div>
-
-                        {geoVictoriaImportResult.created.length > 0 && (
-                            <div className="flex flex-wrap gap-2 pl-12">
-                                {geoVictoriaImportResult.created.map((person) => (
-                                    <button
-                                        key={person.id}
-                                        onClick={() => setEditModal({ ...person, isNew: false })}
-                                        className="px-3 py-1.5 bg-white border border-emerald-200 text-emerald-800 hover:bg-emerald-100 rounded-xl text-xs font-bold transition-colors"
-                                        title="Completar datos del colaborador"
-                                    >
-                                        {person.name} {person.lastName}
-                                    </button>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                )}
-
-                {/* Stats Cards - Rediseño Minimalista */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-8">
-                    {/* Total Plantilla */}
-                    <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-6 flex items-center gap-4 transition-all hover:shadow-md">
-                        <div className="p-3 bg-indigo-50 rounded-xl">
-                            <Users className="w-6 h-6 text-indigo-600" />
-                        </div>
-                        <div>
-                            <p className="text-gray-500 text-xs font-bold uppercase tracking-wider">Total Plantilla</p>
-                            <p className="text-2xl font-black text-gray-900">{fullTimeCount + partTimeCount}</p>
+                            ))}
                         </div>
                     </div>
-
-                    {/* Full-Time */}
-                    <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-6 flex items-center gap-4 transition-all hover:shadow-md">
-                        <div className="p-3 bg-emerald-50 rounded-xl">
-                            <UserCheck className="w-6 h-6 text-emerald-600" />
-                        </div>
-                        <div>
-                            <p className="text-gray-500 text-xs font-bold uppercase tracking-wider">Full-Time</p>
-                            <p className="text-2xl font-black text-gray-900">{fullTimeCount}</p>
-                        </div>
-                    </div>
-
-                    {/* Part-Time */}
-                    <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-6 flex items-center gap-4 transition-all hover:shadow-md">
-                        <div className="p-3 bg-purple-50 rounded-xl">
-                            <Clock className="w-6 h-6 text-purple-600" />
-                        </div>
-                        <div>
-                            <p className="text-gray-500 text-xs font-bold uppercase tracking-wider">Part-Time</p>
-                            <p className="text-2xl font-black text-gray-900">{partTimeCount}</p>
-                        </div>
-                    </div>
-
-                    {/* Trainees */}
-                    <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-6 flex items-center gap-4 transition-all hover:shadow-md">
-                        <div className="p-3 bg-orange-50 rounded-xl">
-                            <Award className="w-6 h-6 text-orange-600" />
-                        </div>
-                        <div>
-                            <p className="text-gray-500 text-xs font-bold uppercase tracking-wider">Entrenamiento</p>
-                            <div className="flex items-baseline gap-2">
-                                <p className="text-2xl font-black text-gray-900">{traineeCount}</p>
-                                {traineeCount > 0 && (
-                                    <span className="text-[10px] font-bold text-orange-600">
-                                        (FT:{traineeFTCount} PT:{traineePTCount})
-                                    </span>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Carnets de Sanidad */}
-                    <div
-                        onClick={exportCarnetExpiringPDF}
-                        className="bg-white border border-red-100 rounded-2xl shadow-sm p-6 flex items-center gap-4 transition-all hover:shadow-md hover:border-red-200 cursor-pointer group"
-                    >
-                        <div className="p-3 bg-red-50 rounded-xl group-hover:bg-red-100 transition-colors">
-                            <AlertCircle className="w-6 h-6 text-red-600" />
-                        </div>
-                        <div>
-                            <p className="text-gray-500 text-xs font-bold uppercase tracking-wider">Carnets Críticos</p>
-                            <div className="flex items-baseline gap-2">
-                                <p className="text-2xl font-black text-red-600">
-                                    {staff.filter(s => {
-                                        if (!isActiveInSystem(s)) return false;
-                                        if (!s.sanitaryCardDate) return false;
-                                        const expiry = new Date(s.sanitaryCardDate + 'T00:00:00');
-                                        const now = new Date();
-                                        now.setHours(0, 0, 0, 0);
-                                        return expiry < now;
-                                    }).length}
-                                </p>
-                                <span className="text-[10px] font-bold text-red-400 uppercase">Vencidos</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
+                    {staffSummary.unassigned > 0 && (
+                        <p className="border-t border-gray-100 bg-gray-50 px-6 py-3 text-xs text-gray-600">{staffSummary.unassigned} persona(s) en plantilla pendiente(s) de asignar modalidad.</p>
+                    )}
+                </section>
 
                 {/* Filters and Actions - Refinado */}
                 <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-6 mb-8">
@@ -3112,13 +1760,16 @@ function AdminDashboard() {
                                 <option value="Trainee">🎓 Entrenamiento</option>
                             </select>
 
-                            <button
-                                onClick={() => setShowTrainingReport(true)}
-                                className="flex items-center gap-2 px-6 py-3 border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 hover:border-orange-200 hover:text-orange-600 transition-all text-sm font-bold whitespace-nowrap"
+                            <select
+                                aria-label="Ordenar carnets por vencimiento"
+                                value={carnetSort}
+                                onChange={(event) => setCarnetSort(event.target.value)}
+                                className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm font-medium text-gray-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                             >
-                                <Award className="w-4 h-4" />
-                                Avances
-                            </button>
+                                <option value="default">Orden original</option>
+                                <option value="asc">Carnet: vence primero</option>
+                                <option value="desc">Carnet: vence después</option>
+                            </select>
 
                             <button
                                 onClick={fetchAllStaffProfiles}
@@ -3155,7 +1806,11 @@ function AdminDashboard() {
                                         <th className="px-8 py-4 text-left text-[11px] font-bold text-gray-500 uppercase tracking-widest">Modalidad</th>
                                         <th className="px-6 py-4 text-left text-[11px] font-bold text-gray-500 uppercase tracking-widest">Rol</th>
                                         <th className="px-6 py-4 text-center text-[11px] font-bold text-gray-500 uppercase tracking-widest">App</th>
-                                        <th className="px-6 py-4 text-left text-[11px] font-bold text-gray-500 uppercase tracking-widest">Carnet Sanidad</th>
+                                        <th className="px-6 py-4 text-left text-[11px] font-bold text-gray-500 uppercase tracking-widest" aria-sort={carnetSort === 'asc' ? 'ascending' : carnetSort === 'desc' ? 'descending' : 'none'}>
+                                            <button type="button" onClick={() => setCarnetSort(value => value === 'asc' ? 'desc' : 'asc')} className="inline-flex items-center gap-2 text-left uppercase hover:text-indigo-600" title="Ordenar por fecha de vencimiento">
+                                                Carnet Sanidad <ArrowUpDown className="h-4 w-4" />
+                                            </button>
+                                        </th>
                                         <th className="px-6 py-4 text-center text-[11px] font-bold text-gray-500 uppercase tracking-widest">Estado</th>
                                         <th className="px-6 py-4 text-center text-[11px] font-bold text-gray-500 uppercase tracking-widest">Acciones</th>
                                     </tr>
@@ -3163,7 +1818,7 @@ function AdminDashboard() {
                                 <tbody className="bg-white divide-y divide-gray-200">
                                     {filteredStaff.map((colab, idx) => (
                                         <tr
-                                            key={idx}
+                                            key={colab.id || colab.uid || idx}
                                             className="hover:bg-blue-50 transition-colors duration-150 group"
                                         >
                                             <td data-label="Colaborador" className="px-8 py-5 relative">
@@ -3885,168 +2540,6 @@ function AdminDashboard() {
                         </div>
                     );
                 })()}
-
-                {showTrainingReport && (
-                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                        <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-fadeIn">
-                            <div className="px-6 py-4 bg-gradient-to-r from-orange-600 to-orange-700 flex justify-between items-center text-white">
-                                <h3 className="text-xl font-bold flex items-center gap-2">
-                                    <Award className="w-6 h-6" />
-                                    Reporte de Avances y Entrenamiento
-                                </h3>
-                                <button onClick={() => setShowTrainingReport(false)} className="text-white hover:bg-white/10 p-2 rounded-lg">
-                                    <X className="w-6 h-6" />
-                                </button>
-                            </div>
-
-                            <div className="p-6 overflow-y-auto flex-1 bg-gray-50">
-                                {/* Gráfico Analítico de Habilidades */}
-                                <div className="bg-white rounded-xl shadow-sm p-6 mb-10 border border-gray-200">
-                                    <div className="flex items-center gap-3 mb-6">
-                                        <div className="p-2 bg-indigo-100 rounded-lg">
-                                            <BarChart3 className="w-6 h-6 text-indigo-600" />
-                                        </div>
-                                        <div>
-                                            <h4 className="text-lg font-bold text-gray-800 uppercase tracking-tight">Análisis de Capacitación Global</h4>
-                                            <p className="text-xs text-gray-500 uppercase font-semibold">Tasa de dominio por posición (%)</p>
-                                        </div>
-                                    </div>
-
-                                    {skillStats.length > 0 ? (
-                                        <div className="h-[280px] w-full">
-                                            <ResponsiveContainer width="100%" height="100%">
-                                                <BarChart
-                                                    data={skillStats}
-                                                    layout="vertical"
-                                                    margin={{ top: 0, right: 80, left: 170, bottom: 0 }}
-                                                >
-                                                    <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="#f1f5f9" />
-                                                    <XAxis type="number" domain={[0, 100]} hide />
-                                                    <YAxis
-                                                        dataKey="name"
-                                                        type="category"
-                                                        axisLine={false}
-                                                        tickLine={false}
-                                                        width={160}
-                                                        interval={0}
-                                                        style={{
-                                                            fontSize: '10px',
-                                                            fontWeight: '700',
-                                                            fill: '#334155',
-                                                            textTransform: 'uppercase',
-                                                            letterSpacing: '0.025em'
-                                                        }}
-                                                    />
-                                                    <Tooltip
-                                                        cursor={{ fill: '#f1f5f9', radius: 4 }}
-                                                        content={({ active, payload }) => {
-                                                            if (active && payload && payload.length) {
-                                                                const data = payload[0].payload;
-                                                                return (
-                                                                    <div className="bg-white border-none shadow-xl rounded-xl p-3 text-xs flex flex-col gap-1 border border-gray-100">
-                                                                        <p className="font-bold text-gray-800 uppercase mb-1 border-b pb-1">{data.name}</p>
-                                                                        <div className="flex justify-between items-center gap-4">
-                                                                            <span className="text-gray-500 font-medium">Cobertura:</span>
-                                                                            <span className="text-indigo-600 font-bold">{data.percentage}%</span>
-                                                                        </div>
-                                                                        <div className="flex justify-between items-center gap-4">
-                                                                            <span className="text-gray-500 font-medium">Personal capaz:</span>
-                                                                            <span className="text-gray-800 font-bold">{data.count} pers.</span>
-                                                                        </div>
-                                                                    </div>
-                                                                );
-                                                            }
-                                                            return null;
-                                                        }}
-                                                    />
-                                                    <Bar
-                                                        dataKey="percentage"
-                                                        radius={[0, 6, 6, 0]}
-                                                        barSize={24}
-                                                        label={{
-                                                            position: 'right',
-                                                            formatter: (val) => `${val}%`,
-                                                            style: { fontSize: '11px', fontWeight: '800', fill: '#1e293b', marginLeft: '10px' }
-                                                        }}
-                                                    >
-                                                        {skillStats.map((entry, index) => (
-                                                            <Cell
-                                                                key={`cell-${index}`}
-                                                                fill={['#4f46e5', '#7c3aed', '#c026d3', '#db2777', '#dc2626', '#059669', '#0891b2'][index % 7]}
-                                                                fillOpacity={0.9}
-                                                                className="hover:fill-opacity-100 transition-all duration-300"
-                                                            />
-                                                        ))}
-                                                    </Bar>
-                                                </BarChart>
-                                            </ResponsiveContainer>
-                                        </div>
-                                    ) : (
-                                        <div className="h-[150px] flex items-center justify-center text-gray-400 bg-gray-50 rounded-xl border border-dashed border-gray-200">
-                                            <p className="text-sm font-medium">No hay datos suficientes para el análisis</p>
-                                        </div>
-                                    )}
-                                </div>
-
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                    {staff.filter(s => isStaffActive(s)).map(s => {
-                                        // Filtramos para contar solo las habilidades que existen en los requerimientos actuales de la tienda
-                                        const mastered = s.skills?.filter(skill => storeRequirements.includes(skill)).length || 0;
-                                        const total = storeRequirements.length || 1;
-                                        const percent = Math.round((mastered / total) * 100);
-
-                                        return (
-                                            <div key={s.id} className="border border-gray-100 rounded-xl p-4 bg-gray-50 flex flex-col gap-3">
-                                                <div className="flex justify-between items-start">
-                                                    <div>
-                                                        <p className="font-bold text-gray-800">{s.name} {s.lastName}</p>
-                                                        <p className="text-[10px] text-gray-500 uppercase tracking-widest">{s.position || 'Colaborador'}</p>
-                                                    </div>
-                                                    {s.isTrainee && (
-                                                        <span className="text-[9px] font-bold bg-orange-100 text-orange-600 px-2 py-0.5 rounded-full">TRAINEE</span>
-                                                    )}
-                                                </div>
-
-                                                <div className="space-y-1">
-                                                    <div className="flex justify-between text-[10px] font-bold text-gray-600 uppercase">
-                                                        <span>Progreso</span>
-                                                        <span>{percent}%</span>
-                                                    </div>
-                                                    <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden shadow-inner">
-                                                        <div
-                                                            className={`h-full transition-all duration-1000 ${percent === 100 ? 'bg-green-500' : 'bg-orange-500'}`}
-                                                            style={{ width: `${percent}%` }}
-                                                        />
-                                                    </div>
-                                                </div>
-
-                                                <div className="flex flex-wrap gap-1 mt-auto">
-                                                    {s.skills?.map(skill => (
-                                                        <span key={skill} className="text-[9px] bg-green-50 text-green-700 px-1.5 py-0.5 rounded border border-green-100">
-                                                            {skill}
-                                                        </span>
-                                                    ))}
-                                                    {(!s.skills || s.skills.length === 0) && (
-                                                        <span className="text-[9px] text-gray-400 italic">Sin habilidades registradas</span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-
-                            <div className="p-4 border-t bg-gray-50 flex justify-end">
-                                <button
-                                    onClick={() => setShowTrainingReport(false)}
-                                    className="px-6 py-2 bg-white border border-gray-300 rounded-lg text-gray-700 font-semibold hover:bg-gray-50 transition-colors"
-                                >
-                                    Cerrar Reporte
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
 
                 {showVHLModal && (
                     <VHLConsultation

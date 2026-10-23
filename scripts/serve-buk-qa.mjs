@@ -37,9 +37,9 @@ const entry=`import React from 'react';import {createRoot} from 'react-dom/clien
 localStorage.setItem('schedule_editor_week:qa-admin:qa-store','2026-10-12');
 createRoot(document.getElementById('root')).render(<BrowserRouter><div style={{padding:12,background:'#fff3cd',fontWeight:700}}>PRUEBA LOCAL BUK · 5 colaboradores ficticios · Guardar solo conserva datos de prueba · Semana 12 al 18 de octubre</div><WeeklyScheduleEditor/></BrowserRouter>);`;
 const result=await build({stdin:{contents:entry,loader:'jsx',resolveDir:process.cwd()},bundle:true,write:false,format:'iife',jsx:'automatic',loader:{'.png':'dataurl'},plugins:[{name:'qa-no-production',setup(b){
- b.onLoad({filter:/lib\/supabase\/firestoreCompat\.js$/},()=>({contents:transport,loader:'js'}));
- b.onLoad({filter:/contexts\/AuthContext\.jsx$/},()=>({contents:auth,loader:'js'}));
- b.onLoad({filter:/lib\/supabase\/client\.js$/},()=>({contents:'export const supabase={};',loader:'js'}));
+ b.onLoad({filter:/lib[\\/]supabase[\\/]firestoreCompat\.js$/},()=>({contents:transport,loader:'js'}));
+ b.onLoad({filter:/contexts[\\/]AuthContext\.jsx$/},()=>({contents:auth,loader:'js'}));
+ b.onLoad({filter:/lib[\\/]supabase[\\/]client\.js$/},()=>({contents:'export const supabase={};',loader:'js'}));
 }}]});
 const css=(await postcss([tailwind({content:['./src/**/*.{js,jsx}']})]).process('@tailwind base;@tailwind components;@tailwind utilities;',{from:undefined})).css;
 const js=result.outputFiles.find(file=>file.path.endsWith('.js'))?.text||result.outputFiles[0].text;

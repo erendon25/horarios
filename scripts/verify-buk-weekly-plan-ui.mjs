@@ -1,9 +1,12 @@
 // Full editor with isolated HTTP persistence. No production data or Supabase calls.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
+import {isAbsolute} from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import * as XLSX from 'xlsx';
-const {chromium}=await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const playwrightModule=process.env.PLAYWRIGHT_MODULE || 'playwright';
+const {chromium}=await import(isAbsolute(playwrightModule)?pathToFileURL(playwrightModule).href:playwrightModule);
 const port=process.env.BUK_QA_PORT || '4186';
 const base=`http://127.0.0.1:${port}`;
 const output='output/buk-weekly-plan';
@@ -164,10 +167,13 @@ try {
   await page.setViewportSize({width:390,height:844});
   await day.selectOption('monday');assert.equal(await rests.inputValue(),'3');
   await row.locator('td').nth(1).screenshot({path:`${output}/selector-mobile.png`});
-  const mode=page.getByLabel('Modalidad de planificación',{exact:true});
-  await mode.selectOption('legacy');await page.getByRole('button',{name:'Excel GeoVictoria',exact:true}).waitFor();
-  await mode.selectOption('buk');await rests.waitFor();assert.equal(await rests.inputValue(),'3');
-  pass('Cambio a tres descansos, navegación móvil y modo anterior conservan los turnos y el plan');
+  assert.equal(await page.getByLabel('Modalidad de planificación',{exact:true}).count(),0);
+  assert.equal(await page.getByRole('button',{name:'Excel GeoVictoria',exact:true}).count(),0);
+  await page.evaluate(()=>localStorage.setItem('schedule_mode:qa-admin:qa-store','legacy'));
+  await page.reload();await rests.waitFor();assert.equal(await rests.inputValue(),'3');
+  await page.getByRole('button',{name:'Excel BUK',exact:true}).waitFor();
+  assert.equal(await page.getByLabel('Modalidad de planificación',{exact:true}).count(),0);
+  pass('Cambio a tres descansos, navegación móvil y recarga conservan el plan; la preferencia anterior no reactiva GeoVictoria');
   assert.deepEqual(errors,[]);
   await writeFile(`${output}/resultado.json`,JSON.stringify({status:'PASS',passed,errors,scope:'Editor React real, borradores reales y transporte/identidades ficticias con persistencia HTTP aislada; sin escrituras de producción'},null,2));
 } catch(error) {
