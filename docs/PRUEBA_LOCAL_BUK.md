@@ -6,9 +6,9 @@ Esta revisión reemplaza el flujo inicial descrito más abajo. El selector aprob
 
 Feriado selecciona el primer horario aprobado del plan (Full-Time: 06:15–15:00). Se conservan datos históricos y horarios de otros días. Las extras no alteran BUK; sí amplían los horarios y totales del PDF compartido y del Excel de planificación. La prueba de una hora antes y dos después conserva 06:15–15:00 en BUK, muestra 05:15–17:00 en planificación y suma 51:00 semanales.
 
-Pasaron las pruebas de navegador de estos cambios, las cinco modalidades del Excel y las 30 pruebas de regresión. Solo se actualizó el canal temporal https://lc-scheduler--buk-prueba-dbooagb2.web.app; producción sigue con su versión anterior.
+Los cambios de BUK y RR. HH. se publicaron en producción el 23 de octubre de 2026 mediante la versión independiente `47f0482` (`codex/production-buk-rrhh`), basada en la versión previa `1836d20`. El editor tiene BUK como única modalidad; el Excel de planificación se conserva como reporte complementario. La combinación publicada pasó el build y las pruebas de navegador de modo único (3/3) y plan semanal (10/10).
 
-No se desplegaron estos cambios a producción ni se modificaron horarios reales.
+Se verificó que https://lc-scheduler.web.app sirve el artefacto nuevo y que no contiene el selector «Modalidad de planificación» ni recupera la preferencia antigua. El despliegue no modificó horarios reales. La actualización completa de ventas y venta sugestiva permanece pendiente del acceso a Supabase para instalar sus migraciones.
 
 ## Abrir la prueba
 
