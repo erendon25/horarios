@@ -4,6 +4,7 @@ import React, { useEffect, useState, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { supabase } from '../lib/supabase/client';
+import { invokeStaffAccountAdmin } from '../services/staffAccountAdmin';
 import { readHolidayLedger, summarizeHolidayLedger } from '../services/holidayBalance';
 import HolidayBalancePanel from './HolidayBalancePanel';
 import HolidayPaymentSettings from './HolidayPaymentSettings';
@@ -197,6 +198,7 @@ const isHrManagementRole = (...values) => {
 
 function AdminDashboard() {
     const { logout, currentUser, userRole, userData } = useAuth();
+    const [busyAccountId, setBusyAccountId] = useState(null);
     const navigate = useNavigate();
     const [staff, setStaff] = useState([]);
     const staffSummary = useMemo(() => summarizeStaffDashboard(staff), [staff]);
@@ -337,16 +339,18 @@ function AdminDashboard() {
 
 
     const handleUnlinkEmail = async (staffId) => {
+        if (userRole !== 'superadmin' || busyAccountId) return;
+        if (!window.confirm('¿Desvincular esta cuenta? Se eliminarán su acceso y archivos personales; el perfil y su historial se conservarán.')) return;
         try {
-            await updateDoc(doc(db, 'staff_profiles', staffId), {
-                email: '',
-                uid: '' // ❗ Quitamos también el UID
-            });
-            alert('Correo y UID desvinculados exitosamente.');
+            setBusyAccountId(staffId);
+            await invokeStaffAccountAdmin(supabase, { operation: 'unlink_staff', staffId });
+            alert('Correo y acceso desvinculados.');
             await fetchAllStaffProfiles();
         } catch (err) {
             console.error("Error desvinculando correo:", err);
-            alert("No se pudo desvincular el correo.");
+            alert(err.message);
+        } finally {
+            setBusyAccountId(null);
         }
     };
     const fetchStoreName = async () => {
@@ -1241,26 +1245,19 @@ function AdminDashboard() {
     };
 
     const handleDelete = async (uid, id) => {
-        const confirm = window.confirm("¿Estás seguro de que deseas eliminar este usuario?");
+        if (userRole !== 'superadmin' || busyAccountId) return;
+        const confirm = window.confirm('¿Eliminar definitivamente este colaborador? Se borrarán su perfil, cuenta de acceso, archivos y registros relacionados. Esta acción no se puede deshacer.');
         if (!confirm) return;
         try {
-            // Eliminar el perfil de staff (siempre permitido para admins)
-            await deleteDoc(doc(db, "staff_profiles", id));
-
-            // Intentar eliminar el perfil de acceso (puede fallar por permisos;
-            // si falla, el perfil ya fue eliminado y el documento huérfano es inofensivo)
-            if (uid) {
-                try {
-                    await deleteDoc(doc(db, "users", uid));
-                } catch (permErr) {
-                    console.warn("No se pudo eliminar el documento de users (permisos). El perfil fue eliminado correctamente.", permErr.message);
-                }
-            }
-
+            setBusyAccountId(id);
+            await invokeStaffAccountAdmin(supabase, { operation: 'delete_staff', staffId: id });
             setStaff((prev) => prev.filter((u) => u.id !== id));
+            alert('Colaborador y cuenta eliminados definitivamente.');
         } catch (err) {
             console.error("Error al eliminar usuario:", err);
             alert(`Error al eliminar: ${err.message}`);
+        } finally {
+            setBusyAccountId(null);
         }
     };
 
@@ -1384,7 +1381,7 @@ function AdminDashboard() {
 
                             {/* Acciones Finales */}
                             <div className="flex items-center gap-3 ml-auto">
-                                {currentUser?.email === 'erickrendon18@gmail.com' && (
+                                {userRole === 'superadmin' && (
                                     <button
                                         onClick={() => navigate("/superadmin")}
                                         className="flex items-center gap-2 px-4 py-2 bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-xl transition-all text-xs font-black uppercase tracking-widest border border-purple-100 shadow-sm shadow-purple-50"
@@ -1829,7 +1826,7 @@ function AdminDashboard() {
                                                     >
                                                         {`${colab.name} ${colab.lastName}`}
                                                     </span>
-                                                    {colab.isTrainee && (
+                                                    {colab.isTrainee && userRole === 'superadmin' && (
                                                         <span className="text-xs font-bold text-orange-700 bg-orange-100 border border-orange-300 px-2 py-0.5 rounded-full w-fit flex items-center gap-1">
                                                             🎓 TRAINEE
                                                         </span>
@@ -1978,14 +1975,8 @@ function AdminDashboard() {
                                                 <div className="flex flex-col gap-2">
                                                     {colab.isTrainee && (
                                                         <button
-                                                            onClick={async () => {
-                                                                if (!window.confirm(`¿Finalizar el entrenamiento de ${colab.name} ${colab.lastName} y eliminar del sistema?`)) return;
-                                                                try {
-                                                                    await deleteDoc(doc(db, "staff_profiles", colab.id));
-                                                                    if (colab.uid) await deleteDoc(doc(db, "users", colab.uid));
-                                                                    setStaff(prev => prev.filter(u => u.id !== colab.id));
-                                                                } catch (err) { alert('Error: ' + err.message); }
-                                                            }}
+                                                            onClick={() => handleDelete(colab.uid, colab.id)}
+                                                            disabled={Boolean(busyAccountId)}
                                                             className="text-[9px] font-black uppercase tracking-tighter text-orange-700 bg-orange-50 hover:bg-orange-100 border border-orange-200 px-2 py-1.5 rounded-lg transition-all"
                                                         >
                                                             Fin Entrenamiento
@@ -2012,16 +2003,17 @@ function AdminDashboard() {
                                                         </button>
                                                         <button
                                                             onClick={() => handleDelete(colab.uid, colab.id)}
-                                                            className="p-2 text-red-600 hover:bg-red-50 rounded-xl transition-all"
-                                                            title="Eliminar"
+                                                            className="p-2 text-red-600 hover:bg-red-50 rounded-xl transition-all disabled:opacity-30"
+                                                            disabled={userRole !== 'superadmin' || Boolean(busyAccountId)}
+                                                            title={userRole === 'superadmin' ? 'Eliminar definitivamente' : 'La eliminación definitiva debe realizarla un superadmin'}
                                                         >
                                                             <Trash2 className="w-4 h-4" />
                                                         </button>
                                                         <button
                                                             onClick={() => handleUnlinkEmail(colab.id)}
                                                             className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-all disabled:opacity-30"
-                                                            disabled={!colab.uid}
-                                                            title="Desvincular correo"
+                                                            disabled={!colab.uid || userRole !== 'superadmin' || Boolean(busyAccountId)}
+                                                            title={userRole === 'superadmin' ? 'Desvincular correo' : 'La desvinculación debe realizarla un superadmin'}
                                                         >
                                                             <Unlink className="w-4 h-4" />
                                                         </button>

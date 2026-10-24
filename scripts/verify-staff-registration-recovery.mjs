@@ -5,7 +5,7 @@ const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
 const auth = `import {useState} from 'react';
 const user={id:'test-person',email:'person@example.com'};
 export function useAuth(){const [pending,setPending]=useState(true);return {currentUser:user,needsStaffLink:pending,userRole:pending?null:'collaborator',refreshAccess:async()=>setPending(false),logout:async()=>{},register:async()=>{}}}`;
-const transport = `export const supabase={functions:{async invoke(name,{body}){
+const transport = `export const supabase={auth:{getSession:async()=>({data:{session:{access_token:'test',user:{id:'test-person'}}}})},functions:{async invoke(name,{body}){
 window.qaCalls.push(body.operation);
 if(body.operation==='recover_existing_staff_link'){
  if(window.qa==='recover')return {data:{linked:true}};
@@ -20,8 +20,8 @@ const bundle = await build({
   stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import {BrowserRouter,Routes,Route} from 'react-router-dom';import Register from './src/components/Register.jsx';createRoot(document.getElementById('root')).render(<BrowserRouter><Routes><Route path='/register' element={<Register/>}/><Route path='/staff' element={<div>Acceso recuperado</div>}/></Routes></BrowserRouter>);`, loader:'jsx',resolveDir:process.cwd() },
   bundle:true,write:false,format:'iife',jsx:'automatic',loader:{'.png':'dataurl'},
   plugins:[{name:'test-transport',setup(b){
-    b.onLoad({filter:/contexts\/AuthContext(?:\.jsx)?$/},()=>({contents:auth,loader:'js'}));
-    b.onLoad({filter:/lib\/supabase\/client\.js$/},()=>({contents:transport,loader:'js'}));
+    b.onLoad({filter:/contexts[\\/]AuthContext(?:\.jsx)?$/},()=>({contents:auth,loader:'js'}));
+    b.onLoad({filter:/lib[\\/]supabase[\\/]client\.js$/},()=>({contents:transport,loader:'js'}));
   }}],
 });
 const js=bundle.outputFiles[0].text;

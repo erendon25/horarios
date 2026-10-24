@@ -12,6 +12,8 @@ const json = (status: number, body: unknown) => new Response(JSON.stringify(body
   headers: { ...corsHeaders, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
 });
 const normalizeEmail = (value: unknown) => typeof value === "string" ? value.trim().toLowerCase() : "";
+const isUuid = (value: unknown): value is string => typeof value === "string"
+  && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 const roleForPosition = (position: unknown) =>
   typeof position === "string" && position.trim().toUpperCase() === "ENTRENADOR" ? "trainer" : "collaborator";
 const limaToday = () => new Intl.DateTimeFormat("en-CA", {
@@ -350,6 +352,109 @@ Deno.serve(async (request) => {
       role,
       metadataUpdated: !metadata.error,
     });
+  }
+
+  if (["list_admins", "update_admin", "delete_admin", "delete_staff", "unlink_staff"].includes(body.operation)) {
+    const { data: caller, error: callerError } = await service.from("user_profiles")
+      .select("role,status").eq("id", authData.user.id).maybeSingle();
+    if (callerError || caller?.role !== "superadmin" || caller.status !== "active") {
+      return json(403, { error: "forbidden" });
+    }
+
+    if (body.operation === "list_admins") {
+      const admins = [];
+      for (let offset = 0; ; offset += 500) {
+        const { data, error } = await service.from("user_profiles")
+          .select("id,email,first_name,last_name,store_id,status,created_at,stores(name,is_active)")
+          .eq("role", "admin").order("created_at", { ascending: false }).order("id")
+          .range(offset, offset + 499);
+        if (error) return json(500, { error: "admin_list_failed" });
+        admins.push(...(data ?? []));
+        if (!data || data.length < 500) break;
+      }
+      return json(200, { admins });
+    }
+
+    if (body.operation === "update_admin") {
+      const email = normalizeEmail(body.email);
+      const password = body.password;
+      if (!isUuid(body.userId) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+        || (password !== undefined && (typeof password !== "string" || password.length < 6))) {
+        return json(400, { error: "invalid_admin_details" });
+      }
+      const { data: target, error } = await service.from("user_profiles")
+        .select("id,role").eq("id", body.userId).maybeSingle();
+      if (error) return json(500, { error: "account_lookup_failed" });
+      if (!target || target.role !== "admin") return json(404, { error: "admin_not_found" });
+      const limit = await consumeRateLimit(service, authData.user.id, "update-admin", 20);
+      if (limit.error) return limit.error;
+      // The Auth email trigger synchronizes application profiles in the same transaction.
+      const { error: updateError } = await service.auth.admin.updateUserById(target.id, {
+        email, email_confirm: true, ...(password === undefined ? {} : { password }),
+      });
+      if (updateError) {
+        const duplicate = ["email_exists", "user_already_exists"].includes(updateError.code ?? "");
+        return json(duplicate ? 409 : 400, { error: duplicate ? "email_already_registered" : "admin_update_failed" });
+      }
+      return json(200, { updated: true, userId: target.id, email });
+    }
+
+    const deletingAdmin = body.operation === "delete_admin";
+    if (deletingAdmin ? !isUuid(body.userId)
+      : typeof body.staffId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(body.staffId)) {
+      return json(400, { error: deletingAdmin ? "invalid_admin_id" : "invalid_staff_id" });
+    }
+    const rpcName = deletingAdmin ? "superadmin_manage_admin_account" : "superadmin_manage_staff_account";
+    const limit = await consumeRateLimit(service, authData.user.id, deletingAdmin ? "delete-admin" : "manage-staff", 20);
+    if (limit.error) return limit.error;
+    let staffId = body.staffId;
+    if (!deletingAdmin && !isUuid(staffId)) {
+      // Older browser builds may send the imported Firestore document id.
+      // Resolve it once after authorization, then use the same UUID for both RPCs.
+      const { data: staff, error } = await service.from("staff_profiles")
+        .select("id").eq("firestore_id", staffId).maybeSingle();
+      if (error) return json(500, { error: "staff_lookup_failed" });
+      if (!staff) return json(404, { error: "staff_not_found" });
+      staffId = staff.id;
+    }
+    const targetArgs = deletingAdmin ? { p_user_id: body.userId } : { p_staff_id: staffId };
+    // Forward the verified caller JWT so the transaction independently checks auth.uid().
+    const callerClient = createClient(supabaseUrl, serviceRoleKey, {
+      global: { headers: { Authorization: `Bearer ${accessToken}` } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const transactionError = (error: { message: string; code?: string }, removedFiles = false) => {
+      const known = ["forbidden", "staff_not_found", "admin_not_found", "protected_account", "account_link_conflict", "account_has_storage_objects", "account_has_shared_files"];
+      const code = known.find((value) => error.message === value);
+      if (removedFiles) return json(409, { error: "staff_operation_after_files_failed" });
+      if (code) return json(code === "forbidden" ? 403 : ["staff_not_found", "admin_not_found"].includes(code) ? 404 : 409, { error: code });
+      console.error("staff account transaction failed", { code: error.code, message: error.message });
+      return json(500, { error: "staff_operation_failed" });
+    };
+    const { data: plan, error: planError } = await callerClient.rpc(rpcName, {
+      ...targetArgs, p_operation: `inspect_${body.operation}`,
+    });
+    if (planError) return transactionError(planError);
+    if (!plan || !Array.isArray(plan.files)) return json(500, { error: "staff_operation_failed" });
+    // Storage is outside the SQL transaction. Remove only the verified account's
+    // objects through the Storage API; retries also handle partially removed files.
+    const buckets = new Map<string, string[]>();
+    for (const file of plan.files) {
+      const paths = buckets.get(file.bucket) ?? [];
+      paths.push(file.path);
+      buckets.set(file.bucket, paths);
+    }
+    for (const [bucket, paths] of buckets) {
+      for (let offset = 0; offset < paths.length; offset += 100) {
+        const { error } = await service.storage.from(bucket).remove(paths.slice(offset, offset + 100));
+        if (error) return json(500, { error: "staff_files_removal_failed" });
+      }
+    }
+    const { data, error } = await callerClient.rpc(rpcName, {
+      ...targetArgs, p_operation: body.operation, ...(deletingAdmin ? {} : { p_expected_user_id: plan.userId }),
+    });
+    if (error) return transactionError(error, plan.files.length > 0);
+    return json(200, data);
   }
 
   if (body.operation === "create_admin") {

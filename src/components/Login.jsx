@@ -9,10 +9,9 @@ function Login() {
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [message, setMessage] = useState('');
-    const [submitted, setSubmitted] = useState(false);
     const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
-    const { login, currentUser, userRole, needsStaffLink, resetPassword } = useAuth();
+    const { login, currentUser, userRole, needsStaffLink, accessLoading, resetPassword } = useAuth();
 
 
     const handleSubmit = async (e) => {
@@ -22,7 +21,6 @@ function Login() {
             setMessage('');
             setLoading(true);
             await login(email, password);
-            setSubmitted(true);
         } catch {
             setError('Credenciales incorrectas.');
         } finally {
@@ -50,7 +48,7 @@ function Login() {
     };
 
     useEffect(() => {
-        if (submitted && currentUser) {
+        if (currentUser && !accessLoading && !loading) {
             if (needsStaffLink) {
                 navigate('/register');
                 return;
@@ -73,7 +71,7 @@ function Login() {
                     break;
             }
         }
-    }, [submitted, currentUser, userRole, needsStaffLink, navigate]);
+    }, [currentUser, userRole, needsStaffLink, accessLoading, loading, navigate]);
 
 
 

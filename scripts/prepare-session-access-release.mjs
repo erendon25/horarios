@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { access, cp, mkdir, readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+const base = resolve('tmp/admin-delete-release');
+const destination = resolve('tmp/session-access-release');
+assert.equal(createHash('sha256').update(await readFile(`${base}/build/assets/index-VBFEW1Bo.js`)).digest('hex'), 'c22cc1f0810765801394ed16d1349b97ae0ae2cce4528f6c4aa8dd7d7344a009');
+await assert.rejects(access(destination), 'Refusing to overwrite an existing release');
+await mkdir(destination, { recursive: true });
+for (const directory of ['src', 'public', 'build', 'scripts']) await cp(`${base}/${directory}`, `${destination}/${directory}`, { recursive: true });
+for (const file of ['.env', '.firebaserc', 'firebase.json', 'package.json', 'package-lock.json', 'vite.config.js', 'index.html', 'tailwind.config.js', 'postcss.config.js']) await cp(`${base}/${file}`, `${destination}/${file}`);
+for (const file of ['contexts/AuthContext.jsx', 'components/Login.jsx', 'components/Register.jsx', 'components/PrivateRoute.jsx', 'components/RequireAdmin.jsx', 'components/SuperAdminDashboard.jsx', 'components/AdminDashboard.jsx', 'services/staffAccountAdmin.js', 'lib/supabase/invokeAuthenticatedFunction.js']) await cp(`src/${file}`, `${destination}/src/${file}`);
+console.log(`Prepared session access release: ${destination}`);

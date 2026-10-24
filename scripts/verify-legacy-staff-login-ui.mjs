@@ -29,7 +29,7 @@ export const supabase={auth:{
 const bundle = await build({
   stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import {BrowserRouter,Routes,Route} from 'react-router-dom';import {AuthProvider,useAuth} from './src/contexts/AuthContext.jsx';import Login from './src/components/Login.jsx';function Staff(){const {userData}=useAuth();return <div>Mi plataforma: {userData?.name} · {userData?.staffProfileId}</div>};createRoot(document.getElementById('root')).render(<BrowserRouter><AuthProvider><Routes><Route path='/login' element={<Login/>}/><Route path='/staff' element={<Staff/>}/><Route path='/admin' element={<div>Administración</div>}/><Route path='/register' element={<div>Selección de colaborador</div>}/></Routes></AuthProvider></BrowserRouter>);`, loader:'jsx',resolveDir:process.cwd() },
   bundle:true,write:false,format:'iife',jsx:'automatic',loader:{'.png':'dataurl'},
-  plugins:[{name:'test-transport',setup(b){b.onLoad({filter:/lib\/supabase\/client\.js$/},()=>({contents:transport,loader:'js'}));}}],
+  plugins:[{name:'test-transport',setup(b){b.onLoad({filter:/lib[\\/]supabase[\\/]client\.js$/},()=>({contents:transport,loader:'js'}));}}],
 });
 const js=bundle.outputFiles[0].text;
 const server=createServer((req,res)=>{res.setHeader('Content-Type',req.url==='/bundle.js'?'text/javascript':'text/html');res.end(req.url==='/bundle.js'?js:'<div id="root"></div><script src="/bundle.js"></script>');});

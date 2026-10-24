@@ -47,6 +47,8 @@ const unwrapSpecialValues = (next, previous = {}) => Object.fromEntries(
 
 const mapStaff = (row) => ({
   ...legacy(row),
+  // Imported data can contain a Firestore id; actions must use the native row id.
+  id: row.id,
   uid: row.user_id,
   storeId: row.store_id,
   name: row.first_name,

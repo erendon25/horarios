@@ -17,18 +17,27 @@ export function AuthProvider({ children }) {
   const [userData, setUserData] = useState(null);
   const [needsStaffLink, setNeedsStaffLink] = useState(false);
   const [accessVersion, setAccessVersion] = useState(0);
+  const [accessLoading, setAccessLoading] = useState(true);
+  const [accessError, setAccessError] = useState('');
 
   useEffect(() => {
     let active = true;
+    let revision = 0;
+    let loadedUserId = null;
+    const timers = new Set();
 
-    const loadAccess = async (user) => {
-      if (!active) return;
+    const loadAccess = async (user, requestRevision) => {
+      const isCurrent = () => active && requestRevision === revision;
+      if (!isCurrent()) return;
       if (!user) {
+        loadedUserId = null;
         setCurrentUser(null);
         setUserRole(null);
         setUserData(null);
         setNeedsStaffLink(false);
         setLoading(false);
+        setAccessLoading(false);
+        setAccessError('');
         return;
       }
 
@@ -39,31 +48,49 @@ export function AuthProvider({ children }) {
         .eq("id", user.id)
         .maybeSingle();
 
-      let { data: profile, error } = await fetchProfile();
+      let profile, error;
+      try {
+        const result = await fetchProfile();
+        profile = result.data;
+        error = result.error;
+      } catch (err) {
+        error = err;
+      }
       const today = new Intl.DateTimeFormat("en-CA", {
         timeZone: "America/Lima",
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
       }).format(new Date());
-      if (!active) return;
+      if (!isCurrent()) return;
       const cessationDate = profile?.staff_profiles?.cessation_date;
 
       if (error) {
-        await supabase.auth.signOut();
-        setCurrentUser(null);
         setUserRole(null);
         setUserData(null);
         setNeedsStaffLink(false);
+        setAccessError('No se pudo cargar tu acceso. Reintenta la conexión para continuar.');
         setLoading(false);
+        setAccessLoading(false);
         return;
       }
 
+      setAccessError('');
+      if (['admin', 'superadmin'].includes(profile?.role) && profile.status !== 'active') {
+        setUserRole(null);
+        setUserData(null);
+        setNeedsStaffLink(false);
+        setAccessError('Tu acceso administrativo está inactivo. Contacta al responsable del sistema.');
+        setLoading(false);
+        setAccessLoading(false);
+        return;
+      }
+      const staffRole = ['collaborator', 'trainer'].includes(profile?.role);
       const requiresStaffSelection = !profile
         || profile.status !== "active"
-        || (["collaborator", "trainer"].includes(profile.role)
+        || (staffRole
           && (profile.registration_pending || !profile.staff_profile_id || !profile.store_id))
-        || Boolean(cessationDate && today > cessationDate);
+        || (staffRole && Boolean(cessationDate && today > cessationDate));
       if (requiresStaffSelection) {
         // La cuenta Auth permanece iniciada para que un alta nueva o un
         // reingreso pueda elegir tienda y perfil laboral libre. El servidor
@@ -77,6 +104,8 @@ export function AuthProvider({ children }) {
         });
         setNeedsStaffLink(true);
         setLoading(false);
+        setAccessLoading(false);
+        loadedUserId = user.id;
         return;
       }
 
@@ -96,27 +125,57 @@ export function AuthProvider({ children }) {
       setUserData(legacyShape);
       setNeedsStaffLink(false);
       setLoading(false);
+      setAccessLoading(false);
+      loadedUserId = user.id;
     };
 
-    supabase.auth.getSession().then(({ data }) => loadAccess(data.session?.user ?? null));
+    const queueAccess = (user) => {
+      const requestRevision = ++revision;
+      if (user?.id !== loadedUserId) setAccessLoading(true);
+      // Finish Supabase's auth callback before making authenticated API calls.
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        void loadAccess(user, requestRevision);
+      }, 0);
+      timers.add(timer);
+    };
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      void loadAccess(session?.user ?? null);
+      queueAccess(session?.user ?? null);
+    });
+    supabase.auth.getSession().then(({ data }) => {
+      if (active && revision === 0) queueAccess(data.session?.user ?? null);
+    }).catch(() => {
+      if (active && revision === 0) {
+        setAccessError('No se pudo recuperar tu sesión. Reintenta la conexión.');
+        setLoading(false);
+        setAccessLoading(false);
+      }
     });
 
     return () => {
       active = false;
+      timers.forEach(clearTimeout);
       listener.subscription.unsubscribe();
     };
   }, [accessVersion]);
 
   const refreshAccess = async () => {
-    setLoading(true);
+    setAccessError('');
+    setAccessLoading(true);
     setAccessVersion((version) => version + 1);
   };
 
   const login = async (email, password) => {
-    const data = await loginWithLegacyRecovery(supabase, email, password);
+    setAccessLoading(true);
+    let data;
+    try {
+      data = await loginWithLegacyRecovery(supabase, email, password);
+    } catch (error) {
+      setAccessLoading(false);
+      throw error;
+    }
     if (data.legacyRecovered) {
+      setAccessLoading(true);
       // A partial Auth account may have loaded as unlinked before recovery.
       // Wait for its updated profile before Login chooses a destination.
       setNeedsStaffLink(false);
@@ -150,8 +209,14 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ currentUser, userRole, userData, needsStaffLink, refreshAccess, login, logout, register, resetPassword, updatePassword }}>
-      {!loading && children}
+    <AuthContext.Provider value={{ currentUser, userRole, userData, needsStaffLink, accessLoading, refreshAccess, login, logout, register, resetPassword, updatePassword }}>
+      {!loading && (accessError ? <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6">
+        <div className="max-w-md rounded-xl bg-white p-6 shadow space-y-4">
+          <p role="alert">{accessError}</p>
+          <button onClick={refreshAccess} className="rounded-lg bg-blue-600 px-4 py-2 text-white">Reintentar</button>
+          <button onClick={() => logout().catch(() => setAccessError('No se pudo cerrar la sesión. Reintenta.'))} className="ml-3 rounded-lg border px-4 py-2">Cerrar sesión</button>
+        </div>
+      </div> : children)}
     </AuthContext.Provider>
   );
 }

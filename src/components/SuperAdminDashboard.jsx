@@ -10,11 +10,12 @@ import {
   setDoc,
   deleteDoc,
   updateDoc,
-  getDocs,
-  writeBatch,
-  updateDoc as updateFirestoreDoc
+  getDocs
 } from '../lib/supabase/firestoreCompat';
 import { supabase } from '../lib/supabase/client';
+import { invokeAuthenticatedFunction } from '../lib/supabase/invokeAuthenticatedFunction';
+import { invokeStaffAccountAdmin } from '../services/staffAccountAdmin';
+import AdminAccountsPanel from './AdminAccountsPanel';
 import { toast } from 'react-toastify';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -42,6 +43,8 @@ function SuperAdminDashboard() {
   const [adminEmail, setAdminEmail] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
   const [creatingAdmin, setCreatingAdmin] = useState(false);
+  const [adminRefreshKey, setAdminRefreshKey] = useState(0);
+  const [busyStaffId, setBusyStaffId] = useState(null);
   const [selectedStoreId, setSelectedStoreId] = useState('');
   const [editingStoreId, setEditingStoreId] = useState(null);
   const [staffProfiles, setStaffProfiles] = useState([]);
@@ -49,7 +52,7 @@ function SuperAdminDashboard() {
   const [storeFilter, setStoreFilter] = useState('');
   const [modalityFilter, setModalityFilter] = useState('');
   const weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-  const { logout, currentUser } = useAuth();
+  const { logout, currentUser, userData } = useAuth();
   const navigate = useNavigate();
 
   const db = getFirestore();
@@ -133,7 +136,7 @@ function SuperAdminDashboard() {
       }
 
       setCreatingAdmin(true);
-      const { error } = await supabase.functions.invoke('staff-account-admin', {
+      const { error } = await invokeAuthenticatedFunction(supabase, 'staff-account-admin', {
         body: {
           operation: 'create_admin',
           email: adminEmail.trim().toLowerCase(),
@@ -156,6 +159,7 @@ function SuperAdminDashboard() {
       }
 
       toast.success('Administrador creado exitosamente');
+      setAdminRefreshKey((key) => key + 1);
       setAdminEmail('');
       setAdminPassword('');
       setSelectedStoreId('');
@@ -168,53 +172,41 @@ function SuperAdminDashboard() {
   };
 
   const handleUnlinkEmail = async (id) => {
-    const confirm = window.confirm('¿Estás seguro de desvincular el correo del colaborador?');
+    if (busyStaffId) return;
+    const confirm = window.confirm('¿Desvincular el correo del colaborador? Se eliminarán su cuenta de acceso y sus archivos personales. Su perfil, horarios y evaluaciones se conservarán.');
     if (!confirm) return;
 
     try {
-      const { error } = await supabase.functions.invoke('staff-account-admin', {
-        body: { operation: 'unlink_staff', staffId: id },
-      });
-      if (error) throw error;
+      setBusyStaffId(id);
+      await invokeStaffAccountAdmin(supabase, { operation: 'unlink_staff', staffId: id });
       toast.success('Correo y acceso desvinculados');
       setStaffProfiles(prev => prev.map(p => p.id === id ? { ...p, email: '', uid: '' } : p));
     } catch (error) {
-      toast.error('No se pudo desvincular el correo');
+      toast.error(error.message);
+    } finally {
+      setBusyStaffId(null);
     }
-  };
-
-  const deleteRefsInBatches = async (refs) => {
-    const uniqueRefs = Array.from(
-      new Map(refs.filter(Boolean).map(ref => [ref.path, ref])).values()
-    );
-
-    for (let i = 0; i < uniqueRefs.length; i += 450) {
-      const batch = writeBatch(db);
-      uniqueRefs.slice(i, i + 450).forEach(ref => batch.delete(ref));
-      await batch.commit();
-    }
-
-    return uniqueRefs.length;
   };
 
   const handleDeleteStaffCompletely = async (profile) => {
+    if (busyStaffId) return;
     const fullName = `${profile.name || ''} ${profile.lastName || ''}`.trim() || 'este colaborador';
     const confirm = window.confirm(
-      `Eliminar definitivamente a ${fullName}?\n\nSe borrarán de Supabase su perfil, cuenta, horarios, solicitudes, feriados, ceses, horas extra y evaluaciones relacionadas.`
+      `Eliminar definitivamente a ${fullName}?\n\nSe borrarán de Supabase su perfil, cuenta, archivos personales, horarios, solicitudes, feriados, ceses, horas extra y evaluaciones relacionadas. Esta acción no se puede deshacer.`
     );
     if (!confirm) return;
 
     try {
+      setBusyStaffId(profile.id);
       const staffId = profile.id;
-      const { data, error } = await supabase.functions.invoke('staff-account-admin', {
-        body: { operation: 'delete_staff', staffId },
-      });
-      if (error) throw error;
+      await invokeStaffAccountAdmin(supabase, { operation: 'delete_staff', staffId });
       setStaffProfiles(prev => prev.filter(p => p.id !== staffId));
-      toast.success(`Colaborador y cuenta eliminados de Supabase (${data?.deletedRecords ?? 1} perfil).`);
+      toast.success('Colaborador, cuenta y registros relacionados eliminados definitivamente.');
     } catch (error) {
       console.error('Error eliminando usuario completamente:', error);
       toast.error('No se pudo eliminar el usuario por completo: ' + error.message);
+    } finally {
+      setBusyStaffId(null);
     }
   };
 
@@ -290,7 +282,7 @@ function SuperAdminDashboard() {
             </div>
             
             <div className="flex gap-3 items-center">
-              {currentUser?.email === 'erickrendon18@gmail.com' && (
+              {userData?.storeId && (
                   <button 
                     onClick={() => navigate('/admin')}
                     className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg shadow hover:shadow-lg transform hover:-translate-y-0.5 transition-all text-sm font-medium"
@@ -444,7 +436,8 @@ function SuperAdminDashboard() {
                 <div>
                   <label className="text-xs font-bold text-gray-700 mb-1 block">Contraseña Temporal</label>
                   <input 
-                    type="text" 
+                    type="password"
+                    autoComplete="new-password"
                     className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none font-mono" 
                     placeholder="Min. 6 caracteres" 
                     value={adminPassword} 
@@ -461,6 +454,11 @@ function SuperAdminDashboard() {
              </div>
           </div>
         </div>
+
+        <AdminAccountsPanel refreshKey={adminRefreshKey} onDeleted={(userId) => {
+          setStaffProfiles((previous) => previous.map((profile) => profile.uid === userId
+            ? { ...profile, uid: '', email: '' } : profile));
+        }} />
 
         {/* DIRECTORIO DE COLABORADORES */}
         <div className="bg-white rounded-2xl shadow border border-gray-100 p-6">
@@ -536,6 +534,7 @@ function SuperAdminDashboard() {
                    {profile.email && (
                      <button 
                        onClick={() => handleUnlinkEmail(profile.id)} 
+                       disabled={Boolean(busyStaffId)}
                        className="flex items-center justify-center gap-1 w-full text-xs font-bold text-red-600 hover:text-white border border-red-200 hover:bg-red-500 py-1.5 rounded transition-colors"
                      >
                        <Link2Off className="w-3 h-3" />
@@ -544,6 +543,7 @@ function SuperAdminDashboard() {
                    )}
                    <button
                      onClick={() => handleDeleteStaffCompletely(profile)}
+                     disabled={Boolean(busyStaffId)}
                      className="flex items-center justify-center gap-1 w-full text-xs font-black text-white bg-red-600 hover:bg-red-700 border border-red-700 py-1.5 rounded transition-colors"
                      title="Eliminar todos los registros de Supabase vinculados a este colaborador"
                    >

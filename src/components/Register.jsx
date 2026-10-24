@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { supabase } from "../lib/supabase/client";
+import { invokeAuthenticatedFunction } from '../lib/supabase/invokeAuthenticatedFunction';
 import background from "../assets/background.png";
 
 function Register() {
@@ -32,7 +33,7 @@ function Register() {
     setError("");
     const loadRegistration = async () => {
       // Un vínculo vigente debe recuperarse antes de ofrecer un nuevo registro.
-      const { data: recovery, error: recoveryError } = await supabase.functions.invoke("staff-account-admin", {
+      const { data: recovery, error: recoveryError } = await invokeAuthenticatedFunction(supabase, "staff-account-admin", {
         body: { operation: "recover_existing_staff_link" },
       });
       if (!active) return;
@@ -49,7 +50,7 @@ function Register() {
         await refreshAccessRef.current();
         return;
       }
-      const { data, error: requestError } = await supabase.functions.invoke("staff-account-admin", {
+      const { data, error: requestError } = await invokeAuthenticatedFunction(supabase, "staff-account-admin", {
         body: { operation: "list_registration_stores" },
       });
       if (!active) return;
@@ -77,7 +78,7 @@ function Register() {
     let active = true;
     setLoading(true);
     setError("");
-    supabase.functions.invoke("staff-account-admin", {
+    invokeAuthenticatedFunction(supabase, "staff-account-admin", {
       body: { operation: "list_registration_staff", storeId },
     }).then(({ data, error: requestError }) => {
       if (!active) return;
@@ -127,7 +128,7 @@ function Register() {
     setError("");
     setMessage("");
     setLoading(true);
-    const { data, error: requestError } = await supabase.functions.invoke("staff-account-admin", {
+    const { data, error: requestError } = await invokeAuthenticatedFunction(supabase, "staff-account-admin", {
       body: { operation: "claim_staff_account", staffId, dni },
     });
     if (requestError || !data?.linked) {

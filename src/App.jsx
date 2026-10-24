@@ -25,8 +25,6 @@ import TrainingApp from './components/Training/TrainingApp';
 import CompetitionLoadBoundary from './components/Competition/CompetitionLoadBoundary';
 
 
-<ToastContainer />
-
 const CompetitionApp = lazy(() => import('./components/Competition/CompetitionApp'));
 
 function AppRouter() {
@@ -150,6 +148,7 @@ function App() {
     <Router>
       <AuthProvider>
         <AppRouter />
+        <ToastContainer />
       </AuthProvider>
     </Router>
   );
