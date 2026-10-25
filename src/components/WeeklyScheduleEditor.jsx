@@ -1,6 +1,6 @@
 import { isBukScheduleExempt } from '../services/scheduleStaffOrder.js';
 // WeeklyScheduleEditor.jsx – versión con detección de conflictos corregida
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { getFirestore, writeBatch, doc, getDoc, setDoc, collection, query, where, onSnapshot, getDocs } from '../lib/supabase/firestoreCompat';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -8,6 +8,7 @@ import { useScheduleDraft } from '../hooks/useScheduleDraft';
 import ScheduleHeatmapMatrix from './ScheduleHeatmapMatrix';
 import WeeklyScheduleExcelButton from './WeeklyScheduleExcelButton';
 import { getHeatmapAssignments, getProjectionForDay, getExportShiftSegments, getPositionSegments, canLimitPositionCoverage } from '../services/scheduleExportData';
+import { summarizeProjectionHours } from '../services/projectionHours';
 import SchedulePositionControl from './SchedulePositionControl';
 import { validateHeatmapTransfer, replacePositionInterval } from '../services/heatmapTransfers';
 import { exportGroupedPositionsPDF, exportExtraHoursReport } from './PDFExport';
@@ -123,6 +124,7 @@ export default function WeeklyScheduleEditor() {
     const [positions, setPositions] = useState([]);
     const [projectionPositions, setProjectionPositions] = useState([]);
     const [requirements, setRequirements] = useState({});
+    const [projectionLoadState, setProjectionLoadState] = useState({ storeId: '', status: 'loading' });
     const [selectedDay, setSelectedDay] = useState('monday');
     const [weekStartDate, setWeekStartDate] = useState('');
     const [modalityFilter, setModalityFilter] = useState('Todos');
@@ -248,23 +250,37 @@ export default function WeeklyScheduleEditor() {
     useEffect(() => {
         if (!storeId) return;
 
+        let active = true;
+        setProjectionLoadState({ storeId, status: 'loading' });
+        setProjectionPositions([]);
+        setRequirements({});
         const ref = doc(db, 'stores', storeId, 'config', 'schedule_projection');
         const unsubscribe = onSnapshot(
             ref,
             (snapshot) => {
+                if (!active) return;
                 const data = snapshot.exists() ? snapshot.data() : {};
                 setProjectionPositions(Array.isArray(data.positions) ? data.positions : []);
                 setRequirements(data.requirements || {});
+                setProjectionLoadState({ storeId, status: 'ready' });
             },
             (error) => {
+                if (!active) return;
                 console.error('Error loading projection positions:', error);
                 setProjectionPositions([]);
                 setRequirements({});
+                setProjectionLoadState({ storeId, status: 'error' });
             }
         );
 
-        return () => unsubscribe();
+        return () => { active = false; unsubscribe(); };
     }, [storeId, db]);
+
+    const projectionHours = useMemo(() => {
+        const status = projectionLoadState.storeId === storeId ? projectionLoadState.status : 'loading';
+        if (status !== 'ready') return { dayHours: null, weekHours: null, availableDays: 0, completeWeek: false, status };
+        return { ...summarizeProjectionHours(requirements, projectionPositions, selectedDay), status };
+    }, [requirements, projectionPositions, selectedDay, storeId, projectionLoadState]);
 
     // Los requerimientos del editor semanal salen solo de Proyeccion.
 
@@ -2134,11 +2150,12 @@ export default function WeeklyScheduleEditor() {
                                     );
                                 })()}
                             </div>
-                            <div className="h-[calc(100vh-280px)] overflow-auto">
+                            <div className="h-[calc(100vh-280px)] min-h-[400px] overflow-auto">
                                 <ScheduleHeatmapMatrix
                                     key={`${wk}-${selectedDay}`}
                                     assigned={assignedArray}
                                     requirements={safeRequirements}
+                                    projectionHours={projectionHours}
                                     date={getSelectedDateStr() || ''}
                                     dayLabel={weekdayLabels[selectedDay]}
                                     canExport={userRole === 'admin' || userRole === 'superadmin'}

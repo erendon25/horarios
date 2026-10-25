@@ -6,6 +6,7 @@ import { HEATMAP_LEGEND, downloadHeatmap } from '../services/heatmapExport';
 import { HOURS, buildHeatmapRows } from '../services/heatmapModel';
 import HeatmapTransferForm from './HeatmapTransferForm';
 import { heatmapMinutes } from '../services/heatmapTransfers';
+import ProjectionHoursSummary from './ProjectionHoursSummary';
 export { HOURS } from '../services/heatmapModel';
 
 const EMPTY_ASSIGNED = [];
@@ -15,7 +16,7 @@ const HEATMAP_CELL_SIZE = 20;
 const HEATMAP_POSITION_WIDTH = 120;
 const HEATMAP_TABLE_WIDTH = HEATMAP_POSITION_WIDTH + HOURS.length * HEATMAP_CELL_SIZE;
 
-export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requirements = EMPTY_REQUIREMENTS, date = '', dayLabel = '', canExport = false, onTransfer }) {
+export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requirements = EMPTY_REQUIREMENTS, date = '', dayLabel = '', canExport = false, onTransfer, projectionHours }) {
     const rows = useMemo(() => buildHeatmapRows(assigned, requirements), [assigned, requirements]);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const dialogRef = useRef(null);
@@ -135,6 +136,7 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                         </button>
                     </div>
                 </div>
+                <ProjectionHoursSummary summary={projectionHours} dayLabel={dayLabel || 'Día'} />
                 <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
                     {HEATMAP_LEGEND.map((item) => (
                         <span key={item.color} className="inline-flex items-center gap-1">

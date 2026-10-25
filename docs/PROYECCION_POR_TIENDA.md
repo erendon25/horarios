@@ -22,6 +22,16 @@ Servicio/punto de venta, Driver y Fijo conservan sus parámetros y fórmulas ind
 
 El máximo cero explícito en Vestido y áreas por factor conserva la regla anterior: deja demanda automática cero antes de aplicar el mínimo; un ajuste manual sigue teniendo prioridad. Máximos vacíos no se convierten en cero. Servicio, Driver y Fijo conservan su tratamiento anterior del máximo cero.
 
+## Horas hombre proyectadas en el mapa de cobertura
+
+El encabezado del Heatmap muestra HH proyección del día seleccionado y el total de los siete días guardados. El Total HH programadas del editor conserva su cálculo anterior, con las horas extra aparte. El nuevo resumen usa la matriz original de requisitos de la tienda: cada celda representa personas durante una hora. Tres personas en cuatro celdas horarias suman12HH. No se cuentan los carriles, los colores, las cuatro subdivisiones visuales ni la marca inclusiva de salida.
+
+Si no hay matriz guardada, se muestra Sin proyección; una matriz explícita con cero o vacía representa0HH. Si faltan días, el total muestra Parcial y cuántos días están disponibles. Carga y error no se muestran como cero. Se conserva la suma completa de columnas de la proyección, aunque alguna quede fuera del rango visible del mapa. Filtros de personal no alteran el requerimiento proyectado.
+
+La referencia es la última configuración guardada por día de la semana. El modelo actual no almacena una semana calendario objetivo, por lo que el resumen no atribuye esos requisitos a la semana del histórico de ventas ni a una fecha objetivo inventada. La suscripción se mantiene limitada a la tienda y descarta callbacks de una tienda anterior.
+
+El resumen también aparece en pantalla completa y se actualiza con la configuración en vivo. El mapa conserva su pintado, transferencias, exportaciones y celdas. En pantallas bajas el contenedor mantiene una altura mínima para conservar una región visible de la matriz.
+
 En Configurar Posiciones, el selector Área Vestido guarda el identificador estable `vestidoPositionId`, independiente del nombre del área. En datos anteriores se descubre una sola vez el identificador histórico cocina o un nombre exacto Vestido normalizado; los casos ambiguos requieren selección explícita. Renombrar conserva la referencia. Al quitar la referencia o borrar esa área queda pendiente elegir otra, sin reasignación silenciosa. La posición elegida usa venta/VHL aunque su lógica o factor anterior fueran diferentes; los controles muestran la fórmula efectiva y conservan los parámetros anteriores para recuperarlos al cambiar de referencia.
 
 ## Verificación
@@ -32,9 +42,11 @@ PLAYWRIGHT_MODULE=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/no
 node --test src/services/projectionStaffColor.test.js
 node --test src/services/projectionStaffGroups.test.js
 node --test src/services/projectionDemand.test.js
+node --test src/services/projectionHours.test.js
 PLAYWRIGHT_MODULE=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-projection-staff-colors.mjs
 PLAYWRIGHT_MODULE=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-projection-staff-groups.mjs
 PLAYWRIGHT_MODULE=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-projection-demand.mjs
+PLAYWRIGHT_MODULE=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-projection-hours.mjs
 PGLITE_MODULE=/tmp/planilla-backend-runtime/node_modules/@electric-sql/pglite/dist/index.js node scripts/test-projection-store-config-db.mjs
 node --experimental-vm-modules --test src/services/positionCoverage.test.js src/lib/supabase/firestoreCompat.test.js
 ```
@@ -56,3 +68,5 @@ Para los colores por límite, `scripts/prepare-projection-colors-production.mjs`
 Para el desglose por grupo, `scripts/prepare-projection-groups-production.mjs` parte de `tmp/projection-colors-production`, verifica `index-Dwb8sZbS.js` y conserva sus assets. Usar `--overlay --with-groups-service` y publicar desde `tmp/projection-groups-production`, únicamente con los cambios de Dashboard, ProjectionPositionFields y projectionStaffGroups. No requiere una migración de base de datos ni asigna grupos automáticamente a tiendas reales.
 
 Para la demanda basada en Vestido, `scripts/prepare-projection-demand-production.mjs` parte de `tmp/projection-groups-production` y verifica `index-W7znYIRA.js`. Usar `--overlay` y publicar desde `tmp/projection-demand-production`. Solo se superponen Dashboard, ProjectionPositionFields, projectionVhl y projectionDemand; se conservan los assets y las demás fuentes del release anterior.
+
+Para HH en el Heatmap, `scripts/prepare-heatmap-projection-hours-production.mjs` parte de `tmp/projection-demand-production`, verifica `index-CFz8nLOS.js` y conserva sus assets. Usar `--overlay` y publicar desde `tmp/heatmap-projection-hours-production`. Solo se superponen WeeklyScheduleEditor, ScheduleHeatmapMatrix, ProjectionHoursSummary y projectionHours. Una comprobación estructural exige que el código del mapa sea idéntico al anterior al retirar el import, prop y nodo nuevos del resumen.
