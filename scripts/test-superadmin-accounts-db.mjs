@@ -42,6 +42,7 @@ try {
   await db.exec(await readFile(migration, 'utf8'));
   await db.exec(await readFile('supabase/migrations/20261024190312_superadmin_delete_active_staff.sql', 'utf8'));
   await db.exec(await readFile('supabase/migrations/20261024191003_superadmin_delete_administrators.sql', 'utf8'));
+  await db.exec(await readFile(process.env.STAFF_DELETE_MIGRATION || 'supabase/migrations/20261025011205_store_admin_delete_staff.sql', 'utf8'));
 
   const store = await scalar('insert into stores default values returning id');
   async function fixture(role = 'collaborator', status = 'active') {
@@ -63,9 +64,11 @@ try {
     try { return await operation(); } finally { await db.exec('reset role'); }
   };
   const manage = (item, operation = 'delete_staff') => scalar('select public.superadmin_manage_staff_account($1,$2,$3)', [item.staff, operation, item.user]);
-  for (const caller of [admin, target, other, inactive]) {
+  for (const caller of [target, other, inactive]) {
     await assert.rejects(() => asUser(caller.user, () => manage(target)), /forbidden/);
   }
+  assert.equal((await asUser(admin.user, () => manage(target, 'inspect_delete_staff'))).userId, target.user);
+  await assert.rejects(() => asUser(admin.user, () => manage(target, 'unlink_staff')), /forbidden/);
   await assert.rejects(() => asUser('', () => manage(target)), /forbidden/);
   await db.exec('set role anon');
   await assert.rejects(() => manage(target), /permission denied/);

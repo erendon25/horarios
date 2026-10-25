@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   collection,
   query,
@@ -16,6 +16,7 @@ import { supabase } from '../lib/supabase/client';
 import { invokeAuthenticatedFunction } from '../lib/supabase/invokeAuthenticatedFunction';
 import { invokeStaffAccountAdmin } from '../services/staffAccountAdmin';
 import AdminAccountsPanel from './AdminAccountsPanel';
+import StaffModal from './StaffModal';
 import { toast } from 'react-toastify';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -48,6 +49,9 @@ function SuperAdminDashboard() {
   const [selectedStoreId, setSelectedStoreId] = useState('');
   const [editingStoreId, setEditingStoreId] = useState(null);
   const [staffProfiles, setStaffProfiles] = useState([]);
+  const [editingStaff, setEditingStaff] = useState(null);
+  const [staffLoadError, setStaffLoadError] = useState('');
+  const [staffRefreshing, setStaffRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [storeFilter, setStoreFilter] = useState('');
   const [modalityFilter, setModalityFilter] = useState('');
@@ -65,14 +69,33 @@ function SuperAdminDashboard() {
     return () => unsubscribe();
   }, [db]);
 
-  useEffect(() => {
-    const fetchStaff = async () => {
+  const fetchStaff = useCallback(async () => {
+    setStaffLoadError('');
+    setStaffRefreshing(true);
+    try {
       const snapshot = await getDocs(collection(db, 'staff_profiles'));
       const result = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setStaffProfiles(result);
-    };
-    fetchStaff();
+      return true;
+    } catch (error) {
+      console.error('Error al actualizar colaboradores:', error);
+      setStaffLoadError('No se pudo actualizar el listado de colaboradores. Los datos visibles pueden estar desactualizados.');
+      return false;
+    } finally {
+      setStaffRefreshing(false);
+    }
   }, [db]);
+
+  useEffect(() => {
+    fetchStaff();
+  }, [fetchStaff]);
+
+  const handleStaffSaved = async () => {
+    setEditingStaff(null);
+    const refreshed = await fetchStaff();
+    if (refreshed) toast.success('Información del colaborador actualizada.');
+    else toast.info('La información se guardó. Actualiza el listado para ver los cambios.');
+  };
 
   const handleCreateStore = async () => {
     try {
@@ -192,7 +215,7 @@ function SuperAdminDashboard() {
     if (busyStaffId) return;
     const fullName = `${profile.name || ''} ${profile.lastName || ''}`.trim() || 'este colaborador';
     const confirm = window.confirm(
-      `Eliminar definitivamente a ${fullName}?\n\nSe borrarán de Supabase su perfil, cuenta, archivos personales, horarios, solicitudes, feriados, ceses, horas extra y evaluaciones relacionadas. Esta acción no se puede deshacer.`
+      `¿Eliminar definitivamente a ${fullName}?\n\nSe eliminarán su perfil, cuenta de acceso, archivos personales y registros relacionados. Los horarios históricos se conservarán como texto, sin usuario vinculado. Esta acción no se puede deshacer.`
     );
     if (!confirm) return;
 
@@ -505,6 +528,16 @@ function SuperAdminDashboard() {
              </div>
            </div>
 
+           {staffLoadError && (
+             <div role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+               <p>{staffLoadError}</p>
+               <button type="button" onClick={fetchStaff} disabled={staffRefreshing}
+                 className="mt-2 rounded-lg border border-red-300 px-3 py-2 font-bold disabled:opacity-50">
+                 Actualizar colaboradores
+               </button>
+             </div>
+           )}
+
            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
              {filteredStaff.map((profile) => (
                <div key={profile.id} className="p-4 border rounded-xl hover:shadow-lg transition-all bg-white relative group flex flex-col h-full border-gray-200">
@@ -531,6 +564,15 @@ function SuperAdminDashboard() {
                  </div>
 
                  <div className="mt-4 pt-3 border-t border-gray-100 space-y-2">
+                   <button
+                     type="button"
+                     onClick={() => setEditingStaff(profile)}
+                     disabled={Boolean(busyStaffId) || staffRefreshing}
+                     className="flex items-center justify-center gap-1 w-full text-xs font-bold text-blue-700 border border-blue-200 hover:bg-blue-50 py-1.5 rounded transition-colors disabled:opacity-50"
+                   >
+                     <Edit className="w-3 h-3" />
+                     Editar información
+                   </button>
                    {profile.email && (
                      <button 
                        onClick={() => handleUnlinkEmail(profile.id)} 
@@ -565,6 +607,15 @@ function SuperAdminDashboard() {
         </div>
 
       </main>
+      {editingStaff && (
+        <StaffModal
+          key={editingStaff.id}
+          staff={editingStaff}
+          userData={userData}
+          onClose={() => setEditingStaff(null)}
+          onSaved={handleStaffSaved}
+        />
+      )}
     </div>
   );
 }

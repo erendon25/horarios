@@ -1,7 +1,8 @@
 const messages = {
-  forbidden: 'Solo un superadmin activo puede realizar esta acción.',
+  forbidden: 'No tienes permiso para realizar esta acción. Los administradores solo pueden eliminar colaboradores de su propia tienda.',
   missing_session: 'Inicia sesión nuevamente para continuar.',
   invalid_session: 'Tu sesión venció. Inicia sesión nuevamente.',
+  inactive_store: 'La tienda no está activa. No se puede eliminar personal de esta tienda.',
   invalid_admin_details: 'Revisa el correo y la contraseña (mínimo 6 caracteres).',
   admin_not_found: 'No se encontró la cuenta de administrador. Actualiza la lista.',
   admin_list_failed: 'No se pudo cargar la lista de administradores.',
@@ -21,6 +22,14 @@ const messages = {
   rate_limited: 'Has realizado demasiados intentos. Espera unos minutos.',
   rate_limit_unavailable: 'El servicio no está disponible temporalmente. Inténtalo nuevamente.',
 };
+
+export function canDeleteStaffProfile(actor, staff) {
+  if (!staff?.id || !actor) return false;
+  if (actor.userId && staff.uid === actor.userId) return false;
+  if (['admin', 'superadmin'].includes(staff.accountRole)) return false;
+  if (actor.role === 'superadmin') return true;
+  return actor.role === 'admin' && Boolean(actor.storeId) && staff.storeId === actor.storeId;
+}
 
 export async function invokeStaffAccountAdmin(client, body) {
   const { data, error } = await invokeAuthenticatedFunction(client, 'staff-account-admin', { body });

@@ -356,9 +356,16 @@ Deno.serve(async (request) => {
 
   if (["list_admins", "update_admin", "delete_admin", "delete_staff", "unlink_staff"].includes(body.operation)) {
     const { data: caller, error: callerError } = await service.from("user_profiles")
-      .select("role,status").eq("id", authData.user.id).maybeSingle();
-    if (callerError || caller?.role !== "superadmin" || caller.status !== "active") {
+      .select("role,status,store_id").eq("id", authData.user.id).maybeSingle();
+    const scopedStaffDelete = caller?.role === "admin" && body.operation === "delete_staff";
+    if (callerError || caller?.status !== "active" || (caller.role !== "superadmin" && !scopedStaffDelete)) {
       return json(403, { error: "forbidden" });
+    }
+    if (scopedStaffDelete) {
+      if (!caller.store_id) return json(403, { error: "forbidden" });
+      const { data: store, error: storeError } = await service.from("stores")
+        .select("is_active").eq("id", caller.store_id).maybeSingle();
+      if (storeError || !store?.is_active) return json(403, { error: "inactive_store" });
     }
 
     if (body.operation === "list_admins") {
@@ -411,8 +418,9 @@ Deno.serve(async (request) => {
     if (!deletingAdmin && !isUuid(staffId)) {
       // Older browser builds may send the imported Firestore document id.
       // Resolve it once after authorization, then use the same UUID for both RPCs.
-      const { data: staff, error } = await service.from("staff_profiles")
-        .select("id").eq("firestore_id", staffId).maybeSingle();
+      let lookup = service.from("staff_profiles").select("id").eq("firestore_id", staffId);
+      if (scopedStaffDelete) lookup = lookup.eq("store_id", caller.store_id);
+      const { data: staff, error } = await lookup.maybeSingle();
       if (error) return json(500, { error: "staff_lookup_failed" });
       if (!staff) return json(404, { error: "staff_not_found" });
       staffId = staff.id;
@@ -424,10 +432,10 @@ Deno.serve(async (request) => {
       auth: { autoRefreshToken: false, persistSession: false },
     });
     const transactionError = (error: { message: string; code?: string }, removedFiles = false) => {
-      const known = ["forbidden", "staff_not_found", "admin_not_found", "protected_account", "account_link_conflict", "account_has_storage_objects", "account_has_shared_files"];
+      const known = ["forbidden", "inactive_store", "staff_not_found", "admin_not_found", "protected_account", "account_link_conflict", "account_has_storage_objects", "account_has_shared_files"];
       const code = known.find((value) => error.message === value);
       if (removedFiles) return json(409, { error: "staff_operation_after_files_failed" });
-      if (code) return json(code === "forbidden" ? 403 : ["staff_not_found", "admin_not_found"].includes(code) ? 404 : 409, { error: code });
+      if (code) return json(["forbidden", "inactive_store"].includes(code) ? 403 : ["staff_not_found", "admin_not_found"].includes(code) ? 404 : 409, { error: code });
       console.error("staff account transaction failed", { code: error.code, message: error.message });
       return json(500, { error: "staff_operation_failed" });
     };

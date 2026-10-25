@@ -30,8 +30,9 @@ async function run(operation, options = {}) {
         select() { return this; }, eq(key, value) { if (key === 'id') id = value; if (table === 'staff_profiles') lookups.push({ key, value }); return this; }, order() { return this; },
         async range(start) { return { data: options.paged && start === 0 ? Array.from({ length: 500 }, (_, i) => ({ id: i })) : [{ id: targetId, email: 'admin@example.com' }] }; },
         async maybeSingle() {
-          if (table === 'staff_profiles') return { data: options.missingStaff ? null : { id: targetId }, error: options.lookupError };
-          return { data: id === 'caller' ? { role: options.role ?? 'superadmin', status: options.status ?? 'active' } : { id: targetId, role: options.targetRole ?? 'admin' } };
+          if (table === 'staff_profiles') return { data: options.missingStaff ? null : { id: targetId, store_id: options.targetStoreId ?? 'store-a' }, error: options.lookupError };
+          if (table === 'stores') return { data: options.missingStore ? null : { id: 'store-a', is_active: options.storeActive ?? true }, error: options.storeError };
+          return { data: id === 'caller' ? { role: options.role ?? 'superadmin', status: options.status ?? 'active', store_id: Object.hasOwn(options, 'storeId') ? options.storeId : 'store-a' } : { id: targetId, role: options.targetRole ?? 'admin' } };
         },
       };
     },
@@ -48,7 +49,7 @@ async function run(operation, options = {}) {
 }
 
 for (const operation of ['list_admins', 'update_admin', 'delete_admin', 'delete_staff', 'unlink_staff']) {
-  for (const role of ['admin', 'trainer', 'collaborator']) {
+  for (const role of operation === 'delete_staff' ? ['trainer', 'collaborator'] : ['admin', 'trainer', 'collaborator']) {
     const result = await run(operation, { role });
     assert.equal(result.status, 403); assert.equal(result.writes.length, 0);
   }
@@ -93,7 +94,7 @@ for (const operation of ['delete_staff', 'unlink_staff']) {
   for (const [options, status, error] of [
     [{ missingStaff: true }, 404, 'staff_not_found'],
     [{ lookupError: {} }, 500, 'staff_lookup_failed'],
-    [{ role: 'admin' }, 403, 'forbidden'],
+    ...(operation === 'unlink_staff' ? [[{ role: 'admin' }, 403, 'forbidden']] : []),
     [{ rateLimited: true }, 429, 'rate_limited'],
   ]) {
     const rejected = await run(operation, { ...options, body: { staffId: legacyId } });
@@ -104,6 +105,31 @@ for (const operation of ['delete_staff', 'unlink_staff']) {
   assert.equal((await run(operation, { body: { staffId: legacyId }, rpcError: { message: 'protected_account' } })).status, 409);
   assert.equal((await run(operation, { rateLimited: true })).status, 429);
   assert.equal((await run(operation, { rpcError: { message: 'protected_account' } })).status, 409);
+}
+
+// Store administrators gain only delete_staff, with their live store checked
+// before inspecting files. SQL independently enforces the target's store.
+const adminOwn = await run('delete_staff', { role: 'admin' });
+assert.equal(adminOwn.status, 200);
+assert.equal(adminOwn.writes[0].args.p_operation, 'inspect_delete_staff');
+assert.equal(adminOwn.writes[1].args.p_operation, 'delete_staff');
+assert.equal(adminOwn.clients[1][2].global.headers.Authorization, 'Bearer verified-token');
+const adminLegacy = await run('delete_staff', { role: 'admin', body: { staffId: 'legacy-store-staff' } });
+assert.equal(adminLegacy.status, 200);
+assert.ok(adminLegacy.lookups.some(lookup => lookup.key === 'store_id' && lookup.value === 'store-a'), 'Legacy admin lookup must be scoped to caller store');
+for (const options of [
+  { storeId: null }, { missingStore: true }, { storeActive: false }, { storeError: {} },
+]) {
+  const blocked = await run('delete_staff', { role: 'admin', ...options });
+  assert.equal(blocked.status >= 400, true);
+  assert.equal(blocked.writes.length, 0, 'Missing/inactive store must be denied before RPC, Storage or Auth writes');
+}
+for (const message of ['forbidden', 'protected_account', 'account_link_conflict']) {
+  const blocked = await run('delete_staff', { role: 'admin', files: [{ bucket: 'profile-photos', path: `${targetId}/private.jpg` }], rpcError: { message } });
+  assert.equal(blocked.status, message === 'forbidden' ? 403 : 409);
+  assert.equal(blocked.writes.length, 1, 'Only readonly inspect RPC may run after a target permission failure');
+  assert.equal(blocked.writes[0].args.p_operation, 'inspect_delete_staff');
+  assert.equal(blocked.writes.some(write => write.bucket || write.values || write.args?.p_operation === 'delete_staff'), false);
 }
 const files = [{ bucket: 'profile-photos', path: `${targetId}/profile.jpg` }];
 const adminDeleted = await run('delete_admin', { files });

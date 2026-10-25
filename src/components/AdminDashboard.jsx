@@ -4,7 +4,7 @@ import React, { useEffect, useState, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { supabase } from '../lib/supabase/client';
-import { invokeStaffAccountAdmin } from '../services/staffAccountAdmin';
+import { canDeleteStaffProfile, invokeStaffAccountAdmin } from '../services/staffAccountAdmin';
 import { readHolidayLedger, summarizeHolidayLedger } from '../services/holidayBalance';
 import HolidayBalancePanel from './HolidayBalancePanel';
 import HolidayPaymentSettings from './HolidayPaymentSettings';
@@ -1245,10 +1245,13 @@ function AdminDashboard() {
         }
     };
 
-    const handleDelete = async (uid, id) => {
-        if (userRole !== 'superadmin' || busyAccountId) return;
-        const confirm = window.confirm('¿Eliminar definitivamente este colaborador? Se borrarán su perfil, cuenta de acceso, archivos y registros relacionados. Esta acción no se puede deshacer.');
+    const handleDelete = async (colab) => {
+        const actor = { role: userRole, storeId: userData?.storeId, userId: currentUser?.uid };
+        if (!canDeleteStaffProfile(actor, colab) || busyAccountId) return;
+        const fullName = `${colab.name || ''} ${colab.lastName || ''}`.trim() || 'este colaborador';
+        const confirm = window.confirm(`¿Eliminar definitivamente a ${fullName}? Se borrarán su perfil, cuenta de acceso, archivos y registros relacionados. Los horarios se conservarán como texto histórico sin un usuario vinculado. Esta acción no se puede deshacer.`);
         if (!confirm) return;
+        const id = colab.id;
         try {
             setBusyAccountId(id);
             await invokeStaffAccountAdmin(supabase, { operation: 'delete_staff', staffId: id });
@@ -1977,8 +1980,8 @@ function AdminDashboard() {
                                                 <div className="flex flex-col gap-2">
                                                     {colab.isTrainee && (
                                                         <button
-                                                            onClick={() => handleDelete(colab.uid, colab.id)}
-                                                            disabled={Boolean(busyAccountId)}
+                                                            onClick={() => handleDelete(colab)}
+                                                            disabled={!canDeleteStaffProfile({ role: userRole, storeId: userData?.storeId, userId: currentUser?.uid }, colab) || Boolean(busyAccountId)}
                                                             className="text-[9px] font-black uppercase tracking-tighter text-orange-700 bg-orange-50 hover:bg-orange-100 border border-orange-200 px-2 py-1.5 rounded-lg transition-all"
                                                         >
                                                             Fin Entrenamiento
@@ -2004,10 +2007,10 @@ function AdminDashboard() {
                                                             <Pencil className="w-4 h-4" />
                                                         </button>
                                                         <button
-                                                            onClick={() => handleDelete(colab.uid, colab.id)}
+                                                            onClick={() => handleDelete(colab)}
                                                             className="p-2 text-red-600 hover:bg-red-50 rounded-xl transition-all disabled:opacity-30"
-                                                            disabled={userRole !== 'superadmin' || Boolean(busyAccountId)}
-                                                            title={userRole === 'superadmin' ? 'Eliminar definitivamente' : 'La eliminación definitiva debe realizarla un superadmin'}
+                                                            disabled={!canDeleteStaffProfile({ role: userRole, storeId: userData?.storeId, userId: currentUser?.uid }, colab) || Boolean(busyAccountId)}
+                                                            title={canDeleteStaffProfile({ role: userRole, storeId: userData?.storeId, userId: currentUser?.uid }, colab) ? 'Eliminar definitivamente' : 'Solo puedes eliminar colaboradores de tu tienda'}
                                                         >
                                                             <Trash2 className="w-4 h-4" />
                                                         </button>
