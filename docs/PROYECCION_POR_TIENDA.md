@@ -14,6 +14,16 @@ En Distribución de Personal e Ingresos por Hora, cada posición tiene una escal
 
 Cada posición incluye Grupo del área: Producción o Servicio. La clasificación se elige explícitamente, por separado de la lógica de cálculo. La tabla muestra por hora ambos subtotales y mantiene el total general. Las áreas antiguas sin grupo muestran un aviso y el subtotal Sin clasificar; siguen contando en el total. Este subtotal desaparece al clasificar todas las áreas. Las nuevas posiciones requieren nombre y grupo. Reclasificar mueve las cantidades entre subtotales sin alterar dotación, límites, ajustes manuales ni colores. El grupo se guarda dentro de la configuración propia de cada tienda.
 
+## VHL de Vestido y factores de otras áreas
+
+Vestido usa venta de la hora ÷ VHL general; S/2,000 con VHL S/500 produce cuatro personas. Primero se aplica su redondeo a personas completas, mínimo, tope o ajuste manual. Las áreas con lógica Personas de Vestido × factor multiplican esa cantidad final por su propio factor, y después aplican su redondeo, mínimo y tope. Con cuatro personas en Vestido y factor0.5 resultan dos; si la proporción bruta da ocho pero el tope de Vestido lo limita a cinco, factor0.7 usa cinco y produce cuatro. Un ajuste manual de Vestido también se propaga a las áreas dependientes, incluso en una hora sin venta. Los ajustes manuales propios de otras áreas siguen teniendo prioridad.
+
+Servicio/punto de venta, Driver y Fijo conservan sus parámetros y fórmulas independientes. Los límites son los configurados por el administrador; una posición personalizada llamada Masa no recibe un tope oculto si su máximo está vacío. Los factores vacíos mantienen las referencias anteriores de Sheetout/Masa/Landing, y los factores inválidos no generan demanda.
+
+El máximo cero explícito en Vestido y áreas por factor conserva la regla anterior: deja demanda automática cero antes de aplicar el mínimo; un ajuste manual sigue teniendo prioridad. Máximos vacíos no se convierten en cero. Servicio, Driver y Fijo conservan su tratamiento anterior del máximo cero.
+
+En Configurar Posiciones, el selector Área Vestido guarda el identificador estable `vestidoPositionId`, independiente del nombre del área. En datos anteriores se descubre una sola vez el identificador histórico cocina o un nombre exacto Vestido normalizado; los casos ambiguos requieren selección explícita. Renombrar conserva la referencia. Al quitar la referencia o borrar esa área queda pendiente elegir otra, sin reasignación silenciosa. La posición elegida usa venta/VHL aunque su lógica o factor anterior fueran diferentes; los controles muestran la fórmula efectiva y conservan los parámetros anteriores para recuperarlos al cambiar de referencia.
+
 ## Verificación
 
 ```sh
@@ -21,8 +31,10 @@ PLAYWRIGHT_MODULE=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/no
 PLAYWRIGHT_MODULE=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-projection-modal-responsive.mjs
 node --test src/services/projectionStaffColor.test.js
 node --test src/services/projectionStaffGroups.test.js
+node --test src/services/projectionDemand.test.js
 PLAYWRIGHT_MODULE=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-projection-staff-colors.mjs
 PLAYWRIGHT_MODULE=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-projection-staff-groups.mjs
+PLAYWRIGHT_MODULE=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-projection-demand.mjs
 PGLITE_MODULE=/tmp/planilla-backend-runtime/node_modules/@electric-sql/pglite/dist/index.js node scripts/test-projection-store-config-db.mjs
 node --experimental-vm-modules --test src/services/positionCoverage.test.js src/lib/supabase/firestoreCompat.test.js
 ```
@@ -42,3 +54,5 @@ Para la corrección responsive posterior, `scripts/prepare-projection-modal-prod
 Para los colores por límite, `scripts/prepare-projection-colors-production.mjs` parte de `tmp/projection-modal-production`, verifica `index-CJagACKa.js` y conserva sus assets. Usar `--overlay --with-color-service` y publicar únicamente `tmp/projection-colors-production`, con los cambios de Dashboard y projectionStaffColor. No se modifican HeatmapMatrix, horarios, permisos ni datos de tiendas.
 
 Para el desglose por grupo, `scripts/prepare-projection-groups-production.mjs` parte de `tmp/projection-colors-production`, verifica `index-Dwb8sZbS.js` y conserva sus assets. Usar `--overlay --with-groups-service` y publicar desde `tmp/projection-groups-production`, únicamente con los cambios de Dashboard, ProjectionPositionFields y projectionStaffGroups. No requiere una migración de base de datos ni asigna grupos automáticamente a tiendas reales.
+
+Para la demanda basada en Vestido, `scripts/prepare-projection-demand-production.mjs` parte de `tmp/projection-groups-production` y verifica `index-W7znYIRA.js`. Usar `--overlay` y publicar desde `tmp/projection-demand-production`. Solo se superponen Dashboard, ProjectionPositionFields, projectionVhl y projectionDemand; se conservan los assets y las demás fuentes del release anterior.

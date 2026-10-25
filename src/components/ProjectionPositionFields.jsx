@@ -9,10 +9,11 @@ export default function ProjectionPositionFields({
   idPrefix,
   nameLabel = 'Nombre de posición',
   nameInputRef,
+  isVestido = false,
 }) {
-  const isFixed = position.logic === 'fixed';
-  const isService = position.logic === 'service';
-  const usesTicket = isService || position.logic === 'driver';
+  const isFixed = !isVestido && position.logic === 'fixed';
+  const isService = !isVestido && position.logic === 'service';
+  const usesTicket = isService || (!isVestido && position.logic === 'driver');
   const fieldId = (name) => `${idPrefix}-${name}`;
 
   return (
@@ -25,9 +26,10 @@ export default function ProjectionPositionFields({
       </label>
       <label htmlFor={fieldId('logic')} className={`${labelClass} col-span-2 sm:col-span-1 lg:col-span-2`}>
         <span className="mb-1 block">Lógica</span>
-        <select id={fieldId('logic')} value={position.logic}
+        <select id={fieldId('logic')} value={isVestido ? 'vestido' : position.logic} disabled={isVestido}
           onChange={(event) => onChange({ logic: event.target.value })} className={inputClass}>
-          <option value="sales">VHL general × factor</option>
+          {isVestido && <option value="vestido">Venta por hora ÷ VHL general</option>}
+          <option value="sales">Personas de Vestido × factor</option>
           <option value="service">Servicio / punto de venta</option>
           <option value="driver">Driver módulo</option>
           <option value="fixed">Fijo / no venta</option>
@@ -70,7 +72,7 @@ export default function ProjectionPositionFields({
       <label htmlFor={fieldId('factor')} className={labelClass}>
         <span className="mb-1 block">Factor</span>
         <input id={fieldId('factor')} type="number" min="0" step="0.05" value={position.factor ?? ''}
-          onChange={(event) => onChange({ factor: event.target.value })} disabled={isFixed}
+          onChange={(event) => onChange({ factor: event.target.value })} disabled={isFixed || isVestido}
           className={inputClass} />
       </label>
     </div>

@@ -5,6 +5,7 @@ import { db } from '../supabase';
 import ProjectionPositionFields from './ProjectionPositionFields';
 import { getProjectionStaffColor } from '../services/projectionStaffColor';
 import { getProjectionDepartment, PROJECTION_DEPARTMENTS, summarizeProjectionStaffGroups } from '../services/projectionStaffGroups';
+import { resolveVestidoPositionId } from '../services/projectionDemand';
 import {
   buildProjectionSalesByDay,
   selectLatestCompleteSalesWeek,
@@ -17,8 +18,6 @@ import {
 const DEFAULT_TOTAL_CAPACITY = 780;
 const DEFAULT_TICKET_AVERAGE = 35;
 const DEFAULT_TRANSACTIONS_PER_COLLABORATOR = 23;
-const DEFAULT_DRIVER_PRODUCTS_PER_TRIP = 9;
-const DEFAULT_DRIVER_ROUND_TRIP_MINUTES = 12;
 
 const DAYS = [
   { key: 'lunes', label: 'Lunes' },
@@ -119,7 +118,7 @@ const detectOperativeHours = (salesByDay) => {
 };
 
 const LOGIC_LABELS = {
-  sales: 'VHL × factor',
+  sales: 'Personas de Vestido × factor',
   service: 'Servicio / punto de venta',
   driver: 'Driver modulo',
   fixed: 'Fijo / no venta',
@@ -130,12 +129,6 @@ const createEmptyHourlySales = (hourKeys = MAX_ALLOWED_HOURS) =>
 
 const createEmptySalesByDay = (hourKeys = MAX_ALLOWED_HOURS) =>
   DAYS.reduce((acc, day) => ({ ...acc, [day.key]: createEmptyHourlySales(hourKeys) }), {});
-
-const getNumber = (value) => {
-  if (value === '' || value === null || value === undefined) return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
-};
 
 const makeStoredPosition = (position) => ({
   ...position,
@@ -170,6 +163,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
   );
   const [selectedDay, setSelectedDay] = useState('lunes');
   const [positions, setPositions] = useState(DEFAULT_POSITIONS);
+  const [vestidoPositionId, setVestidoPositionId] = useState('cocina');
   const [manualStaffByDay, setManualStaffByDay] = useState({});
   const [isPositionsModalOpen, setIsPositionsModalOpen] = useState(false);
   const [isAddingPosition, setIsAddingPosition] = useState(false);
@@ -222,6 +216,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
       setConfigError('');
       setSaveState('loading');
       setPositions(DEFAULT_POSITIONS.map(makeStoredPosition));
+      setVestidoPositionId('');
       setManualStaffByDay({});
       setGeneralVhl(null);
       setHistoricalGeneralVhl(null);
@@ -236,11 +231,10 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
 
         const data = snap.exists() ? snap.data() : {};
         storedConfigRef.current = { storeId, value: data };
+        const loadedPositions = Array.isArray(data.positions) ? data.positions.map(makeStoredPosition) : DEFAULT_POSITIONS.map(makeStoredPosition);
+        setPositions(loadedPositions);
+        setVestidoPositionId(resolveVestidoPositionId(loadedPositions, data.vestidoPositionId));
         if (snap.exists()) {
-          if (Array.isArray(data.positions)) {
-            // A saved list belongs to this store, including an intentionally empty list.
-            setPositions(data.positions.map(makeStoredPosition));
-          }
           if (data.manualStaffByDay) {
             setManualStaffByDay(data.manualStaffByDay);
           }
@@ -540,51 +534,6 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
     }, {});
   }, [historicalDailyTotals, projectedSalesByDay, salesByDay, operativeHours]);
 
-  const calculateRequiredStaff = (sale, position) => {
-    if (!sale && position.logic !== 'fixed') return 0;
-
-    if (position.logic === 'service') {
-      const ticketAverage = getNumber(position.ticketAverage);
-      const transactionsPerCollaborator = getNumber(position.transactionsPerCollaborator);
-      const factor = getNumber(position.factor);
-      if (!ticketAverage || !transactionsPerCollaborator || factor === null) return 0;
-      return ((sale / ticketAverage) / transactionsPerCollaborator) * factor;
-    }
-
-    if (position.logic === 'driver') {
-      const ticketAverage = getNumber(position.ticketAverage);
-      const factor = getNumber(position.factor);
-      if (!ticketAverage || factor === null) return 0;
-
-      const estimatedProducts = sale / ticketAverage;
-      const tripsPerHour = 60 / DEFAULT_DRIVER_ROUND_TRIP_MINUTES;
-      const productsPerDriverHour = DEFAULT_DRIVER_PRODUCTS_PER_TRIP * tripsPerHour;
-      return (estimatedProducts / productsPerDriverHour) * factor;
-    }
-
-    if (position.logic === 'fixed') {
-      return getNumber(position.fixedStaff) || 0;
-    }
-
-    const vhl = getNumber(generalVhl);
-    const normalizedPosition = `${position.id || ''} ${position.name || ''}`.toLowerCase();
-    const configuredFactor = getNumber(position.factor);
-    const referenceFactor = normalizedPosition.includes('sheetout')
-      ? 0.7
-      : normalizedPosition.includes('masa')
-        ? 0.55
-        : normalizedPosition.includes('landing')
-          ? 0.5
-          : 1;
-    const factor = configuredFactor ?? referenceFactor;
-    if (!vhl) return 0;
-
-    const demand = (sale / vhl) * factor;
-    const configuredMaximum = getNumber(position.maxStaff);
-    const maximum = configuredMaximum ?? (normalizedPosition.includes('masa') ? 2 : null);
-    return maximum === null ? demand : Math.min(demand, maximum);
-  };
-
   const buildScheduleMatrix = (hourlySales, dayKey) => {
     let totalRequiredHours = 0;
 
@@ -599,11 +548,11 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
         sale,
         generalVhl,
         positions,
+        vestidoPositionId,
         manualByPosition,
-        getPositionDemand: (position) => calculateRequiredStaff(sale, position),
         isOperativeHour: operativeHoursSet.has(hour),
       });
-      const { generalRequiredStaff, requiredByPosition, totalStaffAtHour } = allocation;
+      const { generalRequiredStaff, vestidoStaff, requiredByPosition, totalStaffAtHour } = allocation;
 
       totalRequiredHours += totalStaffAtHour;
 
@@ -611,6 +560,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
         hour,
         sale,
         generalRequiredStaff,
+        vestidoStaff,
         requiredByPosition,
         totalStaffAtHour,
         staffByDepartment: summarizeProjectionStaffGroups(positions, requiredByPosition),
@@ -650,6 +600,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
     // Derived coverage is replaced only after its inputs have finished loading.
     const changes = {
       positions,
+      vestidoPositionId,
       generalVhl: Number(generalVhl) > 0 ? Number(generalVhl) : null,
       generalVhlMode: isGeneralVhlManual ? 'manual' : 'historical',
       manualStaffByDay,
@@ -699,6 +650,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
     };
   }, [
     positions,
+    vestidoPositionId,
     salesByDay,
     calculationSalesByDay,
     manualStaffByDay,
@@ -716,7 +668,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
 
   const scheduleMatrix = useMemo(
     () => buildScheduleMatrix(calculationSalesByDay[selectedDay] || createEmptyHourlySales(), selectedDay),
-    [calculationSalesByDay, selectedDay, positions, manualStaffByDay, generalVhl]
+    [calculationSalesByDay, selectedDay, positions, manualStaffByDay, generalVhl, vestidoPositionId]
   );
 
   const calculationDailyTotals = useMemo(() => {
@@ -748,7 +700,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
       );
       return sum + matrix.totalRequiredHours;
     }, 0);
-  }, [calculationSalesByDay, positions, manualStaffByDay, generalVhl]);
+  }, [calculationSalesByDay, positions, manualStaffByDay, generalVhl, vestidoPositionId]);
 
   const resultingGeneralVhl = weeklyRequiredHours > 0
     ? weeklyCalculationSales / weeklyRequiredHours
@@ -795,6 +747,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
 
   const handleRemovePosition = (id) => {
     setPositions((prev) => prev.filter((position) => position.id !== id));
+    if (id === vestidoPositionId) setVestidoPositionId('');
   };
 
   useEffect(() => {
@@ -994,7 +947,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
               aria-describedby="general-vhl-help"
             />
             <div id="general-vhl-help" className="mt-1 flex items-center justify-between gap-2 text-[10px] text-slate-400">
-              <span>{vhlLoading ? 'Calculando...' : 'Base = venta/hora ÷ VHL'}</span>
+              <span>{vhlLoading ? 'Calculando...' : 'Vestido = venta/hora ÷ VHL'}</span>
               {isGeneralVhlManual && historicalGeneralVhl > 0 ? (
                 <button
                   type="button"
@@ -1109,8 +1062,8 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
         <div className="p-5 border-b border-slate-100 bg-slate-50/50">
           <h3 className="font-semibold text-slate-900">Distribucion de Personal e Ingresos por Hora</h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            La base por hora es venta / VHL. Cada posicion aplica su propio factor sobre esa base y se redondea a personas completas.
-            Las posiciones fijas y los ajustes manuales se conservan.
+            Vestido se calcula con la venta de la hora dividida entre el VHL general. Las áreas por factor multiplican las personas asignadas a Vestido y se redondean a personas completas.
+            Cada área conserva sus mínimos, topes y ajustes manuales.
             Haz clic para sumar una persona y Ctrl + clic para restarla.
           </p>
           <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
@@ -1120,6 +1073,12 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
             <span>El color se ajusta al límite configurado de cada posición.</span>
           </p>
         </div>
+
+        {!positions.some(position => position.id === vestidoPositionId) && positions.some(position => position.logic === 'sales') && (
+          <div className="border-b border-amber-200 bg-amber-50 px-5 py-3 text-sm text-amber-900">
+            Selecciona el Área Vestido en Configurar Posiciones para establecer la referencia de las áreas por factor.
+          </div>
+        )}
 
         {unclassifiedPositions.length > 0 && (
           <div data-testid="projection-unclassified-notice" className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-5 py-3 text-sm text-amber-900">
@@ -1162,11 +1121,11 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
                     </span>
                   </td>
                   <td className="p-3 text-center bg-slate-50 text-xs font-bold text-slate-600">
-                    {LOGIC_LABELS[position.logic]}
+                    {position.id === vestidoPositionId ? 'Venta por hora ÷ VHL general' : LOGIC_LABELS[position.logic]}
                   </td>
                   {scheduleMatrix.columns.map((col) => {
                     const requiredStaff = col.requiredByPosition[position.id] || 0;
-                    const staffColor = getProjectionStaffColor(requiredStaff, position);
+                    const staffColor = getProjectionStaffColor(requiredStaff, position.id === vestidoPositionId ? { ...position, logic: 'sales' } : position);
                     return (
                       <td
                         key={col.hour}
@@ -1210,7 +1169,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
                   <td
                     key={col.hour}
                     data-hour={col.hour}
-                    title={`Base venta ÷ VHL: ${col.generalRequiredStaff.toFixed(2)} · Total asignado: ${col.totalStaffAtHour}`}
+                    title={`Base de Vestido (venta ÷ VHL): ${col.generalRequiredStaff.toFixed(2)} · Personas en Vestido: ${col.vestidoStaff} · Total asignado: ${col.totalStaffAtHour}`}
                     className={`p-3 text-center font-extrabold ${
                       col.totalStaffAtHour > 5 ? 'text-amber-400' : 'text-white'
                     }`}
@@ -1308,6 +1267,17 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
                 </div>
               </div>
 
+              <div className="min-w-0 rounded-xl border border-violet-200 bg-violet-50 p-3 sm:p-4">
+                <label htmlFor="projection-vestido-position" className="mb-1 block text-sm font-bold text-violet-900">Área Vestido</label>
+                <select id="projection-vestido-position" aria-label="Área Vestido" value={vestidoPositionId}
+                  onChange={(event) => setVestidoPositionId(event.target.value)}
+                  className="block w-full min-w-0 max-w-full rounded-lg border border-violet-300 bg-white px-3 py-2 text-sm text-slate-900">
+                  <option value="">Seleccionar área...</option>
+                  {positions.map((position, index) => <option key={position.id} value={position.id}>{index + 1}. {position.name || 'Sin nombre'}</option>)}
+                </select>
+                <p className="mt-2 text-xs text-violet-800">Esta área usa venta por hora ÷ VHL general. Las áreas por factor multiplican su cantidad de personas. La selección se conserva si cambias el nombre del área.</p>
+              </div>
+
               <section aria-label="Posiciones configuradas" className="min-w-0 space-y-3">
                 <p className="text-xs text-slate-600">El Grupo del área separa los colaboradores requeridos entre Producción y Servicio.</p>
                 {positions.length === 0 && (
@@ -1331,7 +1301,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
                           Remover
                         </button>
                       </div>
-                      <ProjectionPositionFields position={position} onChange={(changes) => updatePosition(position.id, changes)} idPrefix={`projection-position-${position.id}`} />
+                      <ProjectionPositionFields position={position} isVestido={position.id === vestidoPositionId} onChange={(changes) => updatePosition(position.id, changes)} idPrefix={`projection-position-${position.id}`} />
                     </fieldset>
                   );
                 })}

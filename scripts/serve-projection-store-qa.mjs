@@ -17,6 +17,7 @@ const configurations = new Map([
   }],
 ]);
 const control = { readErrors: [], writeErrors: [], readDelay: {}, writeDelay: {} };
+const dataFixtures = new Map();
 const writes = [], reads = [];
 const transport = `
 export const db={};
@@ -66,16 +67,33 @@ const css = (await postcss([tailwind({ content: ['./src/**/*.{js,jsx}'] })])
 const json = (response,value) => { response.setHeader('Content-Type','application/json');response.end(JSON.stringify(value)); };
 const body = async request => { let raw='';for await(const chunk of request)raw+=chunk;return JSON.parse(raw||'{}'); };
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms || 0));
+const validStore = storeId => ['store-a','store-b','store-c'].includes(storeId);
+const documents = rows => rows.map(row => ({ id: row.id, data: structuredClone(row) }));
+const filtered = (rows, constraints = []) => rows.filter(row => constraints.every(constraint => {
+ if(!constraint.field)return true;
+ const value = constraint.field === '__name__' ? row.id : row[constraint.field];
+ if(constraint.operator==='==')return value===constraint.value;
+ if(constraint.operator==='in')return constraint.value.includes(value);
+ throw Error(`Unsupported isolated fixture filter: ${constraint.operator}`);
+}));
 const server = createServer(async(request,response)=>{
  try {
-  if(request.url==='/qa-state')return json(response,{ configurations:Object.fromEntries(configurations),writes,reads,control });
+  if(request.url==='/qa-state')return json(response,{ configurations:Object.fromEntries(configurations),fixtures:Object.fromEntries(dataFixtures),writes,reads,control });
   if(request.url==='/qa-control'&&request.method==='POST'){Object.assign(control,await body(request));return json(response,{ok:true});}
   if(request.url==='/qa-configuration'&&request.method==='POST'){
    const {storeId,value}=await body(request);
-   if(!['store-a','store-b','store-c'].includes(storeId)||!value||typeof value!=='object'||Array.isArray(value)){
+   if(!validStore(storeId)||!value||typeof value!=='object'||Array.isArray(value)){
     response.statusCode=400;return json(response,{error:'Invalid isolated configuration fixture'});
    }
    configurations.set(storeId,structuredClone(value));return json(response,{ok:true});
+  }
+  if(request.url==='/qa-data'&&request.method==='POST'){
+   const {storeId,salesHistory=[],staff=[],schedules=[],salesConfigs={}}=await body(request);
+   if(!validStore(storeId)||![salesHistory,staff,schedules].every(Array.isArray)||!salesConfigs||typeof salesConfigs!=='object'||Array.isArray(salesConfigs)){
+    response.statusCode=400;return json(response,{error:'Invalid isolated sales/staff/schedules fixture'});
+   }
+   dataFixtures.set(storeId,structuredClone({salesHistory,staff,schedules,salesConfigs}));
+   return json(response,{ok:true});
   }
   if(request.url==='/qa-operation'&&request.method==='POST'){
    const {op,ref,data}=await body(request),parts=ref.path.split('/'),storeId=parts[1];
@@ -86,9 +104,18 @@ const server = createServer(async(request,response)=>{
      if(control.readErrors.includes(storeId)){response.statusCode=503;return json(response,{error:'Fallo de lectura simulado'});}
      return json(response,{id:parts.at(-1),data:configurations.get(storeId)||null});
     }
+    if(parts[2]==='sales_config')return json(response,{id:parts.at(-1),data:dataFixtures.get(storeId)?.salesConfigs?.[parts.at(-1)]||null});
     return json(response,{id:parts.at(-1),data:null});
    }
-   if(op==='getDocs')return json(response,[]); // New stores have no history or staff yet.
+   if(op==='getDocs'){
+    if(parts[0]==='stores'&&parts[2]==='sales_history')return json(response,documents(dataFixtures.get(storeId)?.salesHistory||[]));
+    if(parts[0]==='staff_profiles'||parts[0]==='schedules'){
+     const field=parts[0]==='staff_profiles'?'staff':'schedules';
+     const rows=[...dataFixtures.values()].flatMap(value=>value[field]);
+     return json(response,documents(filtered(rows,ref.constraints)));
+    }
+    return json(response,[]); // Existing tests leave optional sales/staff fixtures empty.
+   }
    if(op==='setDoc'){
     if(parts[2]!=='config'||parts[3]!=='schedule_projection')throw Error('Unexpected write path');
     writes.push({path:ref.path,storeId,data,time:Date.now(),failed:control.writeErrors.includes(storeId)});
