@@ -13,11 +13,11 @@ const pass=name=>{passed.push(name);console.log(`PASS: ${name}`);};
 const poll=async(fn,message)=>{for(let attempt=0;attempt<80;attempt++){if(await fn())return;await new Promise(resolve=>setTimeout(resolve,100));}throw Error(message);};
 const state=async()=>(await page.request.get(`${base}/qa-state`)).json();
 const control=async value=>{const response=await page.request.post(`${base}/qa-control`,{data:value});assert.equal(response.ok(),true);};
-const open=async()=>{await page.getByRole('button',{name:'Configurar Posiciones',exact:true}).click();return page.locator('div.fixed').filter({has:page.getByRole('heading',{name:'Configurar Posiciones de la Tienda',exact:true})});};
-const rows=modal=>modal.locator('tbody tr');
+const open=async()=>{await page.getByRole('button',{name:'Configurar Posiciones',exact:true}).click();return page.getByRole('dialog',{name:'Configurar Posiciones de la Tienda',exact:true});};
+const rows=modal=>modal.locator('[data-position-id]');
 const names=async modal=>rows(modal).locator('input[type=text]').evaluateAll(inputs=>inputs.map(input=>input.value));
 const row= (modal,name)=>rows(modal).filter({has:page.locator(`input[type=text][value="${name}"]`)});
-const close=async modal=>{await modal.getByRole('button',{name:'x',exact:true}).click();};
+const close=async modal=>{await modal.getByRole('button',{name:'Cerrar',exact:true}).click();};
 try{
  await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('QA server startup timeout')),30000);server.once('error',reject);server.stdout.on('data',data=>{if(data.toString().includes('Projection store QA:')){clearTimeout(timeout);resolve();}});server.once('exit',code=>reject(Error(`QA server exit ${code}`)));});
  browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
@@ -28,8 +28,9 @@ try{
  let modal=await open();
  assert.deepEqual(await names(modal),['Área exclusiva A','Salón'],'Saved arrays must be used exactly; do not append default positions');
  await rows(modal).first().locator('input[type=text]').fill('Área A editada');
- await row(modal,'Salón').getByRole('button',{name:'Remover',exact:true}).click();
- await modal.getByPlaceholder('Ej. Drivethru o Modulo',{exact:true}).fill('Nueva A');
+ await row(modal,'Salón').getByRole('button',{name:/Remover/}).click();
+ await modal.getByRole('button',{name:'Nueva posición',exact:true}).click();
+ await modal.getByLabel('Nombre de nueva posición',{exact:true}).fill('Nueva A');
  await modal.getByRole('button',{name:'Agregar',exact:true}).click();
  await close(modal);
  // Refresh while the 700ms autosave is pending: the Page must not unmount it.
@@ -57,7 +58,7 @@ try{
  assert.equal((await names(modal)).includes('Cocina'),true);
  assert.equal((await state()).writes.filter(item=>item.storeId==='store-b').length,beforeB,'Loading a new store must not save the prior store configuration');
  await row(modal,'Cocina').locator('input[type=text]').fill('Zona B');
- await row(modal,'Drivethru').getByRole('button',{name:'Remover',exact:true}).click();
+ await row(modal,'Drivethru').getByRole('button',{name:/Remover/}).click();
  await close(modal);
  await poll(async()=>(await state()).configurations['store-b']?.positions?.some(item=>item.name==='Zona B'),'Store B changes were not persisted');
  await page.getByLabel('Tienda de prueba',{exact:true}).selectOption('store-a');
@@ -83,7 +84,7 @@ try{
  pass('Un fallo de carga muestra error, bloquea escritura de valores por defecto y permite reintentar sin mezclar tiendas');
 
  modal=await open();
- while(await rows(modal).count())await rows(modal).first().getByRole('button',{name:'Remover',exact:true}).click();
+ while(await rows(modal).count())await rows(modal).first().getByRole('button',{name:/Remover/}).click();
  await close(modal);
  await poll(async()=>(await state()).configurations['store-c']?.positions?.length===0,'An intentionally empty configuration was not persisted');
  await page.reload();modal=await open();assert.deepEqual(await names(modal),[]);await close(modal);
