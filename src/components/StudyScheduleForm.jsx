@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { getFirestore, doc, setDoc, getDoc } from '../lib/supabase/firestoreCompat';
 import { useAuth } from '../contexts/AuthContext';
 import { Clock, Plus, Trash2, Save, CheckCircle, X } from 'lucide-react';
+import { readScheduleAccessPolicy, useScheduleAccessPolicy } from '../hooks/useScheduleAccessPolicy';
 
 const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const labels = {
@@ -14,17 +15,33 @@ const labels = {
   sunday: 'Domingo'
 };
 
-export default function StudyScheduleForm({ onSuccess, locked = false }) {
-  const { currentUser } = useAuth();
+export default function StudyScheduleForm({ onSuccess, locked = false, storeId }) {
+  const { currentUser, userData } = useAuth();
+  const activeStoreId = storeId || userData?.storeId;
+  const access = useScheduleAccessPolicy(activeStoreId);
   const db = getFirestore();
   const [schedule, setSchedule] = useState({});
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [reload, setReload] = useState(0);
+  const context = `${currentUser?.uid || ''}:${activeStoreId || ''}`;
+  const liveContext = useRef(context);
+  liveContext.current = context;
+  const lockedRef = useRef(locked);
+  lockedRef.current = locked;
+  const mounted = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const savingRef = useRef(false);
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser?.uid || !activeStoreId) return;
+    let active = true;
+    setLoading(true);
+    setLoadError('');
     const load = async () => {
       try {
         const snap = await getDoc(doc(db, 'study_schedules', currentUser.uid));
+        if (!active) return;
         if (snap.exists()) {
           const raw = snap.data();
           const formatted = Object.fromEntries(
@@ -44,14 +61,16 @@ export default function StudyScheduleForm({ onSuccess, locked = false }) {
           setSchedule(Object.fromEntries(days.map(d => [d, { free: false, blocks: [] }])));
         }
       } catch (err) {
+        if (!active) return;
         console.error('Error al cargar horario de estudio:', err);
-        alert('Error al cargar horario de estudio');
+        setLoadError('No se pudo cargar tu horario de estudios. Reintenta antes de editar o guardar.');
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     };
     load();
-  }, [currentUser]);
+    return () => { active = false; };
+  }, [currentUser?.uid, activeStoreId, db, reload]);
 
   const handleChange = (day, index, field, value) => {
     const blocks = [...(schedule[day]?.blocks || [])];
@@ -99,10 +118,23 @@ export default function StudyScheduleForm({ onSuccess, locked = false }) {
   };
 
   const handleSave = async () => {
-    if (locked) {
+    if (lockedRef.current) {
       throw new Error('La administración bloqueó temporalmente los cambios de horario.');
     }
     try {
+      if (loadError || loading || access.status !== 'ready' || access.policy.adminOnlyStudyEditing || !currentUser?.uid || !activeStoreId) {
+        throw new Error('No tienes acceso para editar los horarios de estudio en este momento.');
+      }
+      const submittedContext = context;
+      let latestPolicy;
+      try {
+        latestPolicy = await readScheduleAccessPolicy(activeStoreId);
+      } catch {
+        access.retry();
+        throw new Error('No se pudo verificar el permiso actual de edición. Reintenta antes de guardar.');
+      }
+      if (!mounted.current || liveContext.current !== submittedContext) throw new Error('La cuenta o la tienda cambió. Vuelve a abrir tu horario de estudios.');
+      if (lockedRef.current || latestPolicy.adminOnlyStudyEditing) throw new Error('La administración gestiona los horarios de estudio de esta tienda.');
       const payload = Object.fromEntries(
         days.map(day => [
           day,
@@ -125,21 +157,39 @@ export default function StudyScheduleForm({ onSuccess, locked = false }) {
   const [saved, setSaved] = useState(false);
 
   const handleSaveWithFeedback = async () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     setSaved(false);
+    const submittedContext = context;
     try {
       await handleSave();
+      if (!mounted.current || liveContext.current !== submittedContext) return;
       setSaved(true);
       setTimeout(() => {
+        if (!mounted.current || liveContext.current !== submittedContext) return;
         setSaved(false);
         if (onSuccess) onSuccess();
       }, 1500);
     } catch (err) {
       console.error('Error al guardar:', err);
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
+
+  if (access.status !== 'ready') return <div role={access.status === 'error' ? 'alert' : 'status'} className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+    <p>{access.status === 'error' ? 'No se pudo verificar la configuración de estudios de tu tienda.' : 'Cargando permisos de edición…'}</p>
+    {access.status === 'error' && <button type="button" onClick={access.retry} className="mt-2 rounded-lg border border-blue-300 px-3 py-2 font-bold">Reintentar configuración</button>}
+  </div>;
+
+  if (access.policy.adminOnlyStudyEditing) return <p role="status" className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">La administración gestiona tus horarios de estudio. Tus horarios guardados se conservan.</p>;
+
+  if (loadError) return <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+    <p>{loadError}</p>
+    <button type="button" onClick={() => setReload(value => value + 1)} className="mt-2 rounded-lg border border-red-300 px-3 py-2 font-bold">Reintentar horarios de estudio</button>
+  </div>;
 
   if (loading) {
     return (

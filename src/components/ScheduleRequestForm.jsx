@@ -6,6 +6,9 @@ import { approvedBukShiftLabel, getAvailableApprovedBukOptions, getBukRestDays }
 import { effectiveModality, getWeekDates, isActiveOnDate, SCHEDULE_DAYS } from '../services/scheduleExportData';
 import { filterShiftsByAvailability, getShiftAvailability } from '../services/shiftAvailability';
 import { isBukScheduleExempt } from '../services/scheduleStaffOrder';
+import { readScheduleAccessPolicy, useScheduleAccessPolicy } from '../hooks/useScheduleAccessPolicy';
+import { getRequestDateAccess } from '../services/scheduleAccessPolicy';
+import ScheduleRequestDatePicker from './ScheduleRequestDatePicker';
 
 function requestWeek(date) {
     const parsed = new Date(`${date}T12:00:00Z`);
@@ -65,9 +68,15 @@ const ScheduleRequestForm = ({ perfil, onSuccess, locked = false }) => {
     const [loading, setLoading] = useState(false);
     const [reload, setReload] = useState(0);
     const [error, setError] = useState('');
+    const [dateError, setDateError] = useState('');
+    const access = useScheduleAccessPolicy(perfil?.storeId);
+    const accessRef = useRef(access);
+    accessRef.current = access;
     const [availability, setAvailability] = useState({ key: '', status: 'idle' });
     const [formData, setFormData] = useState({ date: '', shiftType: 'apertura', bukApprovedShiftId: '', startTime: '', endTime: '', reason: '' });
     const saving = useRef(false);
+    const mounted = useRef(false);
+    useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
     const contextKey = JSON.stringify([
         currentUser?.uid, perfil?.id, perfil?.uid, perfil?.storeId, formData.date,
         perfil?.position, perfil?.modality, perfil?.modalityChangeDate, perfil?.nextModality,
@@ -77,12 +86,27 @@ const ScheduleRequestForm = ({ perfil, onSuccess, locked = false }) => {
     contextRef.current = contextKey;
     const lockedRef = useRef(locked);
     lockedRef.current = locked;
-    const ready = availability.key === contextKey && availability.status === 'ready';
+    const dateAccess = access.status === 'ready' && formData.date ? getRequestDateAccess(access.policy, formData.date) : null;
+    const ready = availability.key === contextKey && availability.status === 'ready' && dateAccess?.allowed;
+
+    const changeDate = date => {
+        const check = !date ? null : access.status === 'ready' ? getRequestDateAccess(access.policy, date)
+            : { allowed: false, reason: 'Espera a que se verifique la configuración de solicitudes.' };
+        setDateError(check && !check.allowed ? check.reason : '');
+        setError('');
+        setFormData(previous => ({ ...previous, date: check?.allowed ? date : '', bukApprovedShiftId: '', startTime: '', endTime: '' }));
+    };
+
+    useEffect(() => {
+        if (access.status !== 'ready' || !formData.date || dateAccess?.allowed) return;
+        setDateError(dateAccess.reason);
+        setFormData(previous => ({ ...previous, date: '', bukApprovedShiftId: '', startTime: '', endTime: '' }));
+    }, [access.status, formData.date, dateAccess?.allowed, dateAccess?.reason]);
 
     useEffect(() => {
         let cancelled = false;
         setError('');
-        if (!formData.date || !perfil?.id || !perfil?.storeId) {
+        if (!formData.date || !perfil?.id || !perfil?.storeId || !dateAccess?.allowed) {
             setAvailability({ key: contextKey, status: 'idle' });
             return;
         }
@@ -96,7 +120,7 @@ const ScheduleRequestForm = ({ perfil, onSuccess, locked = false }) => {
             setError('No se pudo cargar la disponibilidad y el plan semanal. Reintenta antes de enviar la solicitud.');
         });
         return () => { cancelled = true; };
-    }, [contextKey, reload]);
+    }, [contextKey, reload, dateAccess?.allowed]);
 
     const exempt = isBukScheduleExempt(perfil);
     const options = useMemo(() => ready && !exempt ? requestOptions(perfil, formData.date, availability) : [],
@@ -115,6 +139,7 @@ const ScheduleRequestForm = ({ perfil, onSuccess, locked = false }) => {
 
     const handleChange = (event) => {
         const { name, value } = event.target;
+        if (name === 'date') { changeDate(value); return; }
         // A failed read still needs its retry action when another field changes.
         if (availability.status !== 'error' || name === 'date') setError('');
         setFormData(prev => ({ ...prev, [name]: value,
@@ -126,6 +151,9 @@ const ScheduleRequestForm = ({ perfil, onSuccess, locked = false }) => {
         event.preventDefault();
         if (saving.current) return;
         if (locked) { setError('La administración bloqueó temporalmente las solicitudes de horario.'); return; }
+        if (access.status !== 'ready') { setError('No se pudo verificar la configuración de solicitudes. Reintenta antes de enviar.'); return; }
+        const permittedDate = getRequestDateAccess(access.policy, formData.date);
+        if (!permittedDate.allowed) { setDateError(permittedDate.reason); return; }
         if (!formData.date || !formData.reason.trim()) { setError('Completa la fecha y el motivo de la solicitud.'); return; }
         if (!['apertura', 'medio', 'cierre', 'rango'].includes(formData.shiftType)) { setError('Selecciona un tipo de solicitud válido.'); return; }
         if (!canSubmit) { setError('Selecciona un horario disponible y espera que termine la carga de disponibilidad.'); return; }
@@ -135,6 +163,20 @@ const ScheduleRequestForm = ({ perfil, onSuccess, locked = false }) => {
         setLoading(true);
         setError('');
         try {
+            let latestPolicy;
+            try {
+                latestPolicy = await readScheduleAccessPolicy(perfil.storeId);
+            } catch {
+                if (mounted.current && contextRef.current === submittedKey) access.retry();
+                throw new Error('No se pudo verificar la configuración actual de solicitudes. Reintenta antes de enviar.');
+            }
+            if (!mounted.current || contextRef.current !== submittedKey) throw new Error('El colaborador o la fecha cambió. Revisa la solicitud.');
+            const latestDateAccess = getRequestDateAccess(latestPolicy, formData.date);
+            if (!latestDateAccess.allowed) {
+                setDateError(latestDateAccess.reason);
+                setFormData(previous => ({ ...previous, date: '', bukApprovedShiftId: '', startTime: '', endTime: '' }));
+                throw new Error(latestDateAccess.reason);
+            }
             // Re-read studies and the weekly plan immediately before submitting:
             // the administrator may have changed either since the selector loaded.
             let latest;
@@ -144,8 +186,11 @@ const ScheduleRequestForm = ({ perfil, onSuccess, locked = false }) => {
                 if (contextRef.current === submittedKey) setAvailability({ key: submittedKey, status: 'error' });
                 throw new Error('No se pudo verificar la disponibilidad actual. Reintenta antes de enviar la solicitud.');
             }
-            if (contextRef.current !== submittedKey) throw new Error('La fecha o el colaborador cambió. Revisa la solicitud antes de enviarla.');
+            if (!mounted.current || contextRef.current !== submittedKey) throw new Error('La fecha o el colaborador cambió. Revisa la solicitud antes de enviarla.');
             if (lockedRef.current) throw new Error('La administración bloqueó temporalmente las solicitudes de horario.');
+            if (accessRef.current.status !== 'ready' || !getRequestDateAccess(accessRef.current.policy, formData.date).allowed) {
+                throw new Error('La administración cambió la disponibilidad de solicitudes. Elige una fecha habilitada.');
+            }
             setAvailability({ ...latest, key: submittedKey, status: 'ready' });
             let chosen;
             if (isBukScheduleExempt(perfil)) {
@@ -186,12 +231,13 @@ const ScheduleRequestForm = ({ perfil, onSuccess, locked = false }) => {
     const fieldClass = 'w-full min-w-0 max-w-full border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none bg-white disabled:opacity-50';
     return (
         <form onSubmit={handleSubmit} className="space-y-6">
-            <fieldset disabled={loading || locked} className="min-w-0 space-y-6">
+            <fieldset disabled={loading || locked || access.status !== 'ready' || !access.policy?.requestsEnabled} className="min-w-0 space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <label className="block text-sm font-semibold text-gray-700">
+                    <div className="block text-sm font-semibold text-gray-700">
                         <span className="mb-2 flex items-center gap-2"><Calendar className="w-4 h-4 text-blue-600" />Fecha de la solicitud *</span>
-                        <input type="date" name="date" aria-label="Fecha de la solicitud" value={formData.date} onChange={handleChange} required className={fieldClass} />
-                    </label>
+                        <ScheduleRequestDatePicker value={formData.date} onChange={changeDate} policy={access.policy} status={access.status} disabled={loading || locked} />
+                        {dateError && <p role="alert" className="mt-2 text-sm font-normal text-red-700">{dateError}</p>}
+                    </div>
                     <label className="block text-sm font-semibold text-gray-700">
                         <span className="mb-2 flex items-center gap-2"><Clock className="w-4 h-4 text-blue-600" />Turno solicitado</span>
                         <select name="shiftType" aria-label="Turno solicitado" value={formData.shiftType} onChange={handleChange} className={fieldClass}>
@@ -201,7 +247,7 @@ const ScheduleRequestForm = ({ perfil, onSuccess, locked = false }) => {
                     </label>
                 </div>
 
-                {formData.date && !ready && availability.status !== 'error' && <p role="status" className="text-sm text-gray-600">Cargando horarios disponibles...</p>}
+                {formData.date && dateAccess?.allowed && !ready && availability.status !== 'error' && <p role="status" className="text-sm text-gray-600">Cargando horarios disponibles...</p>}
                 {ready && !hasWorkAvailability && (
                     <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
                         {exempt ? 'No hay disponibilidad para trabajar en esta fecha. Revisa tu horario de estudios o elige otra fecha.'
@@ -242,6 +288,12 @@ const ScheduleRequestForm = ({ perfil, onSuccess, locked = false }) => {
                         placeholder="Explica brevemente por qué necesitas este horario..." rows="4" className={`${fieldClass} resize-none`} />
                 </label>
             </fieldset>
+
+            {access.status !== 'ready' && <div role={access.status === 'error' ? 'alert' : 'status'} className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+                <p>{access.status === 'error' ? 'No se pudo verificar la configuración de solicitudes de tu tienda.' : 'Cargando configuración de solicitudes…'}</p>
+                {access.status === 'error' && <button type="button" onClick={access.retry} disabled={loading} className="mt-2 rounded-lg border border-blue-300 px-3 py-2 font-bold">Reintentar configuración</button>}
+            </div>}
+            {access.status === 'ready' && !access.policy.requestsEnabled && <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">La administración ha deshabilitado las solicitudes de horario en esta tienda.</p>}
 
             {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
                 <p>{error}</p>

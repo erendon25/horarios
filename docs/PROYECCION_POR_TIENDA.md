@@ -16,7 +16,7 @@ Cada posición incluye Grupo del área: Producción o Servicio. La clasificació
 
 ## VHL de Vestido y factores de otras áreas
 
-Vestido usa venta de la hora ÷ VHL general; S/2,000 con VHL S/500 produce cuatro personas. Primero se aplica su redondeo a personas completas, mínimo, tope o ajuste manual. Las áreas con lógica Personas de Vestido × factor multiplican esa cantidad final por su propio factor, y después aplican su redondeo, mínimo y tope. Con cuatro personas en Vestido y factor0.5 resultan dos; si la proporción bruta da ocho pero el tope de Vestido lo limita a cinco, factor0.7 usa cinco y produce cuatro. Un ajuste manual de Vestido también se propaga a las áreas dependientes, incluso en una hora sin venta. Los ajustes manuales propios de otras áreas siguen teniendo prioridad.
+Vestido usa venta de la hora ÷ VHL general; S/2,000 con VHL S/500 produce cuatro personas. Primero se aplican su mínimo, tope o ajuste manual, conservando la precisión numérica. Las áreas con lógica Personas de Vestido × factor multiplican esa cantidad final por su propio factor y después aplican sus límites. No se redondea antes de multiplicar: venta1100 ÷ VHL500 conserva2.2, y factor0.4 conserva0.88. La tabla muestra los resultados sin decimales y la cobertura operativa usa el mismo redondeo visible. Un ajuste manual de Vestido también se propaga a las áreas dependientes, incluso en una hora sin venta. Los ajustes manuales propios de otras áreas siguen teniendo prioridad.
 
 Servicio/punto de venta, Driver y Fijo conservan sus parámetros y fórmulas independientes. Los límites son los configurados por el administrador; una posición personalizada llamada Masa no recibe un tope oculto si su máximo está vacío. Los factores vacíos mantienen las referencias anteriores de Sheetout/Masa/Landing, y los factores inválidos no generan demanda.
 
@@ -24,9 +24,9 @@ El máximo cero explícito en Vestido y áreas por factor conserva la regla ante
 
 ## Horas hombre proyectadas en el mapa de cobertura
 
-El encabezado del Heatmap muestra HH proyección del día seleccionado y el total de los siete días guardados. El Total HH programadas del editor conserva su cálculo anterior, con las horas extra aparte. El nuevo resumen usa la matriz original de requisitos de la tienda: cada celda representa personas durante una hora. Tres personas en cuatro celdas horarias suman12HH. No se cuentan los carriles, los colores, las cuatro subdivisiones visuales ni la marca inclusiva de salida.
+El encabezado del Heatmap muestra únicamente HH proyección del día seleccionado y cambia con el selector de día. No presenta un acumulado semanal. El Total HH programadas del editor conserva su cálculo anterior, con las horas extra aparte. El resumen usa la matriz original de requisitos de la tienda para ese día: cada celda representa personas durante una hora. Tres personas en cuatro celdas horarias suman12HH. No se cuentan los carriles, los colores, las cuatro subdivisiones visuales ni la marca inclusiva de salida.
 
-Si no hay matriz guardada, se muestra Sin proyección; una matriz explícita con cero o vacía representa0HH. Si faltan días, el total muestra Parcial y cuántos días están disponibles. Carga y error no se muestran como cero. Se conserva la suma completa de columnas de la proyección, aunque alguna quede fuera del rango visible del mapa. Filtros de personal no alteran el requerimiento proyectado.
+Si no hay matriz guardada para el día seleccionado, se muestra Sin proyección; una matriz explícita con cero o vacía representa0HH. La ausencia de otros días no modifica este valor ni genera un aviso de semana parcial. Carga y error no se muestran como cero. Se conserva la suma completa de columnas de la proyección diaria, aunque alguna quede fuera del rango visible del mapa. Filtros de personal no alteran el requerimiento proyectado.
 
 La referencia es la última configuración guardada por día de la semana. El modelo actual no almacena una semana calendario objetivo, por lo que el resumen no atribuye esos requisitos a la semana del histórico de ventas ni a una fecha objetivo inventada. La suscripción se mantiene limitada a la tienda y descarta callbacks de una tienda anterior.
 
@@ -35,6 +35,19 @@ El resumen también aparece en pantalla completa y se actualiza con la configura
 En Configurar Posiciones, el selector Área Vestido guarda el identificador estable `vestidoPositionId`, independiente del nombre del área. En datos anteriores se descubre una sola vez el identificador histórico cocina o un nombre exacto Vestido normalizado; los casos ambiguos requieren selección explícita. Renombrar conserva la referencia. Al quitar la referencia o borrar esa área queda pendiente elegir otra, sin reasignación silenciosa. La posición elegida usa venta/VHL aunque su lógica o factor anterior fueran diferentes; los controles muestran la fórmula efectiva y conservan los parámetros anteriores para recuperarlos al cambiar de referencia.
 
 ## Verificación
+
+### Presentación y precisión
+
+La proyección conserva internamente la demanda fraccionaria de Vestido, de las áreas por factor y de las fórmulas de Servicio, Driver y Fijo, así como los ajustes manuales y la precisión de las horas requeridas. La presentación de Distribución de Personal e Ingresos por Hora usa números enteros en cantidades, subtotales, total y venta por hora. Los títulos y los indicadores de horas y picos también se muestran sin decimales. Este formato no modifica los valores usados en factores ni los guardados. Las tarjetas de horas teóricas y el balance semanal mantienen su redondeo habitual a horas enteras, después de sumar. Siguen aplicándose los mínimos, topes y prioridades de ajustes existentes. Por ejemplo, venta1100 ÷ VHL500 conserva2.2 internamente y se muestra como2; con factor0.4 se conserva0.88 y se muestra1. Un total de47.81 horas se muestra como48 horas.
+
+La prueba usa Page y Dashboard reales mediante `scripts/serve-projection-store-qa.mjs`, con datos ficticios y transporte local. El puerto se elige con `PROJECTION_STORE_QA_PORT` y la interfaz con `PROJECTION_STORE_QA_HOST`; sus valores predeterminados son4194 y127.0.0.1. No iniciar Vite con credenciales de producción para esta revisión: el guardado automático de proyección podría escribir los requisitos al abrir la página aunque no se publique Firebase.
+
+Los consumidores operativos del Heatmap convierten la demanda mediante `operationalStaffCount`, con el mismo redondeo habitual que se muestra en la distribución. Los carriles y las transferencias usan personas completas; un movimiento debe dejar cobertura suficiente en origen. Los requisitos originales y las HH conservan su precisión. No se cambia el pintado de turnos, breaks, trainers ni el recuadro final inclusivo; se evitan carriles duplicados o fraccionarios.
+
+```sh
+node --test src/services/projectionDemand.test.js
+PLAYWRIGHT_MODULE=/ruta/a/playwright/index.mjs CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-projection-fractions.mjs
+```
 
 ```sh
 PLAYWRIGHT_MODULE=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-projection-store-ui.mjs
@@ -70,3 +83,5 @@ Para el desglose por grupo, `scripts/prepare-projection-groups-production.mjs` p
 Para la demanda basada en Vestido, `scripts/prepare-projection-demand-production.mjs` parte de `tmp/projection-groups-production` y verifica `index-W7znYIRA.js`. Usar `--overlay` y publicar desde `tmp/projection-demand-production`. Solo se superponen Dashboard, ProjectionPositionFields, projectionVhl y projectionDemand; se conservan los assets y las demás fuentes del release anterior.
 
 Para HH en el Heatmap, `scripts/prepare-heatmap-projection-hours-production.mjs` parte de `tmp/projection-demand-production`, verifica `index-CFz8nLOS.js` y conserva sus assets. Usar `--overlay` y publicar desde `tmp/heatmap-projection-hours-production`. Solo se superponen WeeklyScheduleEditor, ScheduleHeatmapMatrix, ProjectionHoursSummary y projectionHours. Una comprobación estructural exige que el código del mapa sea idéntico al anterior al retirar el import, prop y nodo nuevos del resumen.
+
+Para publicar el conjunto revisado de distribución sin decimales, HH del día y accesos por tienda, `scripts/prepare-reviewed-scheduling-production.mjs` reproduce `tmp/shift-availability-production` y verifica el módulo `index-I1629qMa.js`. El modo `--overlay` incorpora únicamente las 17 fuentes aprobadas y conserva los recursos públicos anteriores. Se compila y publica desde `tmp/reviewed-scheduling-production`. La integración operativa del Heatmap se limita a normalizar el conteo de personal en el mapa y el generador, y comprobar que un traslado conserve la cobertura; los intervalos y exportadores mantienen su implementación.

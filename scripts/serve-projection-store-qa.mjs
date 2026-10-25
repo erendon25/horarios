@@ -132,5 +132,6 @@ const server = createServer(async(request,response)=>{
  } catch(error){response.statusCode=500;json(response,{error:error.message});}
 });
 const port=Number(process.env.PROJECTION_STORE_QA_PORT||4194);
-server.listen(port,'127.0.0.1',()=>console.log(`Projection store QA: http://127.0.0.1:${port}/`));
+const host=process.env.PROJECTION_STORE_QA_HOST||'127.0.0.1';
+server.listen(port,host,()=>console.log(`Projection store QA: http://127.0.0.1:${port}/`));
 process.on('SIGTERM',()=>server.close(()=>process.exit(0)));process.on('SIGINT',()=>server.close(()=>process.exit(0)));

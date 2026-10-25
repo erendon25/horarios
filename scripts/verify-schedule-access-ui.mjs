@@ -1,0 +1,188 @@
+// Real schedule-access settings, collaborator dashboard, study/request forms,
+// and own-request history. All auth, documents and delete responses are local.
+// Authoritative database guards are verified separately by the SQL suite.
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {mkdir,writeFile} from 'node:fs/promises';
+
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
+const port=process.env.SCHEDULE_ACCESS_QA_PORT||'4204',base=`http://127.0.0.1:${port}`,output='output/schedule-access-ui';
+await mkdir(output,{recursive:true});
+const server=spawn(process.execPath,['scripts/serve-schedule-access-qa.mjs'],{env:{...process.env,SCHEDULE_ACCESS_QA_PORT:port},stdio:['ignore','pipe','inherit']});
+const passed=[],errors=[],external=[],dialogs=[],observations=[];
+let browser,context,admin,collab,study,request;
+const policyPath='stores/qa-store/config/schedule_access';
+const defaults={adminOnlyStudyEditing:false,requestsEnabled:true,blockedWeeks:[],blockedDates:[]};
+const pass=message=>{passed.push(message);console.log(`PASS: ${message}`)};
+const poll=async(action,message)=>{for(let i=0;i<100;i++){if(await action())return;await new Promise(resolve=>setTimeout(resolve,100));}throw Error(message)};
+const state=async()=>(await admin.request.get(`${base}/qa/state`)).json();
+const seed=async(path,data,publish=true)=>{const response=await admin.request.post(`${base}/qa/document`,{data:{path,data,publish}});assert.equal(response.ok(),true)};
+const policy=(value,publish=true)=>seed(policyPath,value,publish);
+const control=async value=>{const response=await admin.request.post(`${base}/qa/control`,{data:value});assert.equal(response.ok(),true)};
+const studyWrites=async()=>(await state()).writes.filter(write=>write.path.startsWith('study_schedules/'));
+const requests=async()=>Object.entries((await state()).documents).filter(([path,data])=>path.startsWith('schedule_requests/')&&data!==null);
+const settings=()=>admin.getByRole('region',{name:'Accesos a horarios',exact:true});
+const actions=()=>collab.getByTestId('collaborator-schedule-actions');
+const studyButton=()=>actions().getByRole('button',{name:/Editar Horarios de Estudio/});
+const requestButton=()=>actions().getByRole('button',{name:/Solicitar Horario Específico/});
+const saveSettings=async()=>{await settings().getByRole('button',{name:'Guardar permisos de horario',exact:true}).click();await settings().getByRole('status').filter({hasText:'Configuración guardada para esta tienda.'}).waitFor()};
+const studyModal=()=>collab.getByRole('heading',{name:'Editar horarios de estudio',exact:true});
+const monday=page=>page.getByRole('heading',{name:'Lunes',exact:true}).locator('xpath=.. /..');
+const prepareRequest=async()=>{
+ await request.goto(`${base}/request`);
+ await request.getByLabel('Fecha de la solicitud',{exact:true}).fill('2026-10-26');
+ await request.getByLabel('Turno solicitado',{exact:true}).selectOption('rango');
+ const selector=request.getByLabel('Horario aprobado solicitado',{exact:true});
+ await poll(()=>selector.isEnabled(),'Request options did not finish loading');
+ await selector.selectOption('PT1-5');
+ await request.getByLabel('Motivo de la solicitud',{exact:true}).fill('Prueba local de permisos');
+};
+const watch=page=>{page.on('pageerror',error=>errors.push(error.message));page.on('dialog',dialog=>{dialogs.push({type:dialog.type(),message:dialog.message()});dialog.accept()})};
+try{
+ await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Access QA startup timeout')),30000);server.once('error',error=>{clearTimeout(timeout);reject(error)});server.once('exit',code=>{clearTimeout(timeout);reject(Error(`QA server exit${code}`))});server.stdout.on('data',data=>{if(data.toString().includes('Schedule access QA:')){clearTimeout(timeout);resolve()}})});
+ browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
+ context=await browser.newContext({viewport:{width:1440,height:1000},timezoneId:'America/Lima',locale:'es-PE'});
+ await context.addInitScript(()=>{const Original=Date;const fixed='2026-10-26T15:00:00Z';window.Date=class extends Original{constructor(...args){super(...(args.length?args:[fixed]))}static now(){return Original.parse(fixed)}}});
+ await context.route('https://**/*',route=>{external.push(route.request().url());return route.abort()});
+ admin=await context.newPage();collab=await context.newPage();watch(admin);watch(collab);
+ await admin.goto(`${base}/admin`);await collab.goto(`${base}/collaborator`);
+ await settings().getByLabel('Solo administración edita los horarios de estudio',{exact:true}).waitFor();
+ assert.equal(await settings().getByLabel('Solo administración edita los horarios de estudio',{exact:true}).isChecked(),false);
+ assert.equal(await settings().getByLabel('Habilitar solicitudes de horario',{exact:true}).isChecked(),true);
+ await studyButton().waitFor();await poll(()=>requestButton().isEnabled(),'Default requests must be enabled');
+ await studyButton().click();await studyModal().waitFor();
+ await monday(collab).locator('input[type=time]').first().fill('09:45');
+ await settings().getByLabel('Solo administración edita los horarios de estudio',{exact:true}).check();
+ assert.equal(await studyButton().count(),1,'An unsaved admin draft must not change collaborator permissions');
+ await saveSettings();
+ await studyModal().waitFor({state:'detached'});
+ assert.equal(await studyButton().count(),0);
+ assert.equal(await requestButton().isEnabled(),true,'Study admin-only must not disable requests');
+ assert.equal((await studyWrites()).length,0);
+ assert.equal((await state()).documents['study_schedules/qa-collab'].monday.blocks[0].start,'10:00');
+ const createdPolicy=(await state()).documents[policyPath];
+ assert.deepEqual(Object.keys(createdPolicy).sort(),Object.keys(defaults).sort());
+ await requestButton().click();await collab.getByRole('heading',{name:'Solicitar Horario',exact:true}).waitFor();
+ await collab.getByLabel('Fecha de la solicitud',{exact:true}).fill('2026-10-26');
+ await collab.getByLabel('Turno solicitado',{exact:true}).selectOption('rango');
+ await poll(()=>collab.getByLabel('Horario aprobado solicitado',{exact:true}).isEnabled(),'Requests remain available under study admin-only');
+ await collab.getByLabel('Horario aprobado solicitado',{exact:true}).selectOption('PT1-5');
+ await collab.getByLabel('Motivo de la solicitud',{exact:true}).fill('Solicitud con estudio administrado');
+ await collab.getByRole('button',{name:'Enviar Solicitud',exact:true}).click();
+ await collab.getByTestId('my-request-100').waitFor();
+ await settings().getByLabel('Solo administración edita los horarios de estudio',{exact:true}).uncheck();await saveSettings();
+ await studyButton().waitFor();await studyButton().click();await studyModal().waitFor();
+ assert.equal(await monday(collab).locator('input[type=time]').first().inputValue(),'10:00');
+ // Reload closes the study modal without changing the stored study data.
+ await collab.reload();await studyButton().waitFor();
+ pass('Permisos ausentes usan defaults; guardar Solo administración oculta y cierra estudios sin borrar datos, permite solicitudes y desbloquear recupera los datos');
+
+ study=await context.newPage();watch(study);await study.goto(`${base}/study`);
+ await monday(study).locator('input[type=time]').nth(1).fill('12:15');
+ const originalStudy=(await state()).documents['study_schedules/qa-collab'];
+ await policy({...defaults,adminOnlyStudyEditing:true},false);
+ await study.getByRole('button',{name:'Guardar Horarios',exact:true}).click();
+ await poll(()=>dialogs.some(dialog=>/administración gestiona los horarios de estudio/.test(dialog.message)),'The fresh study policy was not enforced before saving');
+ assert.equal((await studyWrites()).length,0);
+ assert.deepEqual((await state()).documents['study_schedules/qa-collab'],originalStudy);
+ await policy(defaults);
+ pass('Un formulario de estudios ya abierto vuelve a leer permisos antes de guardar y bloquea una revocación todavía no recibida en vivo');
+
+ request=await context.newPage();watch(request);
+ await settings().getByLabel('Semana de solicitudes',{exact:true}).fill('2026-11-04');
+ assert.equal(await settings().getByLabel('Semana de solicitudes',{exact:true}).inputValue(),'2026-11-02');
+ await settings().getByLabel('Habilitar solicitudes en esta semana',{exact:true}).uncheck();
+ await settings().getByLabel('Fecha a bloquear',{exact:true}).fill('2026-10-30');
+ await settings().getByRole('button',{name:'Bloquear fecha',exact:true}).click();
+ // Hold the RPC after the client has done its fresh read. A concurrent admin
+ // then adds different blocks; the atomic delta RPC must preserve both sets.
+ let rpcQueued=false,releaseRpc;const rpcGate=new Promise(resolve=>{releaseRpc=resolve});
+ const holdRpc=async route=>{rpcQueued=true;await rpcGate;await route.continue()};
+ await admin.route('**/qa/rpc',holdRpc);
+ const pendingSave=saveSettings();
+ await poll(()=>rpcQueued,'The atomic permission RPC was not called');
+ await policy({...defaults,blockedDates:['2026-10-31'],blockedWeeks:['2026-11-16'],qaMetadata:'Preserve concurrent metadata'},false);
+ releaseRpc();await pendingSave;await admin.unroute('**/qa/rpc',holdRpc);
+ const blocked=(await state()).documents[policyPath];assert.deepEqual(blocked.blockedWeeks,['2026-11-02','2026-11-16']);assert.deepEqual(blocked.blockedDates,['2026-10-30','2026-10-31']);assert.equal(blocked.qaMetadata,'Preserve concurrent metadata');
+ await request.goto(`${base}/request`);
+ const date=request.getByLabel('Fecha de la solicitud',{exact:true});await poll(()=>date.isEnabled(),'Date picker policy did not load');
+ await request.getByRole('button',{name:'Ver calendario disponible',exact:true}).click();
+ assert.equal(await request.getByRole('button',{name:'30/10/2026',exact:true}).isDisabled(),true);
+ assert.equal(await request.getByRole('button',{name:'29/10/2026',exact:true}).isEnabled(),true);
+ await date.fill('2026-10-30');await poll(async()=>await date.inputValue()==='','A blocked date must be cleared');
+ await request.getByRole('alert').filter({hasText:/30\/10\/2026/}).waitFor();
+ await date.fill('2026-11-03');await poll(async()=>await date.inputValue()==='','A blocked week date must be cleared');
+ await request.getByRole('alert').filter({hasText:/02\/11\/2026/}).waitFor();
+ await request.getByRole('button',{name:'Mes siguiente',exact:true}).click();
+ assert.equal(await request.getByRole('button',{name:'03/11/2026',exact:true}).isDisabled(),true);
+ await request.screenshot({path:`${output}/calendario-fechas-bloqueadas.png`,fullPage:true});
+ await policy(defaults);
+ pass('El guardado atómico conserva bloqueos concurrentes y metadatos; semanas por lunes y fechas concretas bloquean calendario e ingreso manual');
+
+ await prepareRequest();const countBefore=(await requests()).length;
+ await policy({...defaults,requestsEnabled:false},false);
+ await request.getByRole('button',{name:'Enviar Solicitud',exact:true}).click();
+ await request.getByRole('alert').filter({hasText:/deshabilitadas/}).first().waitFor();
+ assert.equal((await requests()).length,countBefore,'A stale request form cannot submit after requests are disabled');
+ await admin.request.post(`${base}/qa/publish`,{data:{path:policyPath}});
+ await poll(()=>requestButton().isDisabled(),'Global requests disable must reach dashboard actions');
+ assert.equal(await collab.getByTestId('my-schedule-requests').isVisible(),true,'History remains accessible when requests are disabled');
+ await policy(defaults);await studyButton().waitFor();await poll(()=>requestButton().isEnabled(),'Requests did not reopen');
+ await seed('stores/qa-other/config/schedule_access',{...defaults,adminOnlyStudyEditing:true,requestsEnabled:false});
+ assert.equal(await studyButton().count(),1);assert.equal(await requestButton().isEnabled(),true);
+ pass('Enviar vuelve a leer la configuración, el bloqueo general impide nuevas solicitudes y los cambios de otra tienda no afectan esta tienda ni su historial');
+
+ await control({readErrors:[policyPath]});
+ await admin.reload();await collab.reload();await request.reload();
+ await settings().getByRole('alert').waitFor();await actions().getByRole('alert').waitFor();
+ assert.equal(await studyButton().count(),0);assert.equal(await requestButton().isDisabled(),true);
+ assert.equal(await settings().getByRole('button',{name:'Guardar permisos de horario',exact:true}).isDisabled(),true);
+ const blockedDateInput=request.getByLabel('Fecha de la solicitud',{exact:true});if(await blockedDateInput.count())assert.equal(await blockedDateInput.isDisabled(),true);
+ assert.equal(await request.getByRole('button',{name:'Enviar Solicitud',exact:true}).isDisabled(),true);
+ await control({readErrors:[]});
+ await settings().getByRole('button',{name:'Reintentar carga de permisos',exact:true}).click();
+ await actions().getByRole('button',{name:'Reintentar configuración de horarios',exact:true}).click();
+ await studyButton().waitFor();await settings().getByLabel('Habilitar solicitudes de horario',{exact:true}).waitFor();
+ await policy({});await actions().getByRole('alert').waitFor();assert.equal(await studyButton().count(),0);assert.equal(await requestButton().isDisabled(),true);
+ await policy(defaults);await studyButton().waitFor();
+ pass('Los errores de lectura y una configuración incompleta bloquean permisos; reintentar o recuperar una política válida restaura el acceso');
+
+ const history=collab.getByTestId('my-schedule-requests');await history.getByTestId('my-request-1').waitFor();
+ assert.equal(await history.getByTestId('my-request-3').getByRole('button',{name:/Eliminar/}).count(),0);
+ assert.equal(await history.getByTestId('my-request-4').getByRole('button',{name:/Eliminar/}).count(),0);
+ assert.equal(await history.getByTestId('my-request-5').count(),0);assert.equal(await history.getByTestId('my-request-6').count(),0);
+ await policy({...defaults,requestsEnabled:false});
+ await history.getByTestId('my-request-1').getByRole('button',{name:'Eliminar solicitud del 30/10/2026',exact:true}).click();
+ await history.getByTestId('my-request-1').waitFor({state:'detached'});
+ assert.equal((await state()).documents['schedule_requests/1'],undefined);
+ const deletion=(await state()).deletes[0];assert.deepEqual(deletion.filters,{id:'1',user_id:'qa-collab',staff_id:'PT1',store_id:'qa-store',status:'pending'});
+ assert.ok(dialogs.some(dialog=>dialog.type==='confirm'&&dialog.message.includes('30/10/2026')));
+ pass('Solo se ofrece eliminar pendientes propios, pide confirmación y envía filtros de usuario/perfil/tienda/estado; aprobadas y rechazadas siguen como historial');
+
+ await control({deleteMode:'error'});
+ await history.getByTestId('my-request-2').getByRole('button',{name:/Eliminar solicitud/}).click();
+ await history.getByRole('alert').filter({hasText:/Fallo local/}).waitFor();assert.equal(await history.getByTestId('my-request-2').count(),1);
+ await control({deleteMode:'approve_before_delete'});
+ await history.getByTestId('my-request-2').getByRole('button',{name:/Eliminar solicitud/}).click();
+ await history.getByRole('alert').filter({hasText:/ya fue revisada o eliminada/}).waitFor();
+ assert.equal(await history.getByTestId('my-request-2').count(),1,'A zero-row delete must not clear the stale row as success');
+ assert.equal((await state()).documents['schedule_requests/2'].status,'approved');
+ await admin.request.post(`${base}/qa/publish`,{data:{path:'schedule_requests/2'}});
+ await history.getByTestId('my-request-2').getByText('Aprobada',{exact:true}).waitFor();
+ assert.equal(await history.getByTestId('my-request-2').getByRole('button',{name:/Eliminar/}).count(),0);
+ pass('Un fallo de eliminación conserva la fila; si la solicitud se aprobó durante la acción no hay falso éxito y el snapshot la conserva como historial');
+
+ await policy(defaults);await settings().getByLabel('Habilitar solicitudes de horario',{exact:true}).waitFor();
+ await admin.setViewportSize({width:390,height:844});
+ await settings().getByLabel('Solo administración edita los horarios de estudio',{exact:true}).check();
+ const save=settings().getByRole('button',{name:'Guardar permisos de horario',exact:true});await save.scrollIntoViewIfNeeded();
+ const rect=await save.boundingBox();assert.ok(rect&&rect.x>=-1&&rect.x+rect.width<=391&&rect.y>=-1&&rect.y+rect.height<=845);
+ assert.equal(await save.isEnabled(),true);await save.click();await settings().getByRole('status').filter({hasText:'Configuración guardada para esta tienda.'}).waitFor();
+ await settings().screenshot({path:`${output}/permisos-admin-mobile.png`});
+ await collab.setViewportSize({width:390,height:844});await history.screenshot({path:`${output}/historial-colaborador-mobile.png`});
+ assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
+ observations.push({deletionScope:'Local API responses exercise UI; actual authorization and database races are tested separately in the SQL suite',writes:(await state()).writes,deletes:(await state()).deletes});
+ pass('Los permisos se pueden guardar desde móvil y el historial sigue disponible con acciones apropiadas');
+ await writeFile(`${output}/resultado.json`,JSON.stringify({status:'PASS',passed,observations,errors,external,dialogs,scope:'Real schedule-access components and collaborator dashboard; only transport/auth and unrelated panels isolated; no production access'},null,2));
+}catch(error){for(const [name,page] of Object.entries({admin,collab,study,request}))await page?.screenshot({path:`${output}/fallo-${name}.png`,fullPage:true}).catch(()=>{});await writeFile(`${output}/resultado.json`,JSON.stringify({status:'FAIL',passed,errors,external,dialogs,error:String(error)},null,2));throw error;
+}finally{await browser?.close();server.kill();}

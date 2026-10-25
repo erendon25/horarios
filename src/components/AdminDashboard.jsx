@@ -8,6 +8,7 @@ import { canDeleteStaffProfile, invokeStaffAccountAdmin } from '../services/staf
 import { readHolidayLedger, summarizeHolidayLedger } from '../services/holidayBalance';
 import HolidayBalancePanel from './HolidayBalancePanel';
 import HolidayPaymentSettings from './HolidayPaymentSettings';
+import ScheduleAccessSettings from './ScheduleAccessSettings';
 import {
     getWorkedHolidaysByUid,
     getNightHoursByUid,
@@ -1418,7 +1419,7 @@ function AdminDashboard() {
                                 <p className="text-sm text-gray-500 font-medium">
                                     {lockSettings.restrictionsEnabled
                                         ? `Bloqueo activo hasta el ${new Date(lockSettings.reenableDate + 'T00:00:00').toLocaleDateString('es-ES')}`
-                                        : 'Los colaboradores pueden editar sus horarios libremente.'}
+                                        : 'El bloqueo temporal de cambios está desactivado.'}
                                 </p>
                             </div>
                         </div>
@@ -1454,6 +1455,7 @@ function AdminDashboard() {
                             )}
                         </div>
                     </div>
+                    {userData?.storeId && ['admin', 'superadmin'].includes(userRole) && <ScheduleAccessSettings key={userData.storeId} storeId={userData.storeId} />}
                 </div>
             </div>
 

@@ -1,3 +1,5 @@
+import { operationalStaffCount } from './projectionStaffCount.js';
+
 // Shared by the on-screen matrix and all daily Excel worksheets.
 const HEATMAP_START_MINUTES = 7 * 60;
 const HEATMAP_END_MINUTES = 25 * 60;
@@ -71,7 +73,7 @@ export function buildHeatmapRows(assigned = [], requirements = {}) {
             for (let i = 0; i < projectionOffsetSlots; i++) fullRow.push(0);
 
             for(let i=0; i<21; i++) {
-               const qty = sourceRow[i] || 0;
+               const qty = operationalStaffCount(sourceRow[i]);
                fullRow.push(qty, qty, qty, qty);
             }
             return fullRow.slice(0, HOURS.length);

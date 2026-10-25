@@ -14,7 +14,7 @@ if (process.env.BUK_QA_MANAGEMENT === '1') {
 }
 const fixtureJson = JSON.stringify(fixture);
 const transport = `
-const db={};const fixture=${fixtureJson};window.bukQaWrites=[];
+export const db={};const fixture=${fixtureJson};window.bukQaWrites=[];
 const projectionHoursQa=${JSON.stringify(realtimeQa)};
 const subscriptions=new Set();let eventSource;
 window.bukQaRealtimeConnected=false;

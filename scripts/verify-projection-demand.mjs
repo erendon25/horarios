@@ -28,10 +28,24 @@ const pass = message => { passed.push(message); console.log(`PASS: ${message}`);
 const row = id => page.locator(`tr[data-position-id="${id}"]`);
 const cell = (id, hour='12:00') => row(id).locator(`td[data-hour="${hour}"]`);
 const counts = async (hour='12:00', selectedIds=ids) => Object.fromEntries(await Promise.all(selectedIds.map(async id => [id, Number((await cell(id,hour).textContent()).trim())])));
+const closeTo = (actual,expected) => Math.abs(actual-expected)<=1e-10*Math.max(1,Math.abs(expected));
 const checkCounts = async (label, expected, hour='12:00', selectedIds=ids) => {
-  await poll(async () => JSON.stringify(await counts(hour,selectedIds)) === JSON.stringify(expected), `${label}: counts did not match ${JSON.stringify(expected)}`);
+  const shown=Object.fromEntries(Object.entries(expected).map(([id,value])=>[id,Math.round(value)]));
+  await poll(async () => {
+    const actual=await counts(hour,selectedIds);
+    return Object.keys(actual).length===Object.keys(shown).length&&Object.entries(shown).every(([id,value])=>actual[id]===value);
+  }, `${label}: visible counts did not match ${JSON.stringify(shown)}`);
+  const storeId=await page.getByLabel('Tienda de prueba',{exact:true}).inputValue();
+  const hourIndex=(await cell(selectedIds[0],hour).locator('xpath=ancestor::table').locator('thead th').allTextContents()).map(value=>value.trim()).filter(value=>/^\d{2}:\d{2}$/.test(value)).indexOf(hour);
+  assert.ok(hourIndex>=0,`Missing hour ${hour}`);
+  let raw;
+  await poll(async()=>{
+    const saved=(await state()).configurations[storeId];
+    raw=Object.fromEntries(selectedIds.map(id=>[id,Number(saved.requirements?.monday?.matrix?.[saved.positions.findIndex(position=>position.id===id)]?.[hourIndex]||0)]));
+    return Object.entries(expected).every(([id,value])=>closeTo(raw[id],value));
+  },`${label}: persisted staffing lost precision or did not match ${JSON.stringify(expected)}`);
   const actual = await counts(hour,selectedIds);
-  observations.push({label,hour,counts:actual});
+  observations.push({label,hour,counts:actual,expectedRaw:expected,persistedRaw:raw});
   return actual;
 };
 const open = async () => {
@@ -61,8 +75,8 @@ const visuals = async (selectedIds=ids) => {
 };
 const checkGroups = async (production,service,all,hour='12:00') => {
   const read=async group=>Number((await page.locator(`tr[data-staff-total="${group}"] td[data-hour="${hour}"]`).textContent()).trim());
-  assert.equal(await read('production'),production);assert.equal(await read('service'),service);assert.equal(await read('all'),all);
-  assert.equal(production+service,all);
+  assert.equal(await read('production'),Math.round(production));assert.equal(await read('service'),Math.round(service));assert.equal(await read('all'),Math.round(all));
+  assert.ok(closeTo(production+service,all));
 };
 try{
   await new Promise((resolve,reject)=>{
@@ -79,56 +93,56 @@ try{
   fixture.configuration.vestidoPositionId='cocina';
   await seedProjectionDemandQaFixture(page.request,base,fixture);
   await page.goto(base);await row('cocina').waitFor();
-  await checkCounts('Venta 2000 / VHL 500',{'cocina':4,'custom-qa-1':4,'sheetout-qa':8,'landing-qa':2,'service-qa':2,'driver-qa':2,'fixed-qa':2});
-  await checkGroups(18,6,24);
+  await checkCounts('Venta 2000 / VHL 500',{'cocina':4,'custom-qa-1':4,'sheetout-qa':8,'landing-qa':2,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
+  await checkGroups(18,46/9,208/9);
   const independent=await counts('12:00',['service-qa','driver-qa','fixed-qa']);
   await vhl(1000);
-  await checkCounts('VHL 1000 modifica Vestido y derivados',{'cocina':2,'custom-qa-1':2,'sheetout-qa':4,'landing-qa':1,'service-qa':2,'driver-qa':2,'fixed-qa':2});
+  await checkCounts('VHL 1000 modifica Vestido y derivados',{'cocina':2,'custom-qa-1':2,'sheetout-qa':4,'landing-qa':1,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
   assert.deepEqual(await counts('12:00',['service-qa','driver-qa','fixed-qa']),independent);
   await vhl(500);
-  await checkCounts('Restaurar VHL',{'cocina':4,'custom-qa-1':4,'sheetout-qa':8,'landing-qa':2,'service-qa':2,'driver-qa':2,'fixed-qa':2});
+  await checkCounts('Restaurar VHL',{'cocina':4,'custom-qa-1':4,'sheetout-qa':8,'landing-qa':2,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
   pass('Venta 2000/VHL500 asigna cuatro a Vestido; factores2/.5 generan8/2, mientras Servicio/Driver/Fijo no dependen del VHL');
 
   await edit('sheetout-qa','Factor',0.75);
-  await checkCounts('Factor propio .75',{'cocina':4,'custom-qa-1':4,'sheetout-qa':3,'landing-qa':2,'service-qa':2,'driver-qa':2,'fixed-qa':2});
+  await checkCounts('Factor propio .75',{'cocina':4,'custom-qa-1':4,'sheetout-qa':3,'landing-qa':2,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
   await edit('sheetout-qa','Factor',2);
   await edit('cocina','Tope de personal',5);
   await vhl(250);
-  await checkCounts('Base ocho, Vestido limitado a cinco',{'cocina':5,'custom-qa-1':5,'sheetout-qa':10,'landing-qa':3,'service-qa':2,'driver-qa':2,'fixed-qa':2});
-  await checkGroups(23,6,29);
+  await checkCounts('Base ocho, Vestido limitado a cinco',{'cocina':5,'custom-qa-1':5,'sheetout-qa':10,'landing-qa':2.5,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
+  await checkGroups(22.5,46/9,497/18);
   const distribution=page.getByRole('heading',{name:'Distribucion de Personal e Ingresos por Hora',exact:true}).locator('xpath=../..');
   await distribution.screenshot({path:`${output}/vestido-tope-cinco-derivados.png`});
   await edit('sheetout-qa','Tope de personal',7);
   await edit('landing-qa','Mínimo',4);
   await edit('custom-qa-1','Tope de personal',2);
-  await checkCounts('Topes y mínimo propios',{'cocina':5,'custom-qa-1':2,'sheetout-qa':7,'landing-qa':4,'service-qa':2,'driver-qa':2,'fixed-qa':2});
-  await checkGroups(18,6,24);
+  await checkCounts('Topes y mínimo propios',{'cocina':5,'custom-qa-1':2,'sheetout-qa':7,'landing-qa':4,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
+  await checkGroups(18,46/9,208/9);
   const limited=await visuals();
   assert.equal(limited['cocina'].background,limited['sheetout-qa'].background,'Both assigned limits must retain the red limit color');
   await edit('sheetout-qa','Tope de personal','');
   await edit('landing-qa','Mínimo','');
   await edit('custom-qa-1','Tope de personal','');
-  pass('Otras áreas usan el Vestido final limitado a cinco y respetan sus factores, redondeo, topes, mínimos y colores propios');
+  pass('Otras áreas usan el Vestido final limitado a cinco y respetan sus factores sin redondear, topes, mínimos y colores propios');
 
   await manual('cocina',3);
-  await checkCounts('Vestido manual tres',{'cocina':3,'custom-qa-1':3,'sheetout-qa':6,'landing-qa':2,'service-qa':2,'driver-qa':2,'fixed-qa':2});
+  await checkCounts('Vestido manual tres',{'cocina':3,'custom-qa-1':3,'sheetout-qa':6,'landing-qa':1.5,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
   await manual('cocina',6);
-  await checkCounts('Vestido manual superior al tope',{'cocina':6,'custom-qa-1':6,'sheetout-qa':12,'landing-qa':3,'service-qa':2,'driver-qa':2,'fixed-qa':2});
+  await checkCounts('Vestido manual superior al tope',{'cocina':6,'custom-qa-1':6,'sheetout-qa':12,'landing-qa':3,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
   await manual('cocina',3);
   await manual('cocina',3,'11:00');
-  await checkCounts('Hora sin ventas con Vestido manual',{'cocina':3,'custom-qa-1':3,'sheetout-qa':6,'landing-qa':2,'service-qa':0,'driver-qa':0,'fixed-qa':2},'11:00');
-  await checkGroups(14,2,16,'11:00');
+  await checkCounts('Hora sin ventas con Vestido manual',{'cocina':3,'custom-qa-1':3,'sheetout-qa':6,'landing-qa':1.5,'service-qa':0,'driver-qa':0,'fixed-qa':2},'11:00');
+  await checkGroups(13.5,2,15.5,'11:00');
   await manual('sheetout-qa',1);
-  await checkCounts('Override manual del área derivada',{'cocina':3,'custom-qa-1':3,'sheetout-qa':1,'landing-qa':2,'service-qa':2,'driver-qa':2,'fixed-qa':2});
+  await checkCounts('Override manual del área derivada',{'cocina':3,'custom-qa-1':3,'sheetout-qa':1,'landing-qa':1.5,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
   await manual('sheetout-qa',6);
-  await checkCounts('Restaurar asignación derivada manualmente',{'cocina':3,'custom-qa-1':3,'sheetout-qa':6,'landing-qa':2,'service-qa':2,'driver-qa':2,'fixed-qa':2});
+  await checkCounts('Restaurar asignación derivada manualmente',{'cocina':3,'custom-qa-1':3,'sheetout-qa':6,'landing-qa':1.5,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
   pass('Los derivados siguen la asignación manual real de Vestido, incluso sin ventas o por encima de su tope; sus propios ajustes manuales conservan prioridad');
 
   await edit('cocina','Nombre de posición','Zona principal renombrada');
   let modal=await open();
   assert.equal(await modal.getByLabel('Área Vestido',{exact:true}).inputValue(),'cocina','Renaming the selected source must retain its stable id');
   await close(modal);
-  await checkCounts('Fuente renombrada conserva referencia',{'cocina':3,'custom-qa-1':3,'sheetout-qa':6,'landing-qa':2,'service-qa':2,'driver-qa':2,'fixed-qa':2});
+  await checkCounts('Fuente renombrada conserva referencia',{'cocina':3,'custom-qa-1':3,'sheetout-qa':6,'landing-qa':1.5,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
   await poll(async()=>{
     const saved=(await state()).configurations['store-a'];
     return saved.vestidoPositionId==='cocina'&&saved.manualStaffByDay?.lunes?.cocina?.['12:00']===3
@@ -136,7 +150,7 @@ try{
   },'Reference, manual allocations, or derived weekly requirements were not persisted');
   const beforeReload=await visuals();
   await page.reload();await row('cocina').waitFor();
-  await checkCounts('Recarga conserva fórmula y manuales',{'cocina':3,'custom-qa-1':3,'sheetout-qa':6,'landing-qa':2,'service-qa':2,'driver-qa':2,'fixed-qa':2});
+  await checkCounts('Recarga conserva fórmula y manuales',{'cocina':3,'custom-qa-1':3,'sheetout-qa':6,'landing-qa':1.5,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
   assert.deepEqual(await visuals(),beforeReload);
   modal=await open();assert.equal(await modal.getByLabel('Área Vestido',{exact:true}).inputValue(),'cocina');await close(modal);
   pass('Renombrar Vestido conserva su id; la recarga mantiene referencia, configuraciones, requisitos, grupos, asignaciones y colores');
@@ -148,7 +162,7 @@ try{
   modal=await open();
   await modal.getByLabel('Área Vestido',{exact:true}).selectOption('service-qa');
   await close(modal);
-  await checkCounts('Referencia elegida de lógica Servicio',{'cocina':3,'custom-qa-1':8,'sheetout-qa':6,'landing-qa':4,'service-qa':8,'driver-qa':2,'fixed-qa':2});
+  await checkCounts('Referencia elegida de lógica Servicio',{'cocina':3,'custom-qa-1':8,'sheetout-qa':6,'landing-qa':4,'service-qa':8,'driver-qa':10/9,'fixed-qa':2});
   await poll(async()=>(await state()).configurations['store-a'].vestidoPositionId==='service-qa','Selected source id did not persist');
   await page.reload();await row('service-qa').waitFor();
   assert.equal(Number((await cell('service-qa').textContent()).trim()),8);
@@ -160,12 +174,12 @@ try{
   await page.getByLabel('Tienda de prueba',{exact:true}).selectOption('store-b');
   await row('custom-qa-1').waitFor();
   const bIds=ids.filter(id=>id!=='cocina');
-  await checkCounts('Vestido personalizado legado único',{'custom-qa-1':4,'sheetout-qa':8,'landing-qa':2,'service-qa':2,'driver-qa':2,'fixed-qa':2},'12:00',bIds);
+  await checkCounts('Vestido personalizado legado único',{'custom-qa-1':4,'sheetout-qa':8,'landing-qa':2,'service-qa':2,'driver-qa':10/9,'fixed-qa':2},'12:00',bIds);
   modal=await open();assert.equal(await modal.getByLabel('Área Vestido',{exact:true}).inputValue(),'custom-qa-1');await close(modal);
   await edit('custom-qa-1','Nombre de posición','Referencia personalizada B');
   await poll(async()=>(await state()).configurations['store-b'].vestidoPositionId==='custom-qa-1','Legacy custom source was not made explicit for persistence');
   await page.reload();await row('custom-qa-1').waitFor();
-  await checkCounts('Vestido personalizado renombrado',{'custom-qa-1':4,'sheetout-qa':8,'landing-qa':2,'service-qa':2,'driver-qa':2,'fixed-qa':2},'12:00',bIds);
+  await checkCounts('Vestido personalizado renombrado',{'custom-qa-1':4,'sheetout-qa':8,'landing-qa':2,'service-qa':2,'driver-qa':10/9,'fixed-qa':2},'12:00',bIds);
   await page.getByLabel('Tienda de prueba',{exact:true}).selectOption('store-a');
   await row('cocina').waitFor();
   modal=await open();assert.equal(await modal.getByLabel('Área Vestido',{exact:true}).inputValue(),'service-qa');await close(modal);
@@ -180,20 +194,20 @@ try{
   await seedProjectionDemandQaFixture(page.request,base,zeroFixture);
   await page.getByLabel('Tienda de prueba',{exact:true}).selectOption('store-c');
   await row('cocina').waitFor();
-  await checkCounts('Configuración limpia para tope cero',{'cocina':4,'custom-qa-1':4,'sheetout-qa':8,'landing-qa':2,'service-qa':2,'driver-qa':2,'fixed-qa':2});
+  await checkCounts('Configuración limpia para tope cero',{'cocina':4,'custom-qa-1':4,'sheetout-qa':8,'landing-qa':2,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
   await edit('sheetout-qa','Tope de personal',0);
-  await checkCounts('Área por factor con tope explícito cero',{'cocina':4,'custom-qa-1':4,'sheetout-qa':0,'landing-qa':2,'service-qa':2,'driver-qa':2,'fixed-qa':2});
+  await checkCounts('Área por factor con tope explícito cero',{'cocina':4,'custom-qa-1':4,'sheetout-qa':0,'landing-qa':2,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
   await edit('sheetout-qa','Mínimo',2);
   await edit('service-qa','Tope de personal',0);
   await edit('driver-qa','Tope de personal',0);
-  await checkCounts('Mínimo histórico sobre tope cero y otras lógicas',{'cocina':4,'custom-qa-1':4,'sheetout-qa':2,'landing-qa':2,'service-qa':2,'driver-qa':2,'fixed-qa':2});
+  await checkCounts('Mínimo histórico sobre tope cero y otras lógicas',{'cocina':4,'custom-qa-1':4,'sheetout-qa':2,'landing-qa':2,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
   await edit('cocina','Tope de personal',0);
-  await checkCounts('Vestido con tope cero sin asignación manual',{'cocina':0,'custom-qa-1':0,'sheetout-qa':2,'landing-qa':0,'service-qa':2,'driver-qa':2,'fixed-qa':2});
+  await checkCounts('Vestido con tope cero sin asignación manual',{'cocina':0,'custom-qa-1':0,'sheetout-qa':2,'landing-qa':0,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
   await edit('sheetout-qa','Tope de personal','');
   await edit('sheetout-qa','Mínimo','');
-  await checkCounts('Vestido cero no genera personas por factor',{'cocina':0,'custom-qa-1':0,'sheetout-qa':0,'landing-qa':0,'service-qa':2,'driver-qa':2,'fixed-qa':2});
+  await checkCounts('Vestido cero no genera personas por factor',{'cocina':0,'custom-qa-1':0,'sheetout-qa':0,'landing-qa':0,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
   await manual('cocina',3);
-  await checkCounts('Manual Vestido conserva prioridad sobre tope cero',{'cocina':3,'custom-qa-1':3,'sheetout-qa':6,'landing-qa':2,'service-qa':2,'driver-qa':2,'fixed-qa':2});
+  await checkCounts('Manual Vestido conserva prioridad sobre tope cero',{'cocina':3,'custom-qa-1':3,'sheetout-qa':6,'landing-qa':1.5,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
   pass('El tope cero conserva la regla histórica de producción y su mínimo; Servicio/Driver/Fijo no cambian y una asignación manual de Vestido sigue propagándose');
   assert.deepEqual(errors,[]);assert.deepEqual(unexpectedNetwork,[]);
   await writeFile(`${output}/resultado.json`,JSON.stringify({status:'PASS',passed,observations,errors,unexpectedNetwork,

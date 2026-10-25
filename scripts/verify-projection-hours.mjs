@@ -1,5 +1,5 @@
 // Real WeeklyScheduleEditor + heatmap header with isolated local document/SSE transport.
-// Verifies source-hour totals rather than counting rendered quarter-hour cells.
+// Verifies only the selected day's source-hour total, with no weekly card.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -18,10 +18,13 @@ const pass=message=>{passed.push(message);console.log(`PASS: ${message}`)};
 const poll=async(action,message)=>{for(let i=0;i<100;i++){if(await action())return;await new Promise(resolve=>setTimeout(resolve,100));}throw Error(message)};
 const summary=(scope=page)=>scope.getByTestId('projection-hours-summary');
 const value=async(id,scope=page)=>(await scope.getByTestId(id).locator('dd').textContent()).replace(/\s+/g,' ').trim();
-const expectHours=async(day,week,scope=page)=>{
- await poll(async()=>await value('projection-hours-day',scope)===day&&await value('projection-hours-week',scope)===week,
-  `Expected projection day=${day}, week=${week}`);
- observations.push({day,week});
+const expectHours=async(day,dayLabel='Lunes',scope=page)=>{
+ await poll(async()=>await value('projection-hours-day',scope)===day
+  &&(await scope.getByTestId('projection-hours-day').locator('dt').textContent()).trim()===`HH proyección · ${dayLabel}`,
+  `Expected selected-day projection ${dayLabel}=${day}`);
+ assert.equal(await scope.getByTestId('projection-hours-week').count(),0,'The weekly projection card must not appear');
+ assert.equal(await summary(scope).getByText(/7\s*días|Parcial/i).count(),0,'The daily summary must not show a weekly label or partial-week badge');
+ observations.push({day,dayLabel,weeklyCard:false});
 };
 const setProjection=async(data,path=projectionPath)=>{
  const response=await page.request.post(`${base}/qa-document`,{data:{path,data}});
@@ -64,60 +67,58 @@ try{
  await setProjection(initial);
  await page.goto(base);
  await summary().waitFor();
- await expectHours('Cargando…','Cargando…');
+ await expectHours('Cargando…');
  gateOpen=true;releaseInitial();
- await expectHours('12 h','18 h');
- await page.getByText('Parcial · 3/7 días',{exact:true}).waitFor();
+ await expectHours('12 h');
  assert.ok(!/12\s*h/.test(await programmed()),'The programmed staff total must remain independent of the 12 projected hours');
  const originalProgrammed=await programmed();
  const region=page.getByRole('region',{name:'Matriz de cobertura por posición y horario',exact:true});
  assert.equal(await region.locator('thead th[scope="col"]').count(),73,'The heatmap retains its 73 quarter-hour labels including 25:00');
  assert.equal((await region.locator('thead th[scope="col"]').last().textContent()).trim(),'25:00');
  await summary().screenshot({path:`${output}/resumen-desktop.png`});
- pass('La carga muestra pendiente; tres personas por cuatro horas dan12h y la semana parcial18h, conservando las HH programadas y la matriz de15min');
+ pass('La carga muestra pendiente y luego12h solo del lunes, sin tarjeta semanal, conservando las HH programadas y la matriz de15min');
 
- await daySelect().selectOption('tuesday');await expectHours('6 h','18 h');
- await daySelect().selectOption('wednesday');await expectHours('0 h','18 h');
- await daySelect().selectOption('thursday');await expectHours('Sin proyección','18 h');
- await daySelect().selectOption('monday');await expectHours('12 h','18 h');
+ await daySelect().selectOption('tuesday');await expectHours('6 h','Martes');
+ await daySelect().selectOption('wednesday');await expectHours('0 h','Miércoles');
+ await daySelect().selectOption('thursday');await expectHours('Sin proyección','Jueves');
+ await daySelect().selectOption('monday');await expectHours('12 h');
  await page.getByPlaceholder('Buscar colaborador...',{exact:true}).fill('Ningún colaborador QA coincide');
- await expectHours('12 h','18 h');assert.equal(await programmed(),originalProgrammed);
+ await expectHours('12 h');assert.equal(await programmed(),originalProgrammed);
  await page.getByPlaceholder('Buscar colaborador...',{exact:true}).fill('');
  const modality=page.locator('select').filter({has:page.locator('option[value="Full-Time"]')}).first();
- await modality.selectOption('Full-Time');await expectHours('12 h','18 h');assert.equal(await programmed(),originalProgrammed);
+ await modality.selectOption('Full-Time');await expectHours('12 h');assert.equal(await programmed(),originalProgrammed);
  await modality.selectOption('Todos');
- await page.getByRole('button',{name:'Ver Todos',exact:true}).click();await expectHours('12 h','18 h');
+ await page.getByRole('button',{name:'Ver Todos',exact:true}).click();await expectHours('12 h');
  await page.getByRole('button',{name:'Solo Tienda',exact:true}).click();
- pass('Cambiar de día distingue cero de ausencia; buscar, filtrar modalidad y alternar personal no modifica la proyección de tienda ni las HH programadas');
+ pass('Cambiar de día actualiza etiqueta y HH, distinguiendo cero de ausencia; los filtros no modifican el total diario de proyección ni las HH programadas');
 
  await page.waitForFunction(()=>window.bukQaRealtimeConnected===true);
  await page.getByRole('button',{name:'Maximizar mapa de cobertura',exact:true}).click();
  const dialog=page.getByRole('dialog');await dialog.waitFor();
  assert.equal(await dialog.evaluate(element=>element.matches(':modal')),true);
  await checkMapHeight('1500x1000 fullscreen',dialog);
- await expectHours('12 h','18 h',dialog);
+ await expectHours('12 h','Lunes',dialog);
  assert.equal(await summary(dialog).count(),1,'Fullscreen must share one summary rather than duplicating it');
  await setProjection({...initial,requirements:{monday:{positions:['LANDING'],matrix:{'0':hourRow(99,4)}}}},'stores/another-store/config/schedule_projection');
- await expectHours('12 h','18 h',dialog);
+ await expectHours('12 h','Lunes',dialog);
  const updated=structuredClone(initial);updated.requirements.monday.matrix['0']=hourRow(4,4);
- await setProjection(updated);await expectHours('16 h','22 h',dialog);
+ await setProjection(updated);await expectHours('16 h','Lunes',dialog);
  await dialog.screenshot({path:`${output}/resumen-fullscreen-actualizado.png`});
  await dialog.getByRole('button',{name:'Minimizar mapa de cobertura',exact:true}).click();
- await expectHours('16 h','22 h');assert.equal(await programmed(),originalProgrammed);
+ await expectHours('16 h');assert.equal(await programmed(),originalProgrammed);
  pass('La vista ampliada comparte el resumen y recibe cambios en vivo de su tienda; un cambio de otra tienda no lo reemplaza');
 
  // The last visible heatmap column is one quarter-hour cell, but its source
  // requirement is a complete legacy hour; use the source instead of its pixels.
  const lastHour={positions:['LANDING'],requirements:{monday:{positions:['LANDING'],matrix:{'0':Object.fromEntries(Array.from({length:18},(_,index)=>[String(index),index===17?3:0]))}}}};
- await setProjection(lastHour);await expectHours('3 h','3 h');
- await page.getByText('Parcial · 1/7 días',{exact:true}).waitFor();
- await setProjection(null);await expectHours('Sin proyección','Sin proyección');
+ await setProjection(lastHour);await expectHours('3 h');
+ await setProjection(null);await expectHours('Sin proyección');
  await setProjection({positions:['LANDING'],requirements:{monday:{positions:['LANDING'],matrix:{}}}});
- await expectHours('0 h','0 h');
+ await expectHours('0 h');
  pass('El cálculo usa horas fuente sin contar dos veces25:00 y distingue documento ausente de una proyección explícita de cero');
 
- readFailure=true;await setProjection(initial);await expectHours('No disponible','No disponible');
- readFailure=false;await setProjection(initial);await expectHours('12 h','18 h');
+ readFailure=true;await setProjection(initial);await expectHours('No disponible');
+ readFailure=false;await setProjection(initial);await expectHours('12 h');
  pass('Un error de lectura muestra No disponible y la suscripción recupera los valores al restablecerse');
 
  await page.setViewportSize({width:991,height:435});
@@ -133,7 +134,7 @@ try{
  await page.getByRole('button',{name:'Maximizar mapa de cobertura',exact:true}).click();
  const mobileDialog=page.getByRole('dialog');await mobileDialog.waitFor();
  await checkMapHeight('390x844 fullscreen',mobileDialog);
- await expectHours('12 h','18 h',mobileDialog);
+ await expectHours('12 h','Lunes',mobileDialog);
  const mobileBounds=await summary(mobileDialog).boundingBox();
  assert.ok(mobileBounds&&mobileBounds.x>=-1&&mobileBounds.x+mobileBounds.width<=391&&mobileBounds.y>=-1&&mobileBounds.y+mobileBounds.height<=845);
  await mobileDialog.screenshot({path:`${output}/resumen-mobile-fullscreen.png`});

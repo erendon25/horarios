@@ -36,6 +36,9 @@ import {
 import { MOTIVATIONAL_QUOTES } from "../constants/quotes";
 import ModalSelectorDePosiciones from "./ModalSelectorDePosiciones";
 import ProfilePhotoEditor from './ProfilePhotoEditor';
+import CollaboratorScheduleActions from './CollaboratorScheduleActions';
+import MyScheduleRequests from './MyScheduleRequests';
+import { useScheduleAccessPolicy } from '../hooks/useScheduleAccessPolicy';
 
 const CollaboratorDashboard = () => {
   const { currentUser, logout, userRole, updatePassword } = useAuth();
@@ -63,6 +66,8 @@ const CollaboratorDashboard = () => {
   const [storeStaff, setStoreStaff] = useState([]);
   const [selectedTrainerStaff, setSelectedTrainerStaff] = useState(null);
   const [storeRequirements, setStoreRequirements] = useState([]);
+  const [requestRefreshKey, setRequestRefreshKey] = useState(0);
+  const scheduleAccess = useScheduleAccessPolicy(perfil?.storeId);
 
   const handleChangePassword = async () => {
     setPasswordError("");
@@ -125,6 +130,16 @@ const CollaboratorDashboard = () => {
     if (status === 'expired' && !perfil?.sanitaryCardUnlock) return true;
     return false;
   };
+
+  const canEditStudies = scheduleAccess.status === 'ready' && Boolean(scheduleAccess.policy)
+    && !scheduleAccess.policy.adminOnlyStudyEditing && !isRestricted();
+  const canRequestSchedule = scheduleAccess.status === 'ready' && scheduleAccess.policy?.requestsEnabled === true
+    && !isRestricted();
+
+  useEffect(() => {
+    setModalType(current => (current === 'study' && !canEditStudies)
+      || (current === 'request' && !canRequestSchedule) ? null : current);
+  }, [canEditStudies, canRequestSchedule]);
 
   const isTrainer = perfil?.position === 'ENTRENADOR';
   useEffect(() => {
@@ -712,36 +727,12 @@ const CollaboratorDashboard = () => {
         )}
 
         {/* Botones de acción */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-          <button
-            onClick={() => !isRestricted() && setModalType("study")}
-            className={`${isRestricted() ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-blue-500 to-blue-600 text-white transform hover:scale-105'} p-6 rounded-xl shadow-md transition-all duration-200 flex flex-col items-center gap-3`}
-            disabled={isRestricted()}
-          >
-            <BookOpen className="w-8 h-8" />
-            <span className="font-semibold text-lg">Editar Horarios de Estudio</span>
-            <span className="text-sm opacity-90">{isRestricted() ? 'Cambios inhabilitados' : 'Gestiona tus horarios académicos'}</span>
-          </button>
+        <CollaboratorScheduleActions access={scheduleAccess} restricted={isRestricted()}
+          onStudy={() => canEditStudies && setModalType('study')}
+          onRequest={() => canRequestSchedule && setModalType('request')}
+          onHolidays={() => setModalType('feriados')} />
 
-          <button
-            onClick={() => setModalType("feriados")}
-            className="bg-gradient-to-r from-purple-500 to-purple-600 text-white p-6 rounded-xl shadow-md transition-all duration-200 flex flex-col items-center gap-3"
-          >
-            <Calendar className="w-8 h-8" />
-            <span className="font-semibold text-lg">Ver mis feriados</span>
-            <span className="text-sm opacity-90">Saldo, descansos compensados y feriados destinados a boleta</span>
-          </button>
-
-          <button
-            onClick={() => !isRestricted() && setModalType("request")}
-            className={`${isRestricted() ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-orange-500 to-red-600 text-white transform hover:scale-105'} p-6 rounded-xl shadow-md transition-all duration-200 flex flex-col items-center gap-3 md:col-span-2`}
-            disabled={isRestricted()}
-          >
-            <ClipboardList className="w-8 h-8" />
-            <span className="font-semibold text-lg">Solicitar Horario Específico</span>
-            <span className="text-sm opacity-90">{isRestricted() ? 'Cambios inhabilitados' : 'Solicita un turno o rango horario especial'}</span>
-          </button>
-        </div>
+        <MyScheduleRequests perfil={perfil} refreshKey={requestRefreshKey} />
 
         {/* --- SECCIÓN DE HABILIDADES Y PROGRESO (Para todos) --- */}
         {perfil?.id && (
@@ -912,12 +903,13 @@ const CollaboratorDashboard = () => {
               </div>
 
               <div className="p-6">
-                {modalType === "study" && <StudyScheduleForm onSuccess={closeModal} locked={isRestricted()} />}
+                {modalType === "study" && canEditStudies && <StudyScheduleForm storeId={perfil.storeId} onSuccess={closeModal} locked={!canEditStudies} />}
                 {modalType === "feriados" && <>
                   <HolidayBalancePanel staffId={perfil.id} previousBalance={perfil.holidayBalance} />
                   <details><summary className="cursor-pointer font-semibold">Registrar un feriado faltante</summary><HolidayForm locked={isRestricted()} /></details>
                 </>}
-                {modalType === "request" && <ScheduleRequestForm perfil={perfil} onSuccess={closeModal} locked={isRestricted()} />}
+                {modalType === "request" && canRequestSchedule && <ScheduleRequestForm perfil={perfil}
+                  onSuccess={() => { setRequestRefreshKey(value => value + 1); closeModal(); }} locked={!canRequestSchedule} />}
                 {modalType === "skills" && (
                   <ModalSelectorDePosiciones
                     docId={perfil.id}

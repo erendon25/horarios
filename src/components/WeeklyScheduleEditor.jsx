@@ -9,6 +9,7 @@ import ScheduleHeatmapMatrix from './ScheduleHeatmapMatrix';
 import WeeklyScheduleExcelButton from './WeeklyScheduleExcelButton';
 import { getHeatmapAssignments, getProjectionForDay, getExportShiftSegments, getPositionSegments, canLimitPositionCoverage } from '../services/scheduleExportData';
 import { summarizeProjectionHours } from '../services/projectionHours';
+import { operationalStaffCount } from '../services/projectionStaffCount';
 import SchedulePositionControl from './SchedulePositionControl';
 import { validateHeatmapTransfer, replacePositionInterval } from '../services/heatmapTransfers';
 import { exportGroupedPositionsPDF, exportExtraHoursReport } from './PDFExport';
@@ -669,7 +670,7 @@ export default function WeeklyScheduleEditor() {
             hour,
             slots: positions.map((pos, pi) => ({
                 position: pos,
-                required: matrix[pi]?.[i] || 0,
+                required: operationalStaffCount(matrix[pi]?.[i]),
                 assigned: 0,
             })),
         }));

@@ -97,16 +97,16 @@ export const calculatePositionStaffByGeneralVhl = ({
   const vestido = resolvedVestidoId ? positions.find((position) => position.id === resolvedVestidoId) : undefined;
   const allocate = (position, demand) => {
     const manualValue = manualByPosition[position.id];
-    if (manualValue !== undefined) return Math.round(finiteNonnegative(manualValue));
+    if (manualValue !== undefined) return finiteNonnegative(manualValue);
     // Legacy production caps treat an explicit zero as zero demand before the
     // minimum is applied. Other area types keep their existing zero-cap rules.
     const zeroProductionCap = (position === vestido || position.logic === 'sales')
       && position.maxStaff !== '' && position.maxStaff !== null && position.maxStaff !== undefined
       && Number(position.maxStaff) === 0;
     const safeDemand = zeroProductionCap ? 0 : finiteNonnegative(demand);
-    // Avoid adding a whole person for binary float noise (50 × 0.14 > 7).
-    const rounded = safeDemand > 0 ? Math.ceil(safeDemand - Number.EPSILON * safeDemand) : 0;
-    return clampByBounds(rounded, position, { isOperativeHour });
+    // Staffing demand is fractional. Keep it through dependent factors, bounds
+    // and hour totals rather than rounding each area up to a whole person.
+    return clampByBounds(safeDemand, position, { isOperativeHour });
   };
 
   // Allocate the designated base first, regardless of position order, logic or
