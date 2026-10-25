@@ -10,6 +10,12 @@ El editor semanal y las solicitudes de horario usan la disponibilidad de estudio
 - Los turnos previamente guardados se conservan, aunque el colaborador cambie después su disponibilidad. Se señalan para revisión. Cambiar solamente puesto, notas o break no obliga a eliminar un turno histórico.
 - Replicar una semana omite los nuevos turnos incompatibles y comunica cuántos omitió. La generación de horarios respeta estudios y conserva los días que ya tenían un turno o descanso.
 
+## Selección en el editor semanal
+
+El botón «Ingreso / salida aprobados» abre un modal con horarios grandes, búsqueda por hora, el nombre del colaborador y la fecha. Cada opción muestra entrada, salida, duración y si incluye break. El listado conserva los filtros de estudios y de distribución semanal; no ofrece un turno guardado que ahora sea incompatible.
+
+Seleccionar un horario lo aplica al borrador. «Cerrar selector», la X o Escape conservan el horario anterior; el botón «Guardar» del editor sigue siendo necesario para publicarlo. Los días libres, feriados compensados y una disponibilidad todavía pendiente o con error mantienen bloqueada la selección.
+
 ## Solicitudes
 
 «Horario específico» ofrece las opciones aprobadas compatibles. Apertura, medio y cierre siguen siendo preferencias para que gerencia determine el rango final; se requiere que exista algún turno compatible en esa fecha. Solicitar no cambia el horario publicado.
@@ -24,6 +30,7 @@ Pruebas locales sin personal ni solicitudes reales:
 node --test src/services/shiftAvailability.test.js
 PGLITE_MODULE=/ruta/a/@electric-sql/pglite/dist/index.js node scripts/test-study-availability-db.mjs
 PLAYWRIGHT_MODULE=/ruta/a/playwright/index.mjs node scripts/verify-study-availability-ui.mjs
+PLAYWRIGHT_MODULE=/ruta/a/playwright/index.mjs node scripts/verify-approved-shift-modal-ui.mjs
 ```
 
 La prueba SQL utiliza RLS y las funciones de guardado y aprobación. La prueba de navegador usa los componentes reales con un transporte local, y comprueba el tratamiento visual de un rechazo de aprobación; esa última petición no se dirige a producción.

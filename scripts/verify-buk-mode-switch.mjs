@@ -49,6 +49,7 @@ try {
   await page.goto(base);
   const approved=page.getByLabel('Horario aprobado BUK de Prueba FT1',{exact:true});
   const row=approved.locator('xpath=ancestor::tr[1]');
+  const chooseShift=async(trigger,id)=>{await trigger.click();const dialog=page.getByRole('dialog',{name:'Seleccionar horario',exact:true});await dialog.waitFor();await dialog.locator('[data-shift-id="'+id+'"]').click();await dialog.waitFor({state:'hidden'})};
   const day=page.locator('select').filter({has:page.locator('option[value="monday"]')});
   const storedDraft=()=>page.evaluate(key=>JSON.parse(localStorage.getItem(key)),draftKey);
   const storedSchedule=async()=>{const result=await (await page.request.get(`${base}/qa-document?path=${encodeURIComponent(documentPath)}`)).json();assert.equal(result.found,true);return result.data};
@@ -64,7 +65,7 @@ try {
   assert.equal(await row.getByTitle('Entrada',{exact:true}).inputValue(),historical.monday.start);
   assert.equal(await row.getByTitle('Entrada del segundo tramo',{exact:true}).inputValue(),'17:00');
   assert.equal(await row.getByTitle('Salida del segundo tramo',{exact:true}).inputValue(),'19:00');
-  assert.equal(await approved.inputValue(),'','A split shift is not presented as an approved BUK range');
+  assert.equal(await approved.getAttribute('data-selected-shift-id'),'','A split shift is not presented as an approved BUK range');
   await row.getByText('Turno partido conservado. Elige un horario BUK para reemplazar ambos tramos.',{exact:true}).waitFor();
   assert.deepEqual(await storedDraft(),envelope,'Loading BUK does not convert the old draft');
   assert.deepEqual(await storedSchedule(),historical,'Loading BUK does not rewrite historical schedules');
@@ -92,7 +93,7 @@ try {
   pass('Editar, guardar y recargar conserva ambos tramos históricos, el borrador recuperado y los demás días');
   await page.reload();await assertBukOnly();
   assert.equal(await row.getByTitle('Entrada del segundo tramo',{exact:true}).inputValue(),'17:00');
-  await approved.selectOption(fixture.schedules.FT1.monday.bukApprovedShiftId);
+  await chooseShift(approved,fixture.schedules.FT1.monday.bukApprovedShiftId);
   assert.equal(await row.getByTitle('Entrada',{exact:true}).inputValue(),fixture.schedules.FT1.monday.start);
   assert.equal(await row.getByTitle('Salida',{exact:true}).inputValue(),fixture.schedules.FT1.monday.end);
   assert.equal(await row.getByTitle('Entrada del segundo tramo',{exact:true}).count(),0);

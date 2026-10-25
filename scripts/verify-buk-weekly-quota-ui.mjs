@@ -32,8 +32,14 @@ try {
   const rests = page.locator('select[aria-label="Descansos BUK de Prueba PT1"]:enabled');
   const approved = page.getByLabel('Horario aprobado BUK de Prueba PT1', { exact: true });
   const row = approved.locator('xpath=ancestor::tr[1]');
-  const offeredDurations = async select => {
-    const ids = await select.locator('option').evaluateAll(options => options.filter(option => option.value && !option.disabled).map(option => option.value));
+  const openPicker = async trigger => { await trigger.click(); const dialog = page.getByRole('dialog', { name: 'Seleccionar horario', exact: true }); await dialog.waitFor(); return dialog; };
+  const closePicker = async dialog => { await dialog.getByRole('button', { name: 'Cerrar selector', exact: true }).click(); await dialog.waitFor({ state: 'hidden' }); };
+  const chooseShift = async (trigger, id) => { const dialog = await openPicker(trigger); await dialog.locator('[data-shift-id="' + id + '"]').click(); await dialog.waitFor({ state: 'hidden' }); };
+  const offeredDurations = async trigger => {
+    if (await trigger.isDisabled()) return [];
+    const dialog = await openPicker(trigger);
+    const ids = await dialog.locator('[data-shift-id]:enabled').evaluateAll(cards => cards.map(card => card.dataset.shiftId));
+    await closePicker(dialog);
     return [...new Set(ids.map(id => durationById.get(id)))].sort((a, b) => a - b);
   };
   await rests.waitFor();
@@ -57,12 +63,15 @@ try {
   await day.selectOption('saturday');
   await row.getByTitle('Entrada', { exact: true }).fill('06:00');
   assert.equal(await row.getByTitle('Salida', { exact: true }).inputValue(), '10:00');
-  assert.equal(await approved.inputValue(), 'PT1-5');
-  assert.equal(await approved.locator('option:checked').evaluate(option => option.disabled), true);
+  assert.equal(await approved.getAttribute('data-selected-shift-id'), 'PT1-5');
+  assert.match(await approved.innerText(), /06:00/);
+  const overQuotaPicker = await openPicker(approved);
+  assert.equal(await overQuotaPicker.locator('[data-shift-id="PT1-5"]').count(), 0, 'The current over-quota shift is shown on the trigger but is not offered');
+  await closePicker(overQuotaPicker);
   assert.deepEqual(await offeredDurations(approved), [225]);
   await row.getByText('Este turno supera la distribución semanal. Elige uno de los turnos disponibles.', { exact: true }).waitFor();
   await row.getByTitle('Entrada', { exact: true }).fill('06:15');
-  assert.equal(await approved.inputValue(), 'PT1-6');
+  assert.equal(await approved.getAttribute('data-selected-shift-id'), 'PT1-6');
   assert.equal(await row.getByTitle('Salida', { exact: true }).inputValue(), '10:00');
   assert.equal(await row.locator('td').nth(6).innerText(), '3:45');
   pass('Un rango manual que excede el plan queda señalado; un ingreso aprobado disponible autocompleta 3:45');
@@ -72,10 +81,10 @@ try {
   await row.getByTitle('Salida', { exact: true }).fill('');
   await day.selectOption('monday');
   assert.deepEqual(await offeredDurations(approved), [225, 240]);
-  await approved.selectOption('PT1-6');
+  await chooseShift(approved, 'PT1-6');
   await day.selectOption('saturday');
   assert.deepEqual(await offeredDurations(approved), [240]);
-  await approved.selectOption('PT1-5');
+  await chooseShift(approved, 'PT1-5');
   assert.match(await row.locator('td').nth(7).innerText(), /23:45/);
   pass('Liberar y redistribuir la jornada corta actualiza las opciones de los siete días y conserva 23:45');
 
@@ -96,10 +105,10 @@ try {
   await page.reload();
   await rests.waitFor();
   await day.selectOption('monday');
-  assert.equal(await approved.inputValue(), 'PT1-6');
+  assert.equal(await approved.getAttribute('data-selected-shift-id'), 'PT1-6');
   assert.deepEqual(await offeredDurations(approved), [225]);
   await day.selectOption('saturday');
-  assert.equal(await approved.inputValue(), 'PT1-5');
+  assert.equal(await approved.getAttribute('data-selected-shift-id'), 'PT1-5');
   assert.deepEqual(await offeredDurations(approved), [240]);
   pass('Guardar y recargar mantiene la distribución y solo modifica al colaborador editado');
 
@@ -118,7 +127,7 @@ try {
 
   await day.selectOption('sunday');
   assert.equal(await approved.isDisabled(), true);
-  assert.equal(await approved.locator('option:checked').innerText(), 'Día libre');
+  assert.match(await approved.innerText(), /Día libre/);
   await page.setViewportSize({ width: 390, height: 844 });
   await day.selectOption('monday');
   assert.deepEqual(await offeredDurations(approved), [225]);

@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { getApprovedBukOptions, getAvailableApprovedBukOptions, getBukWeeklyShiftQuota, makeApprovedBukPatch, getBukRestDays, approvedBukShiftLabel, getBukCatalogShift } from '../services/bukSchedule';
 import { formatScheduleMinutes } from '../services/scheduleHours';
 import { filterShiftsByAvailability, getShiftAvailability } from '../services/shiftAvailability';
+import ApprovedShiftPicker from './ApprovedShiftPicker';
 
 export default function BukApprovedShiftControl({ person, shift, schedule, day, date, onApply, onRetryAvailability }) {
   const full = String(person.modality || '').toLowerCase() === 'full-time';
@@ -30,21 +31,24 @@ export default function BukApprovedShiftControl({ person, shift, schedule, day, 
         {[1, 2, 3, 4].map(n => <option key={n} value={n}>{n} día{n === 1 ? '' : 's'}</option>)}
       </select>
     </label>}
-    <label className="block">Ingreso / salida aprobados
-      <select aria-label={`Horario aprobado BUK de ${person.name}`} value={locked ? '' : selected?.id || ''}
+    <div className="block">Ingreso / salida aprobados
+      <ApprovedShiftPicker label={`Horario aprobado BUK de ${person.name}`} value={locked ? '' : selected?.id || ''}
+        options={options}
+        placeholder={shift?.off ? 'Día libre' : holiday ? 'Feriado compensado' : manual ? 'Horario manual' : 'Elegir ingreso…'}
+        currentLabel={!locked && unavailableSelection ? `${approvedBukShiftLabel(selected)} · ${studyConflict ? 'No disponible por estudios' : availabilityStatus !== 'ready' ? 'Disponibilidad pendiente' : 'Revisar distribución'}` : undefined}
+        contextLabel={`${[person.name, person.lastName].filter(Boolean).join(' ')} · ${date ? date.split('-').reverse().join('/') : day}`}
+        contextKey={JSON.stringify([person.id, person.storeId, day, date, person.modality, full ? 1 : rests])}
         disabled={locked || availabilityStatus !== 'ready'}
-        title={shift?.off ? 'Quita la marca Libre para asignar un turno.' : undefined}
-        onChange={event => {
-          if (locked || !event.target.value) return;
-          if (!options.some(item => item.id === event.target.value)) { setError('Ese turno ya no está disponible en la distribución semanal.'); return; }
-          try { onApply(makeApprovedBukPatch(event.target.value, shift, day)); setError(''); }
-          catch (cause) { setError(cause.message); }
-        }} className="w-full border rounded">
-        <option value="">{shift?.off ? 'Día libre' : holiday ? 'Feriado compensado' : manual ? 'Horario manual' : 'Elegir ingreso…'}</option>
-        {!locked && unavailableSelection && <option value={selected.id} disabled>{approvedBukShiftLabel(selected)} · {studyConflict ? 'No disponible por estudios' : availabilityStatus !== 'ready' ? 'Disponibilidad pendiente' : 'Revisar distribución'}</option>}
-        {options.map(item => <option key={item.id} value={item.id}>{approvedBukShiftLabel(item)}</option>)}
-      </select>
-    </label>
+        onChange={optionId => {
+          if (locked || availabilityStatus !== 'ready' || !optionId) return false;
+          if (!options.some(item => item.id === optionId)) { setError('Ese turno ya no está disponible en la distribución semanal.'); return false; }
+          try {
+            const result = onApply(makeApprovedBukPatch(optionId, shift, day));
+            if (result === false) return false;
+            setError(''); return true;
+          } catch (cause) { setError(cause.message); throw cause; }
+        }} />
+    </div>
     {buk && <p className="text-gray-700">Refrigerio BUK: {buk.breakStart ? `${buk.breakStart}–${buk.breakEnd}` : 'sin refrigerio'}.</p>}
     {full && <span>Plan de 1 descanso</span>}
     {!full && rests === 1 && <p className="text-blue-800">5 turnos de 4 h y 1 de 3 h 45 min. Sin break.</p>}

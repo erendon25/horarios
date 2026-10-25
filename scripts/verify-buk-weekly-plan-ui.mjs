@@ -33,6 +33,9 @@ try {
   const day=page.locator('select').filter({has:page.locator('option[value="monday"]')});
   const rests=page.locator('select[aria-label="Descansos BUK de Prueba PT1"]:enabled');
   const approved=page.getByLabel('Horario aprobado BUK de Prueba PT1',{exact:true});
+  const openPicker=async trigger=>{await trigger.click();const dialog=page.getByRole('dialog',{name:'Seleccionar horario',exact:true});await dialog.waitFor();return dialog};
+  const closePicker=async dialog=>{await dialog.getByRole('button',{name:'Cerrar selector',exact:true}).click();await dialog.waitFor({state:'hidden'})};
+  const chooseShift=async(trigger,id)=>{const dialog=await openPicker(trigger);await dialog.locator('[data-shift-id="'+id+'"]').click();await dialog.waitFor({state:'hidden'})};
   const row=rests.locator('xpath=ancestor::tr[1]');
   await rests.waitFor();
   assert.equal(await rests.inputValue(),'1');
@@ -45,11 +48,18 @@ try {
   }
   pass('Plan de dos descansos uniforme en los siete días; turnos originales conservados');
   await day.selectOption('monday');
-  assert.equal(await approved.locator('option[value="PT2-33"]').innerText(),'20:15 → 01:00 · 4 h 45 min (sin break)');
-  assert.ok((await approved.locator('option').evaluateAll(options=>options.filter(option=>option.value).map(option=>option.value))).every(value=>value.startsWith('PT2-')));
+  let picker=await openPicker(approved);
+  const pt2Label=await picker.locator('[data-shift-id="PT2-33"]').innerText();
+  for(const text of ['20:15','01:00','4 h 45 min'])assert.ok(pt2Label.includes(text),text);
+  assert.match(pt2Label,/sin break/i);
+  assert.ok((await picker.locator('[data-shift-id]').evaluateAll(cards=>cards.map(card=>card.dataset.shiftId))).every(value=>value.startsWith('PT2-')));
+  await closePicker(picker);
   const ft=page.getByLabel('Horario aprobado BUK de Prueba FT1',{exact:true});
-  assert.match(await ft.locator('option[value="FT1-5"]').innerText(),/8 h 45 min \(8 h netas; break de 45 min\)/);
-  await approved.selectOption('PT2-33');
+  picker=await openPicker(ft);
+  const ftLabel=await picker.locator('[data-shift-id="FT1-5"]').innerText();
+  assert.match(ftLabel,/8 h 45 min/);assert.match(ftLabel,/8 h netas/);assert.match(ftLabel,/break de 45 min/);
+  await closePicker(picker);
+  await chooseShift(approved,'PT2-33');
   assert.equal(await row.getByTitle('Entrada',{exact:true}).inputValue(),'20:15');
   assert.equal(await row.getByTitle('Salida',{exact:true}).inputValue(),'01:00');
   const breakButton=row.getByRole('button',{name:'Asignar break de Prueba PT1 BUK',exact:true});
@@ -57,11 +67,13 @@ try {
   const thirdApproved=page.getByLabel('Horario aprobado BUK de Prueba PT3',{exact:true});
   const thirdRow=thirdApproved.locator('xpath=ancestor::tr[1]');
   const thirdBreak=thirdRow.getByRole('button',{name:'Asignar break de Prueba PT3 BUK',exact:true});
-  assert.equal(await thirdApproved.locator('option[value="PT3-5"]').count(),0,'The short PT3 slot is already used on Thursday');
+  picker=await openPicker(thirdApproved);
+  assert.equal(await picker.locator('[data-shift-id="PT3-5"]').count(),0,'The short PT3 slot is already used on Thursday');
+  await closePicker(picker);
   await day.selectOption('thursday');
   assert.equal(await thirdBreak.count(),0,'PT3 short 5:45 has no break');
   await day.selectOption('monday');
-  await thirdApproved.selectOption('PT3-62');
+  await chooseShift(thirdApproved,'PT3-62');
   await thirdBreak.click();
   await page.getByRole('combobox',{name:'Inicio del break',exact:true}).selectOption('23:00');
   await page.getByText('Descanso: 23:00–23:45',{exact:true}).waitFor();
@@ -102,7 +114,7 @@ try {
   await day.selectOption('tuesday');
   await row.getByTitle('Entrada',{exact:true}).fill('20:15');
   assert.equal(await row.getByTitle('Salida',{exact:true}).inputValue(),'01:00');
-  assert.equal(await approved.inputValue(),'PT2-33');
+  assert.equal(await approved.getAttribute('data-selected-shift-id'),'PT2-33');
   pass('Duración de rangos nocturnos y horas netas; ingreso manual usa el mismo plan semanal');
   await page.reload();await rests.waitFor();
   assert.equal(await rests.inputValue(),'2');
@@ -113,8 +125,9 @@ try {
   await row.locator('td').nth(restColumn).getByRole('checkbox').check();
   assert.equal(await rests.inputValue(),'2');
   assert.equal(await approved.isDisabled(),true,'Day off locks the approved-shift selector');
-  assert.equal(await approved.locator('option:checked').innerText(),'Día libre');
-  await approved.evaluate(select=>{select.value='PT2-33';select.dispatchEvent(new Event('change',{bubbles:true}))});
+  assert.match(await approved.innerText(),/Día libre/);
+  await approved.evaluate(button=>button.dispatchEvent(new MouseEvent('click',{bubbles:true})));
+  assert.equal(await page.getByRole('dialog',{name:'Seleccionar horario',exact:true}).count(),0,'A disabled trigger cannot open a stale shift selection');
   assert.equal(await row.locator('td').nth(restColumn).getByRole('checkbox').isChecked(),true,'A stale selection cannot remove the rest day');
   assert.equal(await row.getByTitle('Entrada',{exact:true}).inputValue(),'');
   assert.equal(await row.getByTitle('Salida',{exact:true}).inputValue(),'');
@@ -137,7 +150,7 @@ try {
   await page.reload();await rests.waitFor();
   assert.equal(await rests.inputValue(),'2','Read weekly preference back from the saved document, without a local draft');
   await day.selectOption('sunday');assert.equal(await rests.inputValue(),'2');assert.equal(await approved.isDisabled(),true);
-  await day.selectOption('monday');assert.equal(await approved.inputValue(),'PT2-33');
+  await day.selectOption('monday');assert.equal(await approved.getAttribute('data-selected-shift-id'),'PT2-33');
   assert.equal(await breakButton.count(),0,'PT2 remains without a break after reloading');
   assert.equal(await thirdBreak.innerText(),'23:00','PT3 required break survives saving and reloading');
   for(const [name,file] of [['Excel BUK','buk-reglas-excel.xls'],['Excel planificación','planificacion-reglas-excel.xls']]) {

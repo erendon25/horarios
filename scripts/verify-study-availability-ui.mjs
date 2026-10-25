@@ -27,6 +27,13 @@ const requestSelect=()=>request.getByLabel('Horario aprobado solicitado',{exact:
 const editorDay=()=>editor.locator('select').filter({has:editor.locator('option[value="monday"]')}).first();
 const optionIds=async(select)=>{
  if(await select.isDisabled())return [];
+ if(await select.evaluate(element=>element.tagName)==='BUTTON'){
+  await select.click();
+  const picker=editor.getByRole('dialog',{name:'Seleccionar horario',exact:true});await picker.waitFor();
+  const ids=await picker.locator('[data-shift-id]').evaluateAll(buttons=>buttons.filter(button=>!button.disabled).map(button=>button.dataset.shiftId).sort());
+  await picker.getByRole('button',{name:'Cerrar selector',exact:true}).click();
+  return ids;
+ }
  return select.locator('option').evaluateAll(options=>options.filter(option=>option.value&&!option.disabled).map(option=>option.value).sort());
 };
 const longOptions=getApprovedBukOptions('Part-Time',1).filter(option=>option.duration===240);
@@ -84,8 +91,9 @@ try{
  await compareOptions(short,'Sábado deja solo cuota3:45');
  await editorDay().selectOption('sunday');
  assert.equal(await editorSelect().isDisabled(),true);
- assert.equal(await editorSelect().locator('option:checked').textContent(),'Día libre');
- await editorSelect().evaluate(select=>{select.value='PT1-5';select.dispatchEvent(new Event('change',{bubbles:true}))});
+ assert.match(await editorSelect().textContent(),/Día libre/);
+ await editorSelect().evaluate(button=>button.click());
+ assert.equal(await editor.getByRole('dialog',{name:'Seleccionar horario',exact:true}).count(),0,'Un día libre no debe abrir el selector');
  const offRow=editorSelect().locator('xpath=ancestor::tr[1]');
  assert.equal(await offRow.getByTitle('Entrada',{exact:true}).inputValue(),'');
  pass('La cuota mantiene solo3:45 para el sexto día y un día Libre no puede reasignarse mediante el selector bloqueado');
