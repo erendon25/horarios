@@ -145,31 +145,6 @@ const makeStoredPosition = (position) => ({
   minStaff: position.minStaff ?? '',
 });
 
-const normalizeName = (value) =>
-  String(value || '')
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .trim()
-    .toLowerCase();
-
-const mergeDefaultFixedPositions = (storedPositions = []) => {
-  const stored = storedPositions.map(makeStoredPosition);
-  const existingIds = new Set(stored.map((position) => position.id));
-  const existingNames = new Set(stored.map((position) => normalizeName(position.name)));
-  const missingDefaults = DEFAULT_POSITIONS
-    .filter((position) => {
-      const isFixed = position.logic === 'fixed';
-      const isServiceDefault = ['salon', 'drivethru', 'punto_venta'].includes(position.id);
-      if (!isFixed && !isServiceDefault) return false;
-      if (existingIds.has(position.id)) return false;
-      if (existingNames.has(normalizeName(position.name))) return false;
-      return true;
-    })
-    .map(makeStoredPosition);
-
-  return [...stored, ...missingDefaults];
-};
-
 const compressRows = (rows) =>
   Object.fromEntries(
     rows.map((row, rowIndex) => [
@@ -194,8 +169,12 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
   const [manualStaffByDay, setManualStaffByDay] = useState({});
   const [isPositionsModalOpen, setIsPositionsModalOpen] = useState(false);
   const [isHoursBreakdownOpen, setIsHoursBreakdownOpen] = useState(false);
-  const [configLoaded, setConfigLoaded] = useState(false);
-  const [saveState, setSaveState] = useState('idle');
+  const [loadedConfigStoreId, setLoadedConfigStoreId] = useState(null);
+  const configLoaded = Boolean(storeId) && loadedConfigStoreId === storeId;
+  const [configError, setConfigError] = useState('');
+  const [configLoadAttempt, setConfigLoadAttempt] = useState(0);
+  const [saveAttempt, setSaveAttempt] = useState(0);
+  const [saveState, setSaveState] = useState('loading');
   const [salesHistoryLoaded, setSalesHistoryLoaded] = useState(false);
   const [salesHistoryLoading, setSalesHistoryLoading] = useState(false);
   const [salesHistoryError, setSalesHistoryError] = useState('');
@@ -210,6 +189,9 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
   const [vhlError, setVhlError] = useState('');
   const [dataRefreshVersion, setDataRefreshVersion] = useState(0);
   const saveTimerRef = useRef(null);
+  const storedConfigRef = useRef({ storeId: null, value: {} });
+  const saveQueueRef = useRef(Promise.resolve());
+  const saveVersionRef = useRef(0);
   const [newPosition, setNewPosition] = useState({
     name: '',
     logic: 'sales',
@@ -227,16 +209,28 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
 
     let cancelled = false;
     const loadProjectionConfig = async () => {
-      setConfigLoaded(false);
+      setLoadedConfigStoreId(null);
+      setConfigError('');
+      setSaveState('loading');
+      setPositions(DEFAULT_POSITIONS.map(makeStoredPosition));
+      setManualStaffByDay({});
+      setGeneralVhl(null);
+      setHistoricalGeneralVhl(null);
+      setHistoricalLaborHours(0);
+      setIsGeneralVhlManual(false);
+      setVhlLoaded(false);
+      storedConfigRef.current = { storeId, value: {} };
       try {
         const ref = doc(db, 'stores', storeId, 'config', 'schedule_projection');
         const snap = await getDoc(ref);
         if (cancelled) return;
 
+        const data = snap.exists() ? snap.data() : {};
+        storedConfigRef.current = { storeId, value: data };
         if (snap.exists()) {
-          const data = snap.data();
           if (Array.isArray(data.positions)) {
-            setPositions(mergeDefaultFixedPositions(data.positions));
+            // A saved list belongs to this store, including an intentionally empty list.
+            setPositions(data.positions.map(makeStoredPosition));
           }
           if (data.manualStaffByDay) {
             setManualStaffByDay(data.manualStaffByDay);
@@ -246,10 +240,13 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
           }
           setIsGeneralVhlManual(data.generalVhlMode === 'manual');
         }
+        setLoadedConfigStoreId(storeId);
+        setSaveState('idle');
       } catch (error) {
+        if (cancelled) return;
         console.error('Error al cargar configuracion de proyeccion:', error);
-      } finally {
-        if (!cancelled) setConfigLoaded(true);
+        setConfigError('No se pudo cargar la configuración de posiciones de esta tienda.');
+        setSaveState('error');
       }
     };
 
@@ -257,7 +254,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
     return () => {
       cancelled = true;
     };
-  }, [storeId]);
+  }, [storeId, configLoadAttempt]);
 
   useEffect(() => {
     if (!storeId) return;
@@ -634,48 +631,62 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
   };
 
   useEffect(() => {
-    if (
-      !storeId ||
-      !configLoaded ||
-      !salesHistoryLoaded ||
-      !salesSource ||
-      !vhlLoaded ||
-      !(Number(generalVhl) > 0)
-    ) return;
+    if (!configLoaded || storedConfigRef.current.storeId !== storeId) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
 
+    let cancelled = false;
+    const version = ++saveVersionRef.current;
+    // Position settings must persist even for a store without historical sales/VHL.
+    // Derived coverage is replaced only after its inputs have finished loading.
+    const changes = {
+      positions,
+      generalVhl: Number(generalVhl) > 0 ? Number(generalVhl) : null,
+      generalVhlMode: isGeneralVhlManual ? 'manual' : 'historical',
+      manualStaffByDay,
+    };
+    if (salesHistoryLoaded && salesSource && vhlLoaded && Number(generalVhl) > 0) {
+      Object.assign(changes, {
+        requirements: buildProjectionRequirements(),
+        salesByDay,
+        historicalGeneralVhl,
+        historicalLaborHours,
+        salesSource: {
+          weekStart: salesSource.weekStart,
+          weekEnd: salesSource.weekEnd,
+          storedDays: salesSource.storedDays,
+        },
+      });
+    }
     setSaveState('saving');
-    saveTimerRef.current = setTimeout(async () => {
-      try {
-        const ref = doc(db, 'stores', storeId, 'config', 'schedule_projection');
-        await setDoc(
-          ref,
-          {
-            positions,
-            requirements: buildProjectionRequirements(),
-            salesByDay,
-            generalVhl: Number(generalVhl),
-            generalVhlMode: isGeneralVhlManual ? 'manual' : 'historical',
-            historicalGeneralVhl,
-            historicalLaborHours,
-            salesSource: {
-              weekStart: salesSource.weekStart,
-              weekEnd: salesSource.weekEnd,
-              storedDays: salesSource.storedDays,
-            },
-            manualStaffByDay,
+    saveTimerRef.current = setTimeout(() => {
+      // Serialize requests so an older, slower write cannot replace a newer edit.
+      saveQueueRef.current = saveQueueRef.current.catch(() => {}).then(async () => {
+        if (cancelled || version !== saveVersionRef.current) return;
+        try {
+          const ref = doc(db, 'stores', storeId, 'config', 'schedule_projection');
+          // The compatibility layer replaces the JSON value; preserve unrelated
+          // fields and prior coverage when only configuration can be saved.
+          const value = {
+            ...storedConfigRef.current.value,
+            ...changes,
             updatedAt: new Date().toISOString(),
-          },
-          { merge: true }
-        );
-        setSaveState('saved');
-      } catch (error) {
-        console.error('Error al guardar configuracion de proyeccion:', error);
-        setSaveState('error');
-      }
+          };
+          await setDoc(ref, value);
+          if (storedConfigRef.current.storeId === storeId) {
+            storedConfigRef.current = { storeId, value };
+          }
+          if (!cancelled && version === saveVersionRef.current) setSaveState('saved');
+        } catch (error) {
+          console.error('Error al guardar configuracion de proyeccion:', error);
+          if (!cancelled && version === saveVersionRef.current) setSaveState('error');
+        }
+      });
     }, 700);
 
-    return () => clearTimeout(saveTimerRef.current);
+    return () => {
+      cancelled = true;
+      clearTimeout(saveTimerRef.current);
+    };
   }, [
     positions,
     salesByDay,
@@ -690,6 +701,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
     historicalLaborHours,
     isGeneralVhlManual,
     vhlLoaded,
+    saveAttempt,
   ]);
 
   const scheduleMatrix = useMemo(
@@ -774,6 +786,27 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
     setPositions((prev) => prev.filter((position) => position.id !== id));
   };
 
+  if (configError) {
+    return (
+      <div className="p-6">
+        <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800">
+          <p>{configError}</p>
+          <button
+            type="button"
+            onClick={() => setConfigLoadAttempt((attempt) => attempt + 1)}
+            className="mt-3 rounded-lg bg-red-700 px-4 py-2 text-sm font-bold text-white"
+          >
+            Reintentar carga
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!configLoaded) {
+    return <div role="status" className="p-6 text-slate-600">Cargando posiciones de esta tienda...</div>;
+  }
+
   return (
     <div className="p-6 bg-slate-50 min-h-screen text-slate-800 font-sans">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 bg-white p-6 rounded-xl shadow-sm border border-slate-200 gap-4">
@@ -796,15 +829,24 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
             <Settings className="w-4 h-4" />
             Configurar Posiciones
           </button>
-          <span className={`px-3 py-2 rounded-lg text-xs font-bold border ${
+          <span role="status" aria-live="polite" className={`px-3 py-2 rounded-lg text-xs font-bold border ${
             saveState === 'error'
               ? 'bg-red-50 text-red-700 border-red-200'
               : saveState === 'saving'
                 ? 'bg-amber-50 text-amber-700 border-amber-200'
                 : 'bg-emerald-50 text-emerald-700 border-emerald-200'
           }`}>
-            {saveState === 'saving' ? 'Guardando...' : saveState === 'error' ? 'Error al guardar' : 'Guardado'}
+            {saveState === 'saving' ? 'Guardando...' : saveState === 'error' ? 'Error al guardar' : saveState === 'saved' ? 'Guardado' : 'Configuración cargada'}
           </span>
+          {saveState === 'error' && (
+            <button
+              type="button"
+              onClick={() => setSaveAttempt((attempt) => attempt + 1)}
+              className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700"
+            >
+              Reintentar guardado
+            </button>
+          )}
 
           <button
             type="button"
