@@ -32,7 +32,7 @@ También se verificó el AdminDashboard completo con las 32 altas: búsqueda por
 
 La rama contiene cambios de ventas todavía pendientes de publicación. No desplegar directamente el build de la raíz para esta funcionalidad.
 
-`scripts/prepare-staff-planilla-production.mjs` reconstruye la versión actual publicada a partir de `47f0482`, las correcciones de acceso de `5f11c2b` y el hotfix de canales. Antes de agregar la importación, exige reproducir exactamente `index-BWcnu6Yd.js`, SHA-256 `91dc9c022b67257028c48da3dc2780d7b6e37d921d1d09bb4eeeac0a19d5b450`. Luego superpone únicamente el botón, el componente y sus dos servicios.
+`scripts/prepare-staff-planilla-production.mjs` reconstruye la versión publicada antes de esta carga masiva a partir de `47f0482`, las correcciones de acceso de `5f11c2b` y el hotfix de canales. Antes de agregar la importación, exige reproducir exactamente `index-BWcnu6Yd.js`, SHA-256 `91dc9c022b67257028c48da3dc2780d7b6e37d921d1d09bb4eeeac0a19d5b450`. Luego superpone únicamente el botón, el componente y sus dos servicios.
 
 ```sh
 node scripts/prepare-staff-planilla-production.mjs
@@ -42,3 +42,5 @@ python scripts/retain-staff-planilla-production-assets.py
 Copiar al directorio aislado solo los assets verificados en `output/staff-planilla-qa/previous-live-assets.json`; compilar y desplegar desde `tmp/staff-planilla-production`. La retención verifica MIME y SHA-256 y descarta archivos locales que nunca fueron publicados. Se conservaron 33 assets públicos, sin incorporar los bundles de ventas pendientes.
 
 La migración aplicada con el conector se registra como `20261025004514_import_staff_planilla.sql`; el nombre local se alineó a esa versión para mantener el historial consistente. La publicación no ejecuta la importación de personal: el administrador debe revisar y confirmar la vista previa en el panel.
+
+Publicación verificada en Firebase Hosting: `index-pB7Q5wG2.js`. El HTML y los nuevos assets coinciden con la compilación aislada; los 33 assets públicos retenidos conservan su SHA-256 y MIME. No hubo nuevos avisos del asesor de seguridad ni se importó personal real durante el despliegue. Evidencia completa en `output/staff-planilla-qa/release-verification.json`.
