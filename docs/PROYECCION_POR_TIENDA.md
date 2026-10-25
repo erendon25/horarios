@@ -10,11 +10,15 @@ Actualizar datos actualiza la plantilla y las ventas sin desmontar el editor ni 
 
 Configurar Posiciones usa tarjetas con campos etiquetados que se ajustan al ancho disponible. El encabezado y el pie permanecen visibles; solo se desplaza verticalmente el contenido. Nueva posición abre el formulario y enfoca su nombre sin desplazar el panel. Mientras está abierto, Agregar permanece en el pie junto a Cerrar. Remover permanece dentro de cada tarjeta, sin una columna oculta a la derecha. Se bloquea el desplazamiento del fondo mientras el panel está abierto y se restaura al cerrar.
 
+En Distribución de Personal e Ingresos por Hora, cada posición tiene una escala de color según su propio Tope de personal. Cero personas es neutro y una persona es azul; desde dos personas avanza de amarillo a naranja y llega a rojo al alcanzar o superar el límite. Un límite de una persona se muestra rojo desde una; con límite cero, cualquier asignación positiva es roja. Las posiciones fijas usan Personal fijo. Si no hay límite configurado, desde dos personas se muestra amarillo, sin inventar un umbral rojo de tres. El tooltip indica cantidad y límite. Cambiar el tope actualiza el color inmediatamente sin cambiar la cantidad asignada.
+
 ## Verificación
 
 ```sh
 PLAYWRIGHT_MODULE=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-projection-store-ui.mjs
 PLAYWRIGHT_MODULE=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-projection-modal-responsive.mjs
+node --test src/services/projectionStaffColor.test.js
+PLAYWRIGHT_MODULE=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-projection-staff-colors.mjs
 PGLITE_MODULE=/tmp/planilla-backend-runtime/node_modules/@electric-sql/pglite/dist/index.js node scripts/test-projection-store-config-db.mjs
 node --experimental-vm-modules --test src/services/positionCoverage.test.js src/lib/supabase/firestoreCompat.test.js
 ```
@@ -30,3 +34,5 @@ La rama mantiene cambios de ventas pendientes de publicación. El build de la ra
 `scripts/prepare-projection-store-production.mjs` reproduce la fuente aislada de la publicación anterior desde `tmp/staff-planilla-production`, verifica el bundle público `index-pB7Q5wG2.js` por SHA-256 y conserva sus assets. El modo `--overlay` agrega únicamente ScheduleProjectionDashboard y ScheduleProjectionPage. Verifica que HeatmapMatrix y WeeklyScheduleEditor permanezcan idénticos a producción. Compilar y publicar exclusivamente desde `tmp/projection-store-production` después de pasar las pruebas.
 
 Para la corrección responsive posterior, `scripts/prepare-projection-modal-production.mjs` parte de `tmp/staff-permissions-production` y verifica el bundle publicado `index-Dm9qh2vS.js`. Usar `--overlay --with-position-fields` para añadir únicamente ScheduleProjectionDashboard y ProjectionPositionFields. Compilar y publicar desde `tmp/projection-modal-production`; conservar el resto de fuentes y los assets verificados de la publicación anterior.
+
+Para los colores por límite, `scripts/prepare-projection-colors-production.mjs` parte de `tmp/projection-modal-production`, verifica `index-CJagACKa.js` y conserva sus assets. Usar `--overlay --with-color-service` y publicar únicamente `tmp/projection-colors-production`, con los cambios de Dashboard y projectionStaffColor. No se modifican HeatmapMatrix, horarios, permisos ni datos de tiendas.

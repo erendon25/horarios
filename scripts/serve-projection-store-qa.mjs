@@ -70,6 +70,13 @@ const server = createServer(async(request,response)=>{
  try {
   if(request.url==='/qa-state')return json(response,{ configurations:Object.fromEntries(configurations),writes,reads,control });
   if(request.url==='/qa-control'&&request.method==='POST'){Object.assign(control,await body(request));return json(response,{ok:true});}
+  if(request.url==='/qa-configuration'&&request.method==='POST'){
+   const {storeId,value}=await body(request);
+   if(!['store-a','store-b','store-c'].includes(storeId)||!value||typeof value!=='object'||Array.isArray(value)){
+    response.statusCode=400;return json(response,{error:'Invalid isolated configuration fixture'});
+   }
+   configurations.set(storeId,structuredClone(value));return json(response,{ok:true});
+  }
   if(request.url==='/qa-operation'&&request.method==='POST'){
    const {op,ref,data}=await body(request),parts=ref.path.split('/'),storeId=parts[1];
    if(op==='getDoc'){

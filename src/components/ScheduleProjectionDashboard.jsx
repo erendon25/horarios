@@ -3,6 +3,7 @@ import { AlertTriangle, CalendarRange, Calculator, CheckCircle, RefreshCw, Setti
 import { collection, doc, getDoc, getDocs, orderBy, query, setDoc, where } from '../lib/supabase/firestoreCompat';
 import { db } from '../supabase';
 import ProjectionPositionFields from './ProjectionPositionFields';
+import { getProjectionStaffColor } from '../services/projectionStaffColor';
 import {
   buildProjectionSalesByDay,
   selectLatestCompleteSalesWeek,
@@ -1106,6 +1107,12 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
             Las posiciones fijas y los ajustes manuales se conservan.
             Haz clic para sumar una persona y Ctrl + clic para restarla.
           </p>
+          <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
+            <span className="inline-flex items-center gap-1"><span aria-hidden="true" className="h-3 w-3 rounded bg-blue-100" />1 persona</span>
+            <span className="inline-flex items-center gap-1"><span aria-hidden="true" className="h-3 w-3 rounded bg-amber-200" />Desde 2: amarillo a naranja</span>
+            <span className="inline-flex items-center gap-1"><span aria-hidden="true" className="h-3 w-3 rounded bg-red-200" />Rojo: límite del área alcanzado o superado</span>
+            <span>El color se ajusta al límite configurado de cada posición.</span>
+          </p>
         </div>
 
         <div className="overflow-x-auto">
@@ -1134,7 +1141,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
               </tr>
 
               {positions.map((position) => (
-                <tr key={position.id} className="hover:bg-slate-50/80 transition-colors">
+                <tr key={position.id} data-position-id={position.id} className="hover:bg-slate-50/80 transition-colors">
                   <td className="p-4 sticky left-0 bg-white shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] z-10 font-medium text-slate-700">
                     {position.name}
                   </td>
@@ -1143,20 +1150,17 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
                   </td>
                   {scheduleMatrix.columns.map((col) => {
                     const requiredStaff = col.requiredByPosition[position.id] || 0;
+                    const staffColor = getProjectionStaffColor(requiredStaff, position);
                     return (
                       <td
                         key={col.hour}
+                        data-hour={col.hour}
                         onClick={(event) =>
                           handleStaffCellClick(event, position.id, col.hour, requiredStaff)
                         }
-                        title="Asignacion de esta posicion. Clic: sumar | Ctrl + clic: restar"
-                        className={`p-3 text-center font-bold transition-all cursor-pointer select-none hover:ring-2 hover:ring-inset hover:ring-orange-400 ${
-                          requiredStaff > 2
-                            ? 'bg-red-100 text-red-700'
-                            : requiredStaff > 0
-                              ? 'bg-blue-50 text-blue-700'
-                              : 'text-slate-300 font-normal'
-                        }`}
+                        title={`${staffColor.description}. Clic: sumar | Ctrl + clic: restar`}
+                        style={staffColor.style}
+                        className={`p-3 text-center transition-all cursor-pointer select-none hover:ring-2 hover:ring-inset hover:ring-orange-400 ${requiredStaff > 0 ? 'font-bold' : 'font-normal'}`}
                       >
                         {requiredStaff}
                       </td>
