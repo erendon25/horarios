@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Calendar, Save, Shield } from 'lucide-react';
+import { Calendar, ChevronDown, Save, Shield } from 'lucide-react';
 import { doc, getDoc, getFirestore } from '../lib/supabase/firestoreCompat';
 import { supabase } from '../lib/supabase/client';
 import { useScheduleAccessPolicy } from '../hooks/useScheduleAccessPolicy';
@@ -104,9 +104,17 @@ export default function ScheduleAccessSettings({ storeId }) {
   const validBlockedDate = Boolean(blockedDate && getScheduleWeekStart(blockedDate));
   const fieldClass = 'mt-2 block w-full min-w-0 max-w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm disabled:opacity-50';
 
-  return <section className="mt-4 rounded-2xl border border-blue-100 bg-white p-5 shadow-sm" aria-label="Accesos a horarios">
-    <h3 className="flex items-center gap-2 text-base font-bold text-gray-900"><Shield className="h-5 w-5 text-blue-700" />Accesos a horarios</h3>
-    <p className="mt-2 text-sm text-gray-600">Configura quién puede editar los estudios y cuándo los colaboradores pueden enviar solicitudes en esta tienda.</p>
+  return <section className="mt-4 rounded-2xl border border-blue-100 bg-white shadow-sm" aria-label="Accesos a horarios">
+    <details className="group">
+      <summary aria-label="Accesos a horarios" className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-5 py-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 [&::-webkit-details-marker]:hidden">
+        <span className="flex min-w-0 items-center gap-2 text-sm font-bold text-gray-900 sm:text-base"><Shield className="h-5 w-5 shrink-0 text-blue-700" />Accesos a horarios</span>
+        <span className="flex shrink-0 items-center gap-2">
+          {(busy || saveError || dirty) && <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${saveError ? 'bg-red-50 text-red-700' : 'bg-blue-50 text-blue-700'}`}>{busy ? 'Guardando…' : saveError ? 'Error al guardar' : 'Sin guardar'}</span>}
+          <ChevronDown aria-hidden="true" className="h-5 w-5 text-gray-500 transition-transform group-open:rotate-180" />
+        </span>
+      </summary>
+      <div className="border-t border-blue-100 p-5">
+    <p className="text-sm text-gray-600">Configura quién puede editar los estudios y cuándo los colaboradores pueden enviar solicitudes en esta tienda.</p>
     <form onSubmit={save} className="mt-4 space-y-5">
       {(!storeId || status === 'idle') && <p role="status" className="text-sm text-gray-600">Selecciona una tienda para configurar los permisos.</p>}
       {status === 'loading' && <p role="status" className="text-sm text-gray-600">Cargando permisos de horario...</p>}
@@ -172,5 +180,7 @@ export default function ScheduleAccessSettings({ storeId }) {
         <button type="submit" disabled={!ready || !scoped || !dirty || busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 py-3 text-sm font-bold text-white disabled:opacity-50 sm:w-auto"><Save className="h-4 w-4" />{busy ? 'Guardando permisos...' : 'Guardar permisos de horario'}</button>
       </div>
     </form>
+      </div>
+    </details>
   </section>;
 }

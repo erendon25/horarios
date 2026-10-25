@@ -1,6 +1,6 @@
 # Accesos a estudios y solicitudes por tienda
 
-En AdminDashboard, «Accesos a horarios» permite configurar:
+En AdminDashboard, «Accesos a horarios» aparece en un desplegable cerrado inicialmente. Pulsa su encabezado para ver la configuración. Al cerrarlo se conserva el borrador y el indicador «Sin guardar» avisa si quedan cambios pendientes. Permite configurar:
 
 - **Solo administración edita los horarios de estudio**: al activarlo desaparece la edición de estudios del panel del colaborador. Administración conserva la edición y los estudios registrados no se borran. Desactivarlo vuelve a habilitar la opción.
 - **Habilitar solicitudes de horario**: controla la creación de nuevas solicitudes de esa tienda.
@@ -48,3 +48,5 @@ PLAYWRIGHT_MODULE=/ruta/a/playwright/index.mjs node scripts/verify-schedule-acce
 Las pruebas usan perfiles y tiendas ficticias, PostgreSQL aislado y los componentes React reales. La vista previa utiliza almacenamiento local y bloquea las conexiones de backend. No configura tiendas reales.
 
 La migración debe aplicarse antes de publicar la interfaz operativa. No desplegar el build de la raíz: contiene cambios de ventas ajenos al conjunto aprobado. `scripts/prepare-reviewed-scheduling-production.mjs` prepara una publicación aislada con las fuentes revisadas de proyección y accesos, conservando los recursos de la versión anterior.
+
+Para el ajuste visual del desplegable, `scripts/prepare-schedule-access-disclosure-production.mjs` reproduce la publicación anterior y superpone únicamente `ScheduleAccessSettings.jsx`. La lógica y el formulario se comparan con la fuente anterior; no requiere cambios en la base de datos.

@@ -22,10 +22,12 @@ const control=async value=>{const response=await admin.request.post(`${base}/qa/
 const studyWrites=async()=>(await state()).writes.filter(write=>write.path.startsWith('study_schedules/'));
 const requests=async()=>Object.entries((await state()).documents).filter(([path,data])=>path.startsWith('schedule_requests/')&&data!==null);
 const settings=()=>admin.getByRole('region',{name:'Accesos a horarios',exact:true});
+const settingsDetails=()=>settings().locator('details');
+const openSettings=async()=>{await settingsDetails().waitFor({state:'attached'});if(!await settingsDetails().evaluate(element=>element.open))await settings().locator('summary').click()};
 const actions=()=>collab.getByTestId('collaborator-schedule-actions');
 const studyButton=()=>actions().getByRole('button',{name:/Editar Horarios de Estudio/});
 const requestButton=()=>actions().getByRole('button',{name:/Solicitar Horario Específico/});
-const saveSettings=async()=>{await settings().getByRole('button',{name:'Guardar permisos de horario',exact:true}).click();await settings().getByRole('status').filter({hasText:'Configuración guardada para esta tienda.'}).waitFor()};
+const saveSettings=async()=>{await openSettings();await settings().getByRole('button',{name:'Guardar permisos de horario',exact:true}).click();await settings().getByRole('status').filter({hasText:'Configuración guardada para esta tienda.'}).waitFor()};
 const studyModal=()=>collab.getByRole('heading',{name:'Editar horarios de estudio',exact:true});
 const monday=page=>page.getByRole('heading',{name:'Lunes',exact:true}).locator('xpath=.. /..');
 const prepareRequest=async()=>{
@@ -46,6 +48,11 @@ try{
  await context.route('https://**/*',route=>{external.push(route.request().url());return route.abort()});
  admin=await context.newPage();collab=await context.newPage();watch(admin);watch(collab);
  await admin.goto(`${base}/admin`);await collab.goto(`${base}/collaborator`);
+ await settingsDetails().waitFor({state:'attached'});
+ assert.equal(await settingsDetails().evaluate(element=>element.open),false,'Los accesos deben empezar contraídos');
+ assert.equal(await settings().locator('form').count(),1,'El formulario debe permanecer montado aunque el panel esté cerrado');
+ assert.equal(await settings().getByRole('button',{name:'Guardar permisos de horario',exact:true}).isVisible(),false);
+ await openSettings();
  await settings().getByLabel('Solo administración edita los horarios de estudio',{exact:true}).waitFor();
  assert.equal(await settings().getByLabel('Solo administración edita los horarios de estudio',{exact:true}).isChecked(),false);
  assert.equal(await settings().getByLabel('Habilitar solicitudes de horario',{exact:true}).isChecked(),true);
@@ -134,6 +141,7 @@ try{
 
  await control({readErrors:[policyPath]});
  await admin.reload();await collab.reload();await request.reload();
+ await openSettings();
  await settings().getByRole('alert').waitFor();await actions().getByRole('alert').waitFor();
  assert.equal(await studyButton().count(),0);assert.equal(await requestButton().isDisabled(),true);
  assert.equal(await settings().getByRole('button',{name:'Guardar permisos de horario',exact:true}).isDisabled(),true);
@@ -174,7 +182,24 @@ try{
 
  await policy(defaults);await settings().getByLabel('Habilitar solicitudes de horario',{exact:true}).waitFor();
  await admin.setViewportSize({width:390,height:844});
+ await admin.reload();await settingsDetails().waitFor({state:'attached'});
+ assert.equal(await settingsDetails().evaluate(element=>element.open),false,'En móvil también debe iniciar cerrado');
+ const collapsed=await settings().boundingBox();
+ assert.ok(collapsed&&collapsed.height<=170,`El panel cerrado debe ser compacto: ${collapsed?.height}px`);
+ assert.ok(await settings().evaluate(element=>element.scrollWidth<=element.clientWidth),'El panel cerrado no debe desbordarse horizontalmente');
+ await settings().screenshot({path:`${output}/accesos-cerrado-mobile.png`});
+ await openSettings();
  await settings().getByLabel('Solo administración edita los horarios de estudio',{exact:true}).check();
+ await settings().getByLabel('Fecha a bloquear',{exact:true}).fill('2026-11-06');
+ const writesBeforeCollapse=(await state()).writes.length;
+ await settings().locator('summary').click();
+ assert.equal(await settingsDetails().evaluate(element=>element.open),false);
+ assert.equal(await settings().locator('form').count(),1);
+ await settings().locator('summary').click();
+ assert.equal(await settings().getByLabel('Solo administración edita los horarios de estudio',{exact:true}).isChecked(),true,'Abrir y cerrar debe conservar el borrador');
+ assert.equal(await settings().getByLabel('Fecha a bloquear',{exact:true}).inputValue(),'2026-11-06','El campo de fecha sin guardar también se conserva');
+ assert.equal((await state()).writes.length,writesBeforeCollapse,'Abrir y cerrar no debe guardar ni cambiar permisos');
+ assert.equal((await state()).documents[policyPath].adminOnlyStudyEditing,false);
  const save=settings().getByRole('button',{name:'Guardar permisos de horario',exact:true});await save.scrollIntoViewIfNeeded();
  const rect=await save.boundingBox();assert.ok(rect&&rect.x>=-1&&rect.x+rect.width<=391&&rect.y>=-1&&rect.y+rect.height<=845);
  assert.equal(await save.isEnabled(),true);await save.click();await settings().getByRole('status').filter({hasText:'Configuración guardada para esta tienda.'}).waitFor();
@@ -182,7 +207,8 @@ try{
  await collab.setViewportSize({width:390,height:844});await history.screenshot({path:`${output}/historial-colaborador-mobile.png`});
  assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
  observations.push({deletionScope:'Local API responses exercise UI; actual authorization and database races are tested separately in the SQL suite',writes:(await state()).writes,deletes:(await state()).deletes});
- pass('Los permisos se pueden guardar desde móvil y el historial sigue disponible con acciones apropiadas');
+ observations.push({collapsedMobileHeight:collapsed.height,unsavedDraftPreserved:true});
+ pass('El panel móvil inicia cerrado y compacto; abrir/cerrar conserva el borrador, permite guardar y mantiene el historial disponible');
  await writeFile(`${output}/resultado.json`,JSON.stringify({status:'PASS',passed,observations,errors,external,dialogs,scope:'Real schedule-access components and collaborator dashboard; only transport/auth and unrelated panels isolated; no production access'},null,2));
 }catch(error){for(const [name,page] of Object.entries({admin,collab,study,request}))await page?.screenshot({path:`${output}/fallo-${name}.png`,fullPage:true}).catch(()=>{});await writeFile(`${output}/resultado.json`,JSON.stringify({status:'FAIL',passed,errors,external,dialogs,error:String(error)},null,2));throw error;
 }finally{await browser?.close();server.kill();}
