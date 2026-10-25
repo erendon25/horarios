@@ -52,6 +52,20 @@ test('2.6 requiere tres personas; 0.4 no requiere una persona y 0.8 sí la requi
   assert.equal(cellsAt(buildHeatmapRows(assigned(1), projection(0.8)), '10:00')[0].color, 'bg-blue-500');
 });
 
+test('el trainer conserva naranja al cubrir y rojo en cualquier exceso, respetando su break', () => {
+  const trainers = assigned(3).map((person) => ({ ...person, isTrainer: true,
+    breakStartMinutes: 780, breakEndMinutes: 825 }));
+  const requirements = projection(2);
+  requirements.matrix[0][3] = 1; // At 11:00, the second normal lane is also excess.
+  const rows = buildHeatmapRows(trainers, requirements);
+  assert.deepEqual(cellsAt(rows, '10:00').map((cell) => cell.color), ['bg-orange-500', 'bg-orange-500', 'bg-red-500']);
+  assert.deepEqual(cellsAt(rows, '11:00').map((cell) => cell.color), ['bg-orange-500', 'bg-red-500', 'bg-red-500']);
+  for (const cell of cellsAt(rows, '11:00')) assert.equal(cell.isTrainer, true);
+  assert.ok(cellsAt(rows, '11:00').slice(1).every((cell) => cell.isExcess));
+  assert.deepEqual(cellsAt(rows, '13:00').map((cell) => cell.color), ['bg-yellow-300', 'bg-yellow-300', 'bg-white']);
+  assert.deepEqual(cellsAt(rows, '13:45').map((cell) => cell.color), ['bg-orange-500', 'bg-orange-500', 'bg-red-500']);
+});
+
 test('transferir desde 2.6 exige dejar tres personas y desde 2.2 permite dejar dos', () => {
   assert.match(validateHeatmapTransfer(assigned(3), transferRequirements(2.6, 0.8), transfer), /origen/);
   assert.equal(validateHeatmapTransfer(assigned(4), transferRequirements(2.6, 0.8), transfer), '');
@@ -101,4 +115,23 @@ test('Excel y PDF exportan los tres carriles enteros y el exceso mostrado en pan
   assert.equal(pdf.getNumberOfPages(), 1);
   assert.ok(output.includes('Caja \\(3\\)'));
   assert.equal(output.includes('Caja \\(4\\)'), false);
+});
+
+test('Excel y PDF conservan el exceso rojo del trainer y naranja en cobertura normal', async () => {
+  const rows = buildHeatmapRows(assigned(3).map((person) => ({ ...person, isTrainer: true })), projection(2));
+  const cells = cellsAt(rows, '10:00');
+  assert.ok(cells.every((cell) => cell.isTrainer));
+  assert.equal(cells[2].isExcess, true);
+  const data = { rows, hours: HOURS, date: '2026-10-26', dayLabel: 'Lunes' };
+  const workbook = await buildHeatmapWorkbook(data);
+  const restored = new ExcelJS.Workbook();
+  await restored.xlsx.load(await workbook.xlsx.writeBuffer());
+  const sheet = restored.getWorksheet('Mapa de cobertura');
+  const column = HOURS.indexOf('10:00') + 2;
+  assert.deepEqual([6, 7, 8].map((row) => sheet.getCell(row, column).value), ['T', 'T', 'E']);
+  assert.deepEqual([6, 7, 8].map((row) => sheet.getCell(row, column).fill.fgColor.argb), ['FFF97316', 'FFF97316', 'FFEF4444']);
+  const pdf = await buildHeatmapPdf(data);
+  const output = pdf.output();
+  assert.ok(output.includes('0.94 0.27 0.27 rg'), 'PDF uses the shared red excess color');
+  assert.ok(output.includes('0.98 0.45 0.09 rg'), 'PDF retains the shared orange trainer color');
 });

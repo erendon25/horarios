@@ -1,0 +1,115 @@
+// Real Focus editor, staff panel, shift controls and heatmap with fictional data.
+// All documents, auth, SSE and writes use the isolated local QA transport.
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {mkdir,writeFile} from 'node:fs/promises';
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
+const port=process.env.BUK_QA_PORT||'4212',base=`http://127.0.0.1:${port}`,output='output/schedule-focus-qa';
+await mkdir(output,{recursive:true});
+const server=spawn(process.execPath,['scripts/serve-buk-qa.mjs'],{env:{...process.env,BUK_QA_PORT:port,BUK_QA_FOCUS_PREVIEW:'1'},stdio:['ignore','pipe','inherit']});
+const passed=[],errors=[],external=[],observations=[];let browser,page;
+const poll=async(action,message)=>{for(let i=0;i<100;i++){if(await action())return;await new Promise(r=>setTimeout(r,100));}throw Error(message)};
+const pass=message=>{passed.push(message);console.log(`PASS: ${message}`)};
+const panel=()=>page.getByTestId('focus-staff-panel');
+const editor=()=>page.getByTestId('focus-shift-editor');
+const staffButton=()=>page.locator('button[aria-controls="focus-staff-panel"]');
+const map=()=>page.getByRole('region',{name:'Matriz de cobertura por posición y horario',exact:true});
+const select=async id=>{if(await panel().getByRole('button',{name:'Volver a la lista',exact:true}).count())await panel().getByRole('button',{name:'Volver a la lista',exact:true}).click();await panel().getByLabel('Buscar colaborador',{exact:true}).fill('');await panel().getByRole('button',{name:'Todos',exact:true}).click();await panel().locator(`[data-focus-person-id="${id}"]`).click();await editor().waitFor()};
+const openPanel=async()=>{if(!await panel().isVisible())await staffButton().click();await panel().waitFor()};
+const openApproved=async()=>{await editor().getByRole('button',{name:/Horario aprobado BUK de/}).click();const dialog=page.getByRole('dialog',{name:'Seleccionar horario',exact:true});await dialog.waitFor();return dialog};
+const draft=()=>page.evaluate(()=>JSON.parse(localStorage.getItem('schedule_draft_v2:qa-admin:qa-store:2026-10-12_to_2026-10-18')||'null'));
+const writes=()=>page.evaluate(()=>window.bukQaWrites);
+const digest=()=>map().locator('td[data-range-hour]').evaluateAll(cells=>cells.map(cell=>[cell.dataset.rangeRow,cell.dataset.rangeHour,cell.title,[...cell.classList].find(name=>/^bg-/.test(name))]));
+const classic=async()=>{await page.getByTestId('focus-toolbar').locator('summary').filter({hasText:'Más'}).click();await page.getByRole('button',{name:'Vista clásica',exact:true}).click();await page.getByRole('button',{name:'Vista cobertura',exact:true}).waitFor();assert.equal(new URL(page.url()).searchParams.get('vista'),'clasica')};
+const assertMap=async()=>{assert.equal(await map().locator('thead th[scope="col"]').count(),73);assert.equal((await map().locator('thead th[scope="col"]').first().textContent()).trim(),'07:00');assert.equal((await map().locator('thead th[scope="col"]').last().textContent()).trim(),'25:00');const size=await map().locator('td[data-range-hour]').first().boundingBox();assert.ok(size&&Math.abs(size.width-20)<1&&Math.abs(size.height-20)<1,`Las celdas deben seguir cuadradas20px: ${JSON.stringify(size)}`)};
+const assertBadge=async(container,kind,label)=>{
+ const badge=container.getByTestId('focus-modality-badge'),name=container.getByTestId('focus-staff-name');
+ await badge.scrollIntoViewIfNeeded();assert.equal(await badge.getAttribute('data-modality'),kind);
+ const b=await badge.boundingBox(),n=await name.boundingBox();assert.ok(b&&n&&b.x>=n.x+n.width-1&&Math.min(b.y+b.height,n.y+n.height)>Math.max(b.y,n.y),`${label}: la modalidad debe estar al lado del nombre`);
+ const [r,g,blue]=await badge.evaluate(element=>getComputedStyle(element).backgroundColor.match(/[\d.]+/g).slice(0,3).map(Number));
+ assert.ok(kind==='full-time'?g>r&&g>blue:blue>r&&blue>g,`${label}: color incorrecto de modalidad`);
+ observations.push({badge:label,kind,name:n,badgeBounds:b});
+};
+try{
+ await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Focus QA startup timeout')),30000);server.once('error',reject);server.once('exit',code=>reject(Error(`QA server exit${code}`)));server.stdout.on('data',data=>{if(data.toString().includes('Editor BUK aislado:')){clearTimeout(timeout);resolve()}})});
+ browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
+ page=await browser.newPage({viewport:{width:1600,height:1000},timezoneId:'America/Lima'});page.on('pageerror',e=>errors.push(e.message));page.on('dialog',dialog=>dialog.accept());
+ await page.addInitScript(()=>{window.qaPolicyViolations=[];window.addEventListener('securitypolicyviolation',event=>window.qaPolicyViolations.push(event.blockedURI))});
+ await page.route('https://**/*',route=>{external.push(route.request().url());return route.abort()});
+ await page.goto(base);await page.getByTestId('schedule-focus-workspace').waitFor();await map().waitFor();
+ await poll(async()=>(await map().locator('td[data-range-hour]').count())>0,'La matriz no terminó de cargar');
+ await assertMap();assert.equal(await panel().count(),0,'El panel debe iniciar cerrado');
+ const trainerNormal=map().locator('td[title$=": Entrenador"]').first(),trainerExcess=map().locator('td[title$=": Entrenador · Exceso"]').first();
+ assert.ok(await trainerNormal.count());assert.ok(await trainerExcess.count());assert.match(await trainerNormal.getAttribute('class'),/bg-orange-500/);assert.match(await trainerExcess.getAttribute('class'),/bg-red-500/);
+ const baseMap=await digest(),baseTotal=await page.getByTestId('heatmap-total-hours').textContent(),baseProjection=await page.getByTestId('projection-hours-day').textContent();
+ await page.screenshot({path:`${output}/focus-desktop-mapa.png`});
+ await classic();assert.deepEqual(await digest(),baseMap,'La vista clásica y Focus deben usar los mismos colores/celdas');
+ await page.reload();await page.getByRole('button',{name:'Vista cobertura',exact:true}).waitFor();assert.equal(await page.getByTestId('schedule-focus-workspace').count(),0,'La URL clásica debe conservarse al actualizar');
+ await page.getByRole('button',{name:'Vista cobertura',exact:true}).click();await assertMap();
+ assert.equal(await page.getByTestId('heatmap-total-hours').textContent(),baseTotal);assert.equal(await page.getByTestId('projection-hours-day').textContent(),baseProjection);
+ pass('Focus inicia por defecto y conserva73 columnas/celdas20px y HH; clásico persiste por URL, trainer normal naranja y exceso rojo');
+
+ await openPanel();assert.equal(await panel().locator('[data-focus-person-id]').count(),21);
+ await assertBadge(panel().locator('[data-focus-person-id="F01"]'),'full-time','lista desktop Full-Time');await assertBadge(panel().locator('[data-focus-person-id="P12"]'),'part-time','lista desktop Part-Time');
+ await panel().getByLabel('Buscar colaborador',{exact:true}).fill('Prueba');
+ const list=panel().getByTestId('focus-staff-list-scroll');await list.evaluate(element=>{element.scrollTop=450});
+ await panel().locator('[data-focus-person-id="F02"]').scrollIntoViewIfNeeded();const savedScroll=await list.evaluate(element=>element.scrollTop);
+ await panel().locator('[data-focus-person-id="F02"]').click();await editor().waitFor();
+ assert.equal(await panel().getByTestId('focus-staff-list').count(),1);assert.equal(await panel().getByTestId('focus-staff-list').isVisible(),false);
+ await panel().getByRole('button',{name:'Volver a la lista',exact:true}).click();
+ assert.equal(await panel().getByLabel('Buscar colaborador',{exact:true}).inputValue(),'Prueba');
+ await poll(async()=>Math.abs(await list.evaluate(element=>element.scrollTop)-savedScroll)<2,'La posición de la lista no se recuperó');
+ await panel().getByLabel('Buscar colaborador',{exact:true}).fill('Camila');assert.equal(await panel().locator('[data-focus-person-id]').count(),1);assert.deepEqual(await digest(),baseMap,'La búsqueda local no debe filtrar la cobertura');
+ await panel().getByLabel('Buscar colaborador',{exact:true}).fill('');await panel().getByRole('button',{name:'Sin turno',exact:true}).click();
+ assert.deepEqual(await panel().locator('[data-focus-person-id]').evaluateAll(elements=>elements.map(e=>e.dataset.focusPersonId)),['P12']);assert.deepEqual(await digest(),baseMap);
+ pass('Los21 colaboradores se buscan localmente; editar y volver conserva búsqueda/scroll, y Sin turno no cambia el mapa de la tienda');
+
+ await select('F01');assert.match(await editor().getByTestId('focus-shift-dni').textContent(),/99000105/);await assertBadge(panel().getByTestId('focus-staff-editor'),'full-time','editor desktop Full-Time');
+ const approved=await openApproved();await approved.locator('[data-shift-id="FT1-6"]').click();await approved.waitFor({state:'detached'});
+ assert.equal(await editor().getByLabel('Entrada',{exact:true}).inputValue(),'06:45');assert.equal(await editor().getByLabel('Salida',{exact:true}).inputValue(),'15:30');
+ await editor().getByTestId('focus-shift-extras').locator('summary').click();await editor().getByLabel('Horas extra después',{exact:true}).fill('1');
+ await editor().getByRole('button',{name:/Asignar break de/}).click();const breakDialog=page.getByRole('dialog',{name:/Break de Camila/});await breakDialog.waitFor();await breakDialog.getByLabel('Inicio del break',{exact:true}).selectOption('10:00');await breakDialog.getByRole('button',{name:'Aplicar break',exact:true}).click();
+ await poll(async()=>(await draft())?.changes?.F01?.monday?.breakStart==='10:00','El break no se aplicó al borrador');
+ const changed=(await draft()).changes.F01.monday;assert.equal(changed.bukApprovedShiftId,'FT1-6');assert.equal(changed.bukBreakMinutes,45);assert.equal(Number(changed.extraHoursPost),1);
+ assert.deepEqual(await writes(),[],'Editar solo debe escribir el borrador local');
+ await page.screenshot({path:`${output}/focus-desktop-editor.png`});
+ await panel().getByRole('button',{name:'Cerrar panel de colaboradores',exact:true}).click();await classic();
+ const legacy=page.getByRole('button',{name:'Horario aprobado BUK de Camila Prueba',exact:true}).locator('xpath=ancestor::tr[1]');
+ assert.equal(await legacy.getByTitle('Entrada',{exact:true}).inputValue(),'06:45');assert.equal(await legacy.getByTitle('Salida',{exact:true}).inputValue(),'15:30');
+ await page.getByRole('button',{name:'Vista cobertura',exact:true}).click();await openPanel();await select('F01');assert.equal(await editor().getByLabel('Horas extra después',{exact:true}).inputValue(),'1');
+ pass('Horario aprobado, extras y break se editan en el mismo borrador; cambiar a vista clásica y regresar conserva los valores sin guardar');
+
+ await select('G01');assert.equal(await editor().getByRole('button',{name:/Horario aprobado BUK/}).count(),0);await editor().getByLabel('Entrada',{exact:true}).fill('10:20');assert.equal(await editor().getByLabel('Entrada',{exact:true}).inputValue(),'10:20');
+ await select('F05');assert.equal(await editor().getByLabel('Entrada del segundo tramo',{exact:true}).inputValue(),'18:00');assert.equal(await editor().getByLabel('Salida del segundo tramo',{exact:true}).inputValue(),'22:00');
+ await panel().getByRole('button',{name:'Volver a la lista',exact:true}).click();await select('F05');assert.equal(await editor().getByLabel('Entrada del segundo tramo',{exact:true}).inputValue(),'18:00');assert.equal((await draft())?.changes?.F05,undefined,'Consultar un partido histórico no debe reemplazarlo');
+ await select('P10');await assertBadge(panel().getByTestId('focus-staff-editor'),'part-time','editor desktop Part-Time');assert.equal(await editor().getByLabel('Libre',{exact:true}).isChecked(),true);assert.equal(await editor().getByLabel('Entrada',{exact:true}).isDisabled(),true);assert.equal(await editor().getByRole('button',{name:/Horario aprobado BUK/}).isDisabled(),true);
+ await select('F04');assert.equal(await editor().getByLabel('Feriado compensado',{exact:true}).isChecked(),true);assert.equal(await editor().getByLabel('Libre',{exact:true}).isDisabled(),true);assert.equal(await editor().getByLabel('Entrada',{exact:true}).isDisabled(),true);
+ pass('Gerencia conserva horario manual, el partido histórico no se sustituye al consultarlo y Libre/Feriado mantienen los bloqueos de la lógica existente');
+
+ await select('F01');await panel().getByRole('button',{name:'Cerrar panel de colaboradores',exact:true}).click();
+ const beforeReload=structuredClone((await draft()).changes);await page.reload();await page.getByTestId('schedule-focus-workspace').waitFor();await openPanel();await select('F01');assert.equal(await editor().getByLabel('Entrada',{exact:true}).inputValue(),'06:45');assert.equal(await editor().getByRole('button',{name:/Asignar break de/}).textContent(),'10:00');
+ assert.deepEqual((await draft()).changes,beforeReload);assert.deepEqual(await writes(),[]);
+ await panel().getByRole('button',{name:'Cerrar panel de colaboradores',exact:true}).click();await page.getByTestId('focus-toolbar').getByRole('button',{name:'Guardar',exact:true}).click();
+ await poll(async()=>(await writes()).some(write=>write.path==='schedules/F01_2026-10-12_to_2026-10-18'),'Guardar no conservó los cambios en la API ficticia');
+ const saved=await (await page.request.get(`${base}/qa-document?path=${encodeURIComponent('schedules/F01_2026-10-12_to_2026-10-18')}`)).json();assert.equal(saved.data.monday.start,'06:45');assert.equal(saved.data.monday.breakStart,'10:00');assert.equal(Number(saved.data.monday.extraHoursPost),1);
+ pass('Actualizar la página recupera el borrador protegido y Guardar afecta únicamente los documentos del transporte ficticio');
+
+ await page.setViewportSize({width:390,height:844});await openPanel();await select('F01');assert.equal(await panel().getAttribute('role'),'dialog');
+ await assertBadge(panel().getByTestId('focus-staff-editor'),'full-time','editor móvil Full-Time');await panel().getByRole('button',{name:'Volver a la lista',exact:true}).click();
+ await assertBadge(panel().locator('[data-focus-person-id="F01"]'),'full-time','lista móvil Full-Time');await assertBadge(panel().locator('[data-focus-person-id="P12"]'),'part-time','lista móvil Part-Time');
+ await select('P12');await assertBadge(panel().getByTestId('focus-staff-editor'),'part-time','editor móvil Part-Time');await panel().screenshot({path:`${output}/focus-mobile-modalidad-part.png`});await select('F01');
+ assert.equal(await page.evaluate(()=>document.body.style.overflow),'hidden');assert.equal(await page.evaluate(()=>document.documentElement.style.overflow),'hidden');
+ const bounds=await panel().boundingBox();assert.ok(bounds&&bounds.x>=-1&&bounds.x+bounds.width<=391&&bounds.y>=-1&&bounds.y+bounds.height<=845);
+ const nested=await openApproved();await page.keyboard.press('Escape');await nested.waitFor({state:'detached'});assert.equal(await panel().isVisible(),true,'Escape en un selector anidado no debe cerrar el panel');
+ const extra=editor().getByTestId('focus-shift-extras');if(!await extra.evaluate(e=>e.open))await extra.locator('summary').click();const extraInput=editor().getByLabel('Horas extra después',{exact:true});await extraInput.scrollIntoViewIfNeeded();await extraInput.focus();const inputBounds=await extraInput.boundingBox();assert.ok(inputBounds&&inputBounds.y>=bounds.y&&inputBounds.y+inputBounds.height<=845,'El campo enfocado debe quedar visible en el scroll interno');
+ const closeBounds=await panel().getByRole('button',{name:'Cerrar panel de colaboradores',exact:true}).boundingBox();assert.ok(closeBounds.y>=-1&&closeBounds.y+closeBounds.height<=845);
+ await page.keyboard.press('Tab');assert.equal(await panel().evaluate(element=>element.contains(document.activeElement)),true,'El foco del panel móvil no debe pasar al fondo');
+ await panel().screenshot({path:`${output}/focus-mobile-editor.png`});await page.keyboard.press('Escape');await panel().waitFor({state:'detached'});assert.equal(await staffButton().evaluate(e=>e===document.activeElement),true);assert.equal(await page.evaluate(()=>document.body.style.overflow),'');assert.equal(await page.evaluate(()=>document.documentElement.style.overflow),'');
+ await page.screenshot({path:`${output}/focus-mobile-mapa.png`});await assertMap();
+ const visibleMapData=await map().evaluate(element=>{const region=element.getBoundingClientRect(),cell=element.querySelector('td[data-range-hour]').getBoundingClientRect();return {region:{top:region.top,bottom:region.bottom},firstCellTop:cell.top,visibleHeight:Math.min(region.bottom,innerHeight)-Math.max(cell.top,0)}});
+ assert.ok(visibleMapData.visibleHeight>=100,`Deben verse al menos100px de datos del mapa en móvil: ${JSON.stringify(visibleMapData)}`);
+ observations.push({mobilePanel:bounds,inputBounds,visibleMapData});assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.deepEqual(await page.evaluate(()=>window.qaPolicyViolations),[]);
+ pass('El panel móvil cabe, mantiene campos y cierre visibles, atrapa foco, respeta el selector anidado y restaura mapa/foco/scroll al salir');
+ await writeFile(`${output}/resultado.json`,JSON.stringify({status:'PASS',passed,observations,errors,external,scope:'Local-only Focus editor with21 fictional staff; no production network or data'},null,2));
+}catch(error){await page?.screenshot({path:`${output}/fallo.png`,fullPage:true}).catch(()=>{});await writeFile(`${output}/resultado.json`,JSON.stringify({status:'FAIL',passed,errors,external,error:String(error)},null,2));throw error;
+}finally{await browser?.close();server.kill();}

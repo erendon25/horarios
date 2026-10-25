@@ -4,6 +4,7 @@ import { collection, doc, getDoc, getDocs, orderBy, query, setDoc, where } from 
 import { db } from '../supabase';
 import ProjectionPositionFields from './ProjectionPositionFields';
 import { getProjectionStaffColor } from '../services/projectionStaffColor';
+import { summarizeProjectionAvailableHours } from '../services/projectionLabor';
 import { getProjectionDepartment, PROJECTION_DEPARTMENTS, summarizeProjectionStaffGroups } from '../services/projectionStaffGroups';
 import { resolveVestidoPositionId } from '../services/projectionDemand';
 import {
@@ -428,81 +429,10 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
     };
   }, [storeId, refreshToken, dataRefreshVersion]);
 
-  const availableHoursBreakdown = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const isTraineeFlag = (member) =>
-      member?.isTrainee === true || member?.isTrainee === 'true' || member?.isTrainee === 1;
-    const isFullTime = (member) =>
-      member.modality === 'Full Time' ||
-      member.modality === 'Full-Time' ||
-      member.contractType?.includes?.('Full');
-    const isPartTime = (member) =>
-      member.modality === 'Part Time' ||
-      member.modality === 'Part-Time' ||
-      member.contractType?.includes?.('Part');
-
-    const buckets = {
-      fullTime: [],
-      partTime: [],
-      traineeVencido: [],
-      cesados: [],
-      inactivos: [],
-      sinModalidad: [],
-    };
-
-    staffList.forEach((member) => {
-      const normalizedName = `${member.name || ''} ${member.lastName || ''}`
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .trim();
-      const displayName = normalizedName || member.email || member.id || 's/nombre';
-      const isTrainee = isTraineeFlag(member);
-      const entry = {
-        id: member.id,
-        name: displayName,
-        modality: member.modality || member.contractType || '\u2014',
-        isTrainee,
-      };
-
-      if (
-        member.status === 'inactive' ||
-        member.reconstructed_from_history === true ||
-        displayName.toLowerCase().startsWith('historico ')
-      ) {
-        buckets.inactivos.push(entry);
-        return;
-      }
-      if (member.cessationDate) {
-        const cess = new Date(member.cessationDate + 'T00:00:00');
-        if (cess < today) {
-          buckets.cesados.push({ ...entry, cessationDate: member.cessationDate });
-          return;
-        }
-      }
-      if (isTrainee && member.trainingEndDate) {
-        const end = new Date(member.trainingEndDate + 'T00:00:00');
-        if (end < today) {
-          buckets.traineeVencido.push({ ...entry, trainingEndDate: member.trainingEndDate });
-          return;
-        }
-      }
-      if (isFullTime(member)) {
-        buckets.fullTime.push({ ...entry, hours: 48 });
-        return;
-      }
-      if (isPartTime(member)) {
-        buckets.partTime.push({ ...entry, hours: 24 });
-        return;
-      }
-      buckets.sinModalidad.push(entry);
-    });
-
-    const totalHours =
-      buckets.fullTime.length * 48 + buckets.partTime.length * 24;
-
-    return { ...buckets, totalHours };
-  }, [staffList]);
+  const availableHoursBreakdown = useMemo(
+    () => summarizeProjectionAvailableHours(staffList),
+    [staffList]
+  );
 
   const totalAvailableHours = availableHoursBreakdown.totalHours;
 
@@ -989,6 +919,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
                 Ver desglose
               </button>
             </div>
+            <p className="mt-1 text-[11px] text-slate-500">No incluye gerentes ni asistentes.</p>
           </div>
         </div>
 
@@ -1207,6 +1138,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
               {[
                 { key: 'fullTime', label: 'Full Time', color: 'bg-blue-50 text-blue-800 border-blue-200', bucket: availableHoursBreakdown.fullTime },
                 { key: 'partTime', label: 'Part Time', color: 'bg-emerald-50 text-emerald-800 border-emerald-200', bucket: availableHoursBreakdown.partTime },
+                { key: 'gerenciales', label: 'Gerentes y asistentes (excluidos)', color: 'bg-indigo-50 text-indigo-800 border-indigo-200', bucket: availableHoursBreakdown.gerenciales },
                 { key: 'traineeVencido', label: 'Trainees vencidos (excluidos)', color: 'bg-purple-50 text-purple-800 border-purple-200', bucket: availableHoursBreakdown.traineeVencido },
                 { key: 'sinModalidad', label: 'Sin modalidad (excluidos)', color: 'bg-amber-50 text-amber-800 border-amber-200', bucket: availableHoursBreakdown.sinModalidad },
                 { key: 'cesados', label: 'Cesados (excluidos)', color: 'bg-red-50 text-red-800 border-red-200', bucket: availableHoursBreakdown.cesados },

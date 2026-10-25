@@ -123,7 +123,7 @@ try {
  trainerPage.on('pageerror',error=>errors.push(error.message));
  await trainerPage.goto(url);
  const trainerExcess = trainerPage.getByLabel('Seleccionar tramo de Caja desde 10:00',{exact:true});
- assert.match(await trainerExcess.getAttribute('class'),/bg-orange-500/);
+ assert.match(await trainerExcess.getAttribute('class'),/bg-red-500/);
  await trainerExcess.press('Enter');
  await trainerPage.getByLabel('Colaborador',{exact:true}).selectOption('b');
  await trainerPage.getByLabel('Puesto destino',{exact:true}).selectOption('Cocina');

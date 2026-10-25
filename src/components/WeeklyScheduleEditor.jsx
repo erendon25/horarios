@@ -1,4 +1,4 @@
-import { isBukScheduleExempt } from '../services/scheduleStaffOrder.js';
+import { isBukScheduleExempt, orderScheduleStaff } from '../services/scheduleStaffOrder.js';
 // WeeklyScheduleEditor.jsx – versión con detección de conflictos corregida
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { getFirestore, writeBatch, doc, getDoc, setDoc, collection, query, where, onSnapshot, getDocs } from '../lib/supabase/firestoreCompat';
@@ -10,6 +10,11 @@ import WeeklyScheduleExcelButton from './WeeklyScheduleExcelButton';
 import { getHeatmapAssignments, getProjectionForDay, getExportShiftSegments, getPositionSegments, canLimitPositionCoverage } from '../services/scheduleExportData';
 import { summarizeProjectionHours } from '../services/projectionHours';
 import ProjectionHoursSummary from './ProjectionHoursSummary';
+import ScheduleFocusToolbar from './ScheduleFocusToolbar';
+import ScheduleFocusStaffPanel from './ScheduleFocusStaffPanel';
+import ScheduleFocusShiftEditor from './ScheduleFocusShiftEditor';
+import HeatmapCoverageCandidatesDialog from './HeatmapCoverageCandidatesDialog';
+import { getHeatmapCoverageCandidates } from '../services/heatmapCoverageCandidates';
 import { operationalStaffCount } from '../services/projectionStaffCount';
 import SchedulePositionControl from './SchedulePositionControl';
 import { validateHeatmapTransfer, replacePositionInterval } from '../services/heatmapTransfers';
@@ -123,6 +128,17 @@ const isOperationallyActiveStaff = (person, referenceDate = new Date()) => {
 
 export default function WeeklyScheduleEditor() {
     const { currentUser, userRole } = useAuth();
+    const [focusMode, setFocusMode] = useState(() => typeof window === 'undefined' || new URLSearchParams(window.location.search).get('vista') !== 'clasica');
+    const [focusPanelOpen, setFocusPanelOpen] = useState(false);
+    const [focusSelectedId, setFocusSelectedId] = useState(null);
+    const [focusSearch, setFocusSearch] = useState('');
+    const [focusListFilter, setFocusListFilter] = useState('all');
+    const focusListScroll = useRef(null);
+    const focusStaffButton = useRef(null);
+    const [coverageSelection, setCoverageSelection] = useState(null);
+    const [coverageResetKey, setCoverageResetKey] = useState(0);
+    const coverageControls = useRef(null);
+    const coverageScopeRef = useRef('');
     const [staff, setStaff] = useState([]);
     const [positions, setPositions] = useState([]);
     const [projectionPositions, setProjectionPositions] = useState([]);
@@ -134,6 +150,7 @@ export default function WeeklyScheduleEditor() {
     const [positionFilter, setPositionFilter] = useState('Todas');
     const [excludeTraineesFilter, setExcludeTraineesFilter] = useState(false);
     const [prevWeekSchedules, setPrevWeekSchedules] = useState({});
+    const [previousWeekRead, setPreviousWeekRead] = useState({ scope: '', status: 'idle' });
     const [tooltipOpen, setTooltipOpen] = useState(null);
     const [tooltipPosition, setTooltipPosition] = useState({ top: 0, left: 0 });
     const [showTurnoModal, setShowTurnoModal] = useState(false);
@@ -145,6 +162,11 @@ export default function WeeklyScheduleEditor() {
     const [availabilityReload, setAvailabilityReload] = useState(0);
     const [availabilityLoadError, setAvailabilityLoadError] = useState('');
     const [storeId, setStoreId] = useState('');
+    useEffect(() => {
+        setFocusSelectedId(null);
+        setFocusSearch('');
+        setFocusListFilter('all');
+    }, [storeId]);
     const [approvedRequests, setApprovedRequests] = useState([]);
     const [approvedRequestsError, setApprovedRequestsError] = useState('');
     const [showApprovedRequestsModal, setShowApprovedRequestsModal] = useState(false);
@@ -160,6 +182,14 @@ export default function WeeklyScheduleEditor() {
     const [highlightedStaffId, setHighlightedStaffId] = useState(null);
 
     const wk = getWeekKey(weekStartDate);
+    const previousWeekScope = JSON.stringify([storeId, wk, staff.map(person => person.id).sort()]);
+    const coverageScope = `${storeId}|${wk}|${selectedDay}`;
+    coverageScopeRef.current = coverageScope;
+    useEffect(() => {
+        setCoverageSelection(null);
+        coverageControls.current = null;
+        setCoverageResetKey(value => value + 1);
+    }, [coverageScope]);
     const draft = useScheduleDraft(currentUser?.uid || '', storeId, wk);
     const { schedules, dirtyStaff, controller: draftController } = draft;
     const hasUnsavedChanges = dirtyStaff.size > 0;
@@ -929,6 +959,7 @@ export default function WeeklyScheduleEditor() {
         if (!wk || !storeId || staff.length === 0) return;
         let cancelled = false;
         setPrevWeekSchedules({});
+        setPreviousWeekRead({ scope: previousWeekScope, status: 'loading' });
 
         const loadAllSchedules = async () => {
             console.log('[Horarios] Iniciando carga → wk:', wk, '| storeId:', storeId, '| staff:', staff.length);
@@ -992,16 +1023,20 @@ export default function WeeklyScheduleEditor() {
                         const dSnap = await getDoc(doc(db, 'schedules', `${sId}_${prevWk}`));
                         if (dSnap.exists()) prevMerged[sId] = dSnap.data();
                     }));
-                    if (!cancelled) setPrevWeekSchedules(prevMerged);
+                    if (!cancelled) {
+                        setPrevWeekSchedules(prevMerged);
+                        setPreviousWeekRead({ scope: previousWeekScope, status: 'ready' });
+                    }
                 } catch (err) {
                     console.error('[Horarios] Error cargando semana anterior:', err);
+                    if (!cancelled) setPreviousWeekRead({ scope: previousWeekScope, status: 'error' });
                 }
             }
         };
 
         loadAllSchedules();
         return () => { cancelled = true; };
-    }, [wk, staff, storeId, db, weekStartDate, draftController, scheduleReload]);
+    }, [wk, staff, storeId, db, weekStartDate, draftController, scheduleReload, previousWeekScope]);
 
 
 
@@ -1202,6 +1237,10 @@ export default function WeeklyScheduleEditor() {
         setSearchTerm('');
         setShowStudyConflictsModal(false);
         setHighlightedStaffId(conflict.staffId);
+        if (focusMode) {
+            setFocusSelectedId(conflict.staffId);
+            setFocusPanelOpen(true);
+        }
 
         window.setTimeout(() => {
             staffRowRefs.current[conflict.staffId]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1235,10 +1274,118 @@ export default function WeeklyScheduleEditor() {
     })();
 
 
+    const changeEditorView = enabled => {
+        setFocusMode(enabled);
+        const url = new URL(window.location.href);
+        url.searchParams.set('vista', enabled ? 'cobertura' : 'clasica');
+        window.history.replaceState(window.history.state, '', url);
+    };
+    const changeFocusWeek = value => {
+        if (!value) return setWeekStartDate('');
+        const [year, month, day] = value.split('-').map(Number);
+        const date = new Date(year, month - 1, day);
+        date.setDate(date.getDate() - (date.getDay() + 6) % 7);
+        const monday = [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+        setWeekStartDate(monday);
+        try { localStorage.setItem(`schedule_editor_week:${currentUser.uid}:${storeId}`, monday); } catch { /* Selection still works without storage. */ }
+    };
+    const focusDate = getSelectedDateStr();
+    const makeFocusItem = person => {
+        const shift = schedules[person.id]?.[selectedDay] || {};
+        const endDate = person.isTrainee ? person.trainingEndDate : person.cessationDate || person.terminationDate;
+        const ceased = Boolean(endDate && focusDate && focusDate > endDate);
+        const weekly = calculateWeeklyHours(person.id);
+        const conflicts = detectScheduleConflict(person, selectedDay, shift);
+        const modality = getEffectiveModality(person, focusDate);
+        const expected = modality?.toLowerCase() === 'full-time' ? 48 * 60 : weekdays.some(day => schedules[person.id]?.[day]?.bukApprovedShiftId) ? 23 * 60 + 45 : 24 * 60;
+        const missingBreak = requiresScheduleBreak(shift, modality) && !getScheduleBreak(shift, modality);
+        return {
+            id: person.id, person, name: `${person.name || ''} ${person.lastName || ''}`.trim(), role: person.position,
+            modality, shiftLabel: ceased ? 'Cesado' : shift.off ? 'Libre' : shift.feriado || shift.holiday ? 'Feriado compensado'
+                : shift.start && shift.end ? `${shift.start} → ${shift.end}${shift.splitShift ? ` / ${shift.start2 || '—'} → ${shift.end2 || '—'}` : ''}` : 'Sin turno',
+            position: shift.off || shift.feriado || shift.holiday || ceased ? '' : shift.position || '',
+            dailyHours: ceased ? '—' : shift.off ? '0:00' : calculateDailyHours(shift), weeklyHours: weekly.formatted,
+            hasAlert: !ceased && (Boolean(conflicts) || missingBreak || weekly.total !== expected || !weekdays.some(day => schedules[person.id]?.[day]?.off)),
+            unassigned: !ceased && !shift.off && !shift.feriado && !shift.holiday && (!shift.start || !shift.end),
+            off: Boolean(shift.off), holiday: Boolean(shift.feriado || shift.holiday), ceased,
+            alertLabel: missingBreak ? 'Break pendiente' : conflicts ? 'Revisar disponibilidad o posición' : weekly.total !== expected ? 'Revisar horas semanales' : 'Revisar descansos',
+        };
+    };
+    const focusItems = focusMode ? orderScheduleStaff(filteredStaff, focusDate).map(makeFocusItem) : [];
+    const focusQuery = focusSearch.trim().toLocaleLowerCase('es');
+    const visibleFocusItems = focusItems.filter(item => (!focusQuery || item.name.toLocaleLowerCase('es').includes(focusQuery))
+        && (focusListFilter === 'all' || (focusListFilter === 'unassigned' ? item.unassigned : item.hasAlert)));
+    const focusedPerson = activeStaff.find(person => person.id === focusSelectedId);
+    const focusedItem = focusedPerson ? makeFocusItem(focusedPerson) : null;
+    const focusedShift = schedules[focusSelectedId]?.[selectedDay] || {};
+    const globalFiltersActive = modalityFilter !== 'Todos' || positionFilter !== 'Todas' || Boolean(searchTerm) || excludeTraineesFilter;
+    const currentCoverageSelection = coverageSelection?.scope === coverageScope ? coverageSelection : null;
+    const previousWeekReady = previousWeekRead.scope === previousWeekScope && previousWeekRead.status === 'ready';
+    const coverageCandidates = currentCoverageSelection ? (selectedDay === 'monday' && !previousWeekReady ? {
+        valid: false, pending: previousWeekRead.scope !== previousWeekScope || previousWeekRead.status !== 'error',
+        reason: previousWeekRead.scope === previousWeekScope && previousWeekRead.status === 'error'
+            ? 'No se pudo verificar la semana anterior. Actualiza la página para volver a comprobar los turnos que pueden continuar en este lunes.'
+            : 'Comprobando los horarios de la semana anterior antes de proponer colaboradores para este lunes…',
+        available: [], blocked: [], limitations: [],
+    } : getHeatmapCoverageCandidates({
+        selection: currentCoverageSelection, staff: activeStaff, schedules, day: selectedDay,
+        date: focusDate, weekStart: weekStartDate, requirements: safeRequirements,
+        previousWeekSchedules: previousWeekReady ? prevWeekSchedules : undefined,
+    })) : null;
+    const closeCoverageSearch = () => {
+        setCoverageSelection(null);
+        coverageControls.current = null;
+        setCoverageResetKey(value => value + 1);
+    };
+    const viewCoverageCandidate = candidate => {
+        if (!coverageCandidates?.valid || !coverageCandidates.available.some(person => person.id === candidate.id)) return;
+        const exitFullscreen = coverageControls.current?.exitFullscreen;
+        const scope = coverageScope;
+        closeCoverageSearch();
+        // Close the candidate dialog before releasing its fullscreen parent.
+        // Both dialogs restore scroll state before the editor panel takes focus.
+        window.requestAnimationFrame(() => {
+            if (coverageScopeRef.current !== scope) return;
+            exitFullscreen?.();
+            if (!focusMode) changeEditorView(true);
+            setFocusSelectedId(candidate.id);
+            setFocusPanelOpen(true);
+        });
+    };
+
     return (
-        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+        <div data-testid={focusMode ? 'schedule-focus-workspace' : undefined} className={focusMode ? 'flex h-[calc(100dvh-var(--schedule-preview-banner-height,0px))] min-h-[420px] flex-col overflow-hidden bg-gray-50' : 'min-h-screen bg-gradient-to-br from-gray-50 to-gray-100'}>
+            {focusMode && <ScheduleFocusToolbar
+                week={weekStartDate} onWeekChange={changeFocusWeek} day={selectedDay} days={weekdays} dayLabels={weekdayLabels} onDayChange={setSelectedDay}
+                ready={draft.ready} saving={saveStatus === 'saving'} saved={saveStatus === 'success' && !hasUnsavedChanges}
+                dirtyCount={dirtyStaff.size} hasUnsavedChanges={hasUnsavedChanges} onSave={saveSchedules}
+                onOpenStaff={() => setFocusPanelOpen(value => !value)} staffCount={focusItems.length} staffButtonRef={focusStaffButton} panelOpen={focusPanelOpen}
+                onOpenRequests={() => setShowApprovedRequestsModal(true)} requestCount={approvedRequests.length}
+                onOpenConflicts={handleOpenStudyConflictsModal} conflictCount={getWeeklyStudyConflicts().length} filterActive={globalFiltersActive}
+                filters={<>
+                    <p className="text-xs text-gray-500">Estos filtros cambian la cobertura visible. Las HH conservan el total de la tienda.</p>
+                    <label className="block">Buscar en la cobertura<input aria-label="Buscar en la cobertura" value={searchTerm} onChange={event => setSearchTerm(event.target.value)} className="mt-1 w-full rounded border p-2" /></label>
+                    <label className="block">Modalidad<select aria-label="Filtro de modalidad" value={modalityFilter} onChange={event => setModalityFilter(event.target.value)} className="mt-1 w-full rounded border p-2"><option value="Todos">Todas</option><option value="Full-Time">Full-Time</option><option value="Part-Time">Part-Time</option></select></label>
+                    <label className="block">Posición<select aria-label="Filtro de posición" value={positionFilter} onChange={event => setPositionFilter(event.target.value)} className="mt-1 w-full rounded border p-2"><option value="Todas">Todas</option>{positions.map(position => <option key={position}>{position}</option>)}</select></label>
+                    {positionFilter !== 'Todas' && <label className="block">Aptitud<select aria-label="Filtro de aptitud" value={aptitudeFilter} onChange={event => setAptitudeFilter(event.target.value)} className="mt-1 w-full rounded border p-2"><option value="Todos">Todos</option><option value="Certificados">Certificados</option><option value="En Proceso">En formación</option><option value="No Capacitados">Sin capacitación</option></select></label>}
+                    <label className="flex items-center gap-2"><input type="checkbox" checked={excludeTraineesFilter} onChange={event => setExcludeTraineesFilter(event.target.checked)} />Solo personal de tienda</label>
+                </>}
+                exportControls={<>
+                    <WeeklyScheduleExcelButton canExport={userRole === 'admin' || userRole === 'superadmin'} staff={activeStaff} schedules={schedules} weekStart={weekStartDate} requirements={requirements} projectionPositions={projectionPositions} hasUnsavedChanges={hasUnsavedChanges} />
+                    <BukScheduleTools storeId={storeId} staff={staff} schedules={schedules} weekStart={weekStartDate} />
+                    <button type="button" className="rounded-lg border p-2 text-sm" onClick={() => setShowTurnoModal(true)}>PDF Posiciones</button>
+                </>}
+                extraControls={<>
+                    <button type="button" disabled={!draft.ready} onClick={generateIdealSchedule} className="rounded-lg border p-2 text-sm">Generar Horario</button>
+                    <button type="button" disabled={!draft.ready} onClick={() => setShowReplicateModal(true)} className="rounded-lg border p-2 text-sm">Replicar Horario</button>
+                    <button type="button" onClick={() => exportExtraHoursReport(activeStaff, schedules, wk)} className="rounded-lg border p-2 text-sm">Reporte Horas Extras</button>
+                    <Link className="rounded-lg border p-2 text-sm" to="/admin/proyeccion">Proyección</Link><Link className="rounded-lg border p-2 text-sm" to="/admin">Inicio</Link><Link className="rounded-lg border p-2 text-sm" to="/horarios">Horarios</Link>
+                    <button type="button" onClick={() => changeEditorView(false)} className="rounded-lg border border-blue-200 p-2 text-sm text-blue-700">Vista clásica</button>
+                    <details className="rounded-lg border p-2 text-xs text-gray-600"><summary className="cursor-pointer font-semibold">Sobre el borrador</summary><p className="mt-2">Tus cambios se protegen en este navegador. Guardar sincroniza el horario para los colaboradores.</p></details>
+                </>}
+            />}
             {/* Header Moderno */}
-            <div className="bg-white shadow-md border-b border-gray-200 sticky top-0 z-40">
+            {!focusMode && <div className="bg-white shadow-md border-b border-gray-200 sticky top-0 z-40">
                 <div className="max-w-full mx-auto px-4 sm:px-6 lg:px-8 py-4">
                     <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
                         <div>
@@ -1256,6 +1403,7 @@ export default function WeeklyScheduleEditor() {
                             )}
                         </div>
                         <div className="flex flex-wrap gap-2">
+                            <button type="button" onClick={() => changeEditorView(true)} className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700">Vista cobertura</button>
                             <Link
                                 to="/admin"
                                 className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium text-sm"
@@ -1280,23 +1428,23 @@ export default function WeeklyScheduleEditor() {
                         </div>
                     </div>
                 </div>
-            </div>
+            </div>}
 
-            <div className="max-w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            <div className={focusMode ? 'flex min-h-0 max-w-full flex-1 flex-col overflow-y-auto px-2 py-2 sm:px-4 sm:py-3' : 'max-w-full mx-auto px-4 sm:px-6 lg:px-8 py-6'}>
 
                 {availabilityLoadError && <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
                     <p>{availabilityLoadError}</p>
                     <button type="button" onClick={() => setAvailabilityReload(value => value + 1)} className="rounded-lg border border-red-300 bg-white px-3 py-2 font-semibold">Reintentar disponibilidad</button>
                 </div>}
 
-                {wk && (
-                    <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-950" role="status">
+                {wk && (!focusMode || draft.persistenceError || saveStatus === 'error' || draft.loadError || !draft.ready || Object.keys(draft.legacyChanges).length > 0) && (
+                    <div className={focusMode ? 'mb-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-950' : 'mb-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-950'} role="status">
                         <p className="font-semibold">
                             {hasUnsavedChanges
                                 ? draft.persistenceError ? 'Borrador pendiente de proteger' : draft.recovered ? 'Borrador recuperado en este navegador' : 'Borrador protegido en este navegador'
                                 : 'Sin cambios pendientes de sincronizar'}
                         </p>
-                        <p>Los borradores se conservan por usuario, tienda y semana en este navegador. Pulsa Guardar para sincronizarlos y que los colaboradores vean los horarios.</p>
+                        {focusMode ? <details className="mt-1"><summary className="cursor-pointer text-blue-800">Detalles del borrador</summary><p className="mt-1">Los cambios se conservan en este navegador. Guardar sincroniza el horario para los colaboradores.</p></details> : <p>Los borradores se conservan por usuario, tienda y semana en este navegador. Pulsa Guardar para sincronizarlos y que los colaboradores vean los horarios.</p>}
                         {hasUnsavedChanges && <p>{dirtyStaff.size} colaborador(es) con cambios pendientes.{draft.updatedAt && !draft.persistenceError ? ` Respaldo local: ${new Date(draft.updatedAt).toLocaleTimeString('es-PE')}.` : ''}</p>}
                         {!draft.ready && !draft.loadError && <p>Cargando la versión del servidor…</p>}
                         {draft.persistenceError && <p role="alert" className="mt-2 font-semibold text-red-700">{draft.persistenceError}</p>}
@@ -1326,7 +1474,7 @@ export default function WeeklyScheduleEditor() {
                 )}
 
                 {/* Controles Principales */}
-                <div className="bg-white rounded-xl shadow-md p-6 mb-6">
+                {!focusMode && <div className="bg-white rounded-xl shadow-md p-6 mb-6">
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                         {/* Filtros y Selección */}
                         <div className="space-y-4">
@@ -1543,10 +1691,10 @@ export default function WeeklyScheduleEditor() {
                             </button>
                         </div>
                     </div>
-                </div>
+                </div>}
 
-                <div className="flex flex-col lg:flex-row gap-6">
-                    <div className="w-full min-w-0 lg:w-3/5">
+                <div className={`flex flex-col lg:flex-row ${focusMode ? 'min-h-0 flex-1 gap-3' : 'gap-6'}`}>
+                    {!focusMode && <div className="w-full min-w-0 lg:w-3/5">
                         <div className="bg-white rounded-xl shadow-md">
                             <fieldset disabled={!draft.ready} className="min-w-0 overflow-x-auto">
                                 <table className="w-full text-sm">
@@ -2007,15 +2155,16 @@ export default function WeeklyScheduleEditor() {
                                 </table>
                             </fieldset>
                         </div>
-                    </div>
+                    </div>}
 
                     {/* Heatmap */}
-                    <div className="w-full min-w-0 lg:w-2/5">
-                        <div className="bg-white rounded-xl shadow-md p-3 sticky top-24">
+                    <div className={focusMode ? 'flex min-h-0 w-full min-w-0 flex-1 flex-col' : 'w-full min-w-0 lg:w-2/5'}>
+                        <div className={focusMode ? 'flex min-h-0 flex-1 flex-col rounded-xl border border-gray-200 bg-white p-2 sm:p-3 shadow-sm' : 'bg-white rounded-xl shadow-md p-3 sticky top-24'}>
                             <div className="mb-3">
-                                <h3 className="text-base font-bold text-gray-800 flex items-center gap-2">
+                                <h3 className={focusMode ? 'sr-only' : 'text-base font-bold text-gray-800 flex items-center gap-2'}>
                                     <Clock className="w-4 h-4" />
                                     Mapa de Calor - {weekdayLabels[selectedDay]}
+                                    {focusMode && globalFiltersActive && <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">Vista filtrada</span>}
                                 </h3>
                                 {(() => {
                                     // Calcular métricas reales (VHL/THL)
@@ -2046,6 +2195,24 @@ export default function WeeklyScheduleEditor() {
 
                                     const vhlExt = totalHoursWithExtras > 0 ? (vta / totalHoursWithExtras).toFixed(1) : "0.0";
                                     const thlExt = totalHoursWithExtras > 0 ? (txs / totalHoursWithExtras).toFixed(1) : "0.0";
+
+                                    if (focusMode) return <div className="mt-2 flex flex-wrap items-center gap-3 rounded-lg border border-gray-200 bg-gray-50 p-2">
+                                        {globalFiltersActive && <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">Vista filtrada</span>}
+                                        <div data-testid="heatmap-hours-comparison" className="grid min-w-[180px] flex-1 grid-cols-2 gap-3 sm:max-w-md">
+                                            <div data-testid="heatmap-total-hours" className="min-w-0 border-r border-gray-200 pr-3">
+                                                <span className="block text-[10px] font-bold uppercase text-gray-500">Total HH <span className="normal-case text-orange-600">(c/extras)</span></span>
+                                                <span className="text-sm font-bold text-indigo-600">{Math.round(totalHours * 10) / 10}h{totalHoursWithExtras > totalHours && <span className="ml-1 text-orange-600">({Math.round(totalHoursWithExtras * 10) / 10}h)</span>}</span>
+                                            </div>
+                                            <ProjectionHoursSummary summary={projectionHours} dayLabel={weekdayLabels[selectedDay]} compact />
+                                        </div>
+                                        <details className="relative text-xs"><summary className="cursor-pointer rounded-lg border border-gray-200 bg-white px-3 py-2 font-semibold text-gray-700">Más métricas</summary>
+                                            <dl className="absolute right-0 z-30 mt-1 grid w-56 grid-cols-2 gap-3 rounded-xl border bg-white p-3 shadow-lg">
+                                                <div><dt>Ventas / TRX</dt><dd className="font-bold text-green-700">S/ {Math.round(vta)} / {Math.round(txs)}</dd></div>
+                                                <div><dt>VHL (c/extras)</dt><dd className="font-bold text-blue-700">S/ {vhl}{totalHoursWithExtras > totalHours && ` (S/ ${vhlExt})`}</dd></div>
+                                                <div><dt>THL (c/extras)</dt><dd className="font-bold text-purple-700">{thl}{totalHoursWithExtras > totalHours && ` (${thlExt})`}</dd></div>
+                                            </dl>
+                                        </details>
+                                    </div>;
 
                                     return (
                                         <div className="flex items-center justify-between gap-2 mt-2 bg-gray-50 p-2.5 rounded-lg border border-gray-200 shadow-sm flex-wrap">
@@ -2083,7 +2250,7 @@ export default function WeeklyScheduleEditor() {
                                     );
                                 })()}
                             </div>
-                            <div className="h-[calc(100vh-280px)] min-h-[400px] overflow-auto">
+                            <div className={focusMode ? 'min-h-0 flex-1 overflow-auto' : 'h-[calc(100vh-280px)] min-h-[400px] overflow-auto'}>
                                 <ScheduleHeatmapMatrix
                                     key={`${wk}-${selectedDay}`}
                                     assigned={assignedArray}
@@ -2094,11 +2261,40 @@ export default function WeeklyScheduleEditor() {
                                     dayLabel={weekdayLabels[selectedDay]}
                                     canExport={userRole === 'admin' || userRole === 'superadmin'}
                                     onTransfer={draft.ready ? handleHeatmapTransfer : undefined}
+                                    onGapSelect={draft.ready && (userRole === 'admin' || userRole === 'superadmin') ? (selection, controls) => {
+                                        if (selection.date !== focusDate) return;
+                                        coverageControls.current = controls;
+                                        setCoverageSelection({ ...selection, scope: coverageScope });
+                                    } : undefined}
+                                    onGapReset={() => { setCoverageSelection(null); coverageControls.current = null; }}
+                                    gapResetKey={coverageResetKey}
                                 />
                             </div>
                         </div>
                     </div>
+                    {focusMode && <ScheduleFocusStaffPanel
+                        open={focusPanelOpen} onClose={() => setFocusPanelOpen(false)} items={visibleFocusItems}
+                        selectedId={focusSelectedId} selectedPerson={focusedPerson} selectedModality={focusedPerson ? getEffectiveModality(focusedPerson, focusDate) : undefined} onSelect={setFocusSelectedId} onBack={() => setFocusSelectedId(null)}
+                        search={focusSearch} onSearchChange={setFocusSearch} filter={focusListFilter} onFilterChange={setFocusListFilter}
+                        scrollRef={focusListScroll} returnFocusRef={focusStaffButton} dayLabel={`${weekdayLabels[selectedDay]} · ${focusDate?.split('-').reverse().join('/') || ''}`} draftReady={draft.ready}
+                        renderEditor={person => <>
+                            {focusedItem?.hasAlert && <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">{focusedItem.alertLabel}. Revisa los detalles antes de guardar.</p>}
+                            {getApprovedRequestsForStaffDay(person.id, selectedDay).length > 0 && <div className="mb-3 rounded-lg border border-green-200 bg-green-50 p-3 text-xs text-green-900"><strong>Solicitudes revisadas de este día</strong>{getApprovedRequestsForStaffDay(person.id, selectedDay).map(request => <p key={request.id} className="mt-1">{formatApprovedRequestShift(request)}</p>)}</div>}
+                            <ScheduleFocusShiftEditor
+                                person={{ ...person, modality: getEffectiveModality(person, focusDate) }} shift={focusedShift} schedule={schedules[person.id] || {}}
+                                day={selectedDay} date={focusDate} positions={positions} draftReady={draft.ready} ceased={focusedItem?.ceased}
+                                dailyHours={focusedItem?.dailyHours} weeklyHours={focusedItem?.weeklyHours} closingCounts={calcularCierres(schedules[person.id] || {})}
+                                onChange={(field, value) => handleChange(person.id, field, value)} onApply={patch => applyApprovedShift(person, patch)}
+                                onRetryAvailability={() => setAvailabilityReload(value => value + 1)}
+                            />
+                        </>}
+                    />}
                 </div>
+
+                {currentCoverageSelection && <HeatmapCoverageCandidatesDialog
+                    key={`${coverageScope}-${currentCoverageSelection.positionKey}-${currentCoverageSelection.start}-${currentCoverageSelection.end}`}
+                    selection={currentCoverageSelection} result={coverageCandidates} onClose={closeCoverageSearch} onViewCandidate={viewCoverageCandidate}
+                />}
 
                 {/* Tooltip global para horarios de estudio */}
                 {tooltipOpen && (

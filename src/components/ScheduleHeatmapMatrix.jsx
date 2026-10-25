@@ -15,8 +15,11 @@ const EMPTY_REQUIREMENTS = {};
 const HEATMAP_CELL_SIZE = 20;
 const HEATMAP_POSITION_WIDTH = 120;
 const HEATMAP_TABLE_WIDTH = HEATMAP_POSITION_WIDTH + HOURS.length * HEATMAP_CELL_SIZE;
+const isMissingCell = cell => Boolean(cell?.color?.includes('yellow'));
+const heatmapClock = minutes => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+const gapDuration = minutes => `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
 
-export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requirements = EMPTY_REQUIREMENTS, date = '', dayLabel = '', canExport = false, onTransfer, projectionHours, showProjectionSummary = true }) {
+export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requirements = EMPTY_REQUIREMENTS, date = '', dayLabel = '', canExport = false, onTransfer, projectionHours, showProjectionSummary = true, onGapSelect, onGapReset, gapResetKey = 0 }) {
     const rows = useMemo(() => buildHeatmapRows(assigned, requirements), [assigned, requirements]);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const dialogRef = useRef(null);
@@ -28,6 +31,94 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
     const [selectMode, setSelectMode] = useState(true);
     const [rangePreview, setRangePreview] = useState(null);
     const rangeDrag = useRef(null);
+    const matrixRef = useRef(null);
+    const [gapMode, setGapMode] = useState(false);
+    const [gapRange, setGapRange] = useState(null);
+    const [gapError, setGapError] = useState('');
+    const gapRef = useRef(null);
+    const gapScope = useRef({ rows, date, onGapSelect, onGapReset, gapMode });
+    gapScope.current = { rows, date, onGapSelect, onGapReset, gapMode };
+    const canFindGap = typeof onGapSelect === 'function';
+
+    const clearGap = (notify = true) => {
+        const hadSelection = Boolean(gapRef.current);
+        gapRef.current = null;
+        setGapRange(null); setGapError('');
+        if (notify && hadSelection) gapScope.current.onGapReset?.();
+    };
+
+    useEffect(() => { clearGap(false); }, [gapResetKey]);
+    useEffect(() => { if (!canFindGap) setGapMode(false); }, [canFindGap]);
+    useEffect(() => {
+        const selected = gapRef.current;
+        if (!selected) return;
+        const row = rows.find(item => `${item.positionKey}-${item.slot}` === selected.rowKey);
+        const valid = canFindGap && selected.date === date && row
+            && row.cells.slice(selected.from, selected.to + 1).length === selected.to - selected.from + 1
+            && row.cells.slice(selected.from, selected.to + 1).every(isMissingCell);
+        if (!valid) {
+            clearGap();
+            setGapError('La cobertura cambió. Selecciona nuevamente el intervalo amarillo.');
+        }
+    }, [rows, date, canFindGap]);
+    useEffect(() => () => {
+        if (gapRef.current) {
+            gapRef.current = null;
+            gapScope.current.onGapReset?.();
+        }
+    }, []);
+    useEffect(() => {
+        if (!gapMode) return undefined;
+        const cancelFromMatrix = event => {
+            if (event.key !== 'Escape' || !gapRef.current || !matrixRef.current?.contains(event.target)) return;
+            // Nested native dialogs own Escape. Otherwise cancel this focused
+            // selection before a surrounding workspace handles the same key.
+            if ([...document.querySelectorAll('dialog[open]')].some(dialog => dialog !== dialogRef.current)) return;
+            event.preventDefault(); event.stopPropagation(); clearGap();
+        };
+        window.addEventListener('keydown', cancelFromMatrix, true);
+        return () => window.removeEventListener('keydown', cancelFromMatrix, true);
+    }, [gapMode]);
+
+    const selectGapCell = (rowKey, index) => {
+        const current = gapScope.current;
+        if (!current.gapMode || typeof current.onGapSelect !== 'function') return;
+        const row = current.rows.find(item => `${item.positionKey}-${item.slot}` === rowKey);
+        if (!row || !isMissingCell(row.cells[index])) {
+            setGapError('Selecciona un recuadro amarillo para buscar cobertura.');
+            return;
+        }
+        const previous = gapRef.current;
+        if (!previous || previous.complete || previous.date !== current.date) {
+            if (previous) current.onGapReset?.();
+            const next = { rowKey, position: row.name, positionKey: row.positionKey, slot: row.slot,
+                anchor: index, from: index, to: index, date: current.date, complete: false };
+            gapRef.current = next;
+            setGapRange(next); setGapError('');
+            return;
+        }
+        if (previous.rowKey !== rowKey) {
+            setGapError('Elige el último recuadro amarillo del mismo puesto y carril.');
+            return;
+        }
+        const from = Math.min(previous.anchor, index), to = Math.max(previous.anchor, index);
+        if (!row.cells.slice(from, to + 1).every(isMissingCell)) {
+            setGapError('El intervalo debe tener solo recuadros amarillos contiguos, sin cruzar otro color.');
+            return;
+        }
+        const start = heatmapMinutes(HOURS[from]), end = heatmapMinutes(HOURS[to]) + 15;
+        const next = { ...previous, from, to, complete: true, start, end };
+        gapRef.current = next;
+        setGapRange(next); setGapError('');
+        try {
+            current.onGapSelect({ position: row.name, positionKey: row.positionKey, rowKey, slot: row.slot,
+                start, end, date: current.date, startIndex: from, endIndex: to },
+                { exitFullscreen: () => setIsFullscreen(false) });
+        } catch (error) {
+            console.error('Error al consultar cobertura:', error);
+            setGapError('No se pudo consultar la cobertura. Vuelve a seleccionar el intervalo.');
+        }
+    };
 
     useEffect(() => {
         if (!isFullscreen) return;
@@ -44,6 +135,7 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
 
     const handlePointerDown = (event) => {
         // Keep native touch scrolling and scrollbar interactions.
+        if (gapMode) return;
         const element = event.currentTarget;
         const cell = event.target.closest('[data-range-hour]');
         if (onTransfer && selectMode && cell && cell.dataset.excess === 'true' && event.button === 0) {
@@ -64,6 +156,7 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
         element.style.cursor = 'grabbing';
     };
     const handlePointerMove = (event) => {
+        if (gapMode) return;
         if (rangeDrag.current) {
             const element = event.currentTarget;
             const bounds = element.getBoundingClientRect();
@@ -145,13 +238,24 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                         </span>
                     ))}
                 </div>
-                {onTransfer ? (
+                {onTransfer || canFindGap ? (
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                        <button type="button" aria-pressed={selectMode} onClick={() => { setSelectMode(true); }} className={`rounded px-2 py-1 ${selectMode ? 'bg-blue-600 text-white' : 'bg-white/10'}`}>Seleccionar tramo</button>
-                        <button type="button" aria-pressed={!selectMode} onClick={() => { setSelectMode(false); rangeDrag.current = null; }} className={`rounded px-2 py-1 ${!selectMode ? 'bg-blue-600 text-white' : 'bg-white/10'}`}>Desplazar mapa</button>
-                        <span className="text-gray-300">{selectMode ? 'Arrastra sobre un exceso para marcar el intervalo.' : 'Arrastra o desliza para navegar.'}</span>
+                        {onTransfer && <button type="button" aria-pressed={selectMode && !gapMode} onClick={() => { setGapMode(false); clearGap(); setSelectMode(true); }} className={`rounded px-2 py-1 ${selectMode && !gapMode ? 'bg-blue-600 text-white' : 'bg-white/10'}`}>Seleccionar tramo</button>}
+                        <button type="button" aria-pressed={!gapMode && (!onTransfer || !selectMode)} onClick={() => { setGapMode(false); clearGap(); setSelectMode(false); rangeDrag.current = null; }} className={`rounded px-2 py-1 ${!gapMode && (!onTransfer || !selectMode) ? 'bg-blue-600 text-white' : 'bg-white/10'}`}>Desplazar mapa</button>
+                        {canFindGap && <button type="button" aria-pressed={gapMode} onClick={() => {
+                            clearGap(); setGapMode(true); drag.current = null; rangeDrag.current = null;
+                            setTransferSelection(null); setRangePreview(null);
+                        }} className={`rounded px-2 py-1 ${gapMode ? 'bg-blue-600 text-white' : 'bg-white/10'}`}>Buscar cobertura</button>}
+                        <span className="text-gray-300">{gapMode ? 'Toca el primer y el último recuadro amarillo del mismo carril. El último incluye sus 15 minutos.' : onTransfer && selectMode ? 'Arrastra sobre un exceso para marcar el intervalo.' : 'Arrastra o desliza para navegar.'}</span>
                     </div>
                 ) : <p className="mt-2 text-[10px] text-gray-300">Arrastra con el mouse o desliza para navegar. En teclado usa las flechas; Esc cierra la vista ampliada.</p>}
+                {gapMode && gapRange?.date === date && <div role="status" data-testid="heatmap-gap-selection" className="mt-2 flex flex-wrap items-center gap-2 text-xs text-blue-100">
+                    <span>{gapRange.complete
+                        ? `${gapRange.position} · ${heatmapClock(gapRange.start)}–${heatmapClock(gapRange.end)} · Duración ${gapDuration(gapRange.end - gapRange.start)}`
+                        : `Inicio ${HOURS[gapRange.anchor]} · ${gapRange.position}, carril ${gapRange.slot + 1}. Toca el último recuadro amarillo.`}</span>
+                    <button type="button" onClick={() => clearGap()} className="min-h-8 rounded border border-white/30 px-2 py-1 text-white hover:bg-white/10">Limpiar selección de cobertura</button>
+                </div>}
+                {gapMode && gapError && <p role="alert" className="mt-2 text-xs text-red-200">{gapError}</p>}
                 {exportError && <p role="alert" className="mt-2 text-sm text-red-200">{exportError}</p>}
                 {onTransfer && transferSelection && <HeatmapTransferForm
                     key={`${transferSelection.source}-${transferSelection.start}-${transferSelection.end || ''}`}
@@ -169,11 +273,17 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                     </details>
                 )}
             </div>
-            <div role="region" aria-label="Matriz de cobertura por posición y horario" tabIndex={0}
+            <div ref={matrixRef} role="region" aria-label="Matriz de cobertura por posición y horario" tabIndex={0}
                 onPointerDown={handlePointerDown} onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onLostPointerCapture={() => { drag.current = null; rangeDrag.current = null; }}
-                className={`relative isolate flex-1 min-h-0 min-w-0 overflow-auto overscroll-contain ${onTransfer && selectMode ? 'cursor-crosshair' : 'cursor-grab'} select-none bg-gray-50 focus-visible:outline-blue-500`}
-                style={{ WebkitOverflowScrolling: 'touch', touchAction: onTransfer && selectMode ? 'none' : 'auto' }}>
+                onKeyDown={event => {
+                    if (event.key === 'Escape' && gapMode && gapRef.current) {
+                        event.preventDefault(); event.stopPropagation(); clearGap();
+                    }
+                }}
+                data-gap-selection-active={gapMode && Boolean(gapRange)}
+                className={`relative isolate flex-1 min-h-0 min-w-0 overflow-auto overscroll-contain ${gapMode || (onTransfer && selectMode) ? 'cursor-crosshair' : 'cursor-grab'} select-none bg-gray-50 focus-visible:outline-blue-500`}
+                style={{ WebkitOverflowScrolling: 'touch', touchAction: onTransfer && selectMode && !gapMode ? 'none' : 'auto' }}>
                 <table className="table-fixed border-collapse bg-white shadow-inner" style={{ width: HEATMAP_TABLE_WIDTH, minWidth: HEATMAP_TABLE_WIDTH }}>
                     <colgroup>
                         <col style={{ width: HEATMAP_POSITION_WIDTH }} />
@@ -242,17 +352,32 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                                             </div>
                                         </td>
                                     )}
-                                    {row.cells.map((cell, j) => (
+                                    {row.cells.map((cell, j) => {
+                                        const rowKey = `${row.positionKey}-${row.slot}`;
+                                        const missing = isMissingCell(cell);
+                                        const gapSelected = gapMode && gapRange?.date === date && gapRange?.rowKey === rowKey
+                                            && j >= gapRange.from && j <= gapRange.to;
+                                        return (
                                         <td
                                             key={j}
                                             className={`border border-gray-200 ${cell.color} hover:opacity-80 transition-opacity duration-150`}
                                             style={{ height: HEATMAP_CELL_SIZE, width: HEATMAP_CELL_SIZE, padding: 0,
-                                                boxShadow: rangePreview?.row === `${row.positionKey}-${row.slot}` && j >= rangePreview.from && j <= rangePreview.to ? 'inset 0 3px #1d4ed8, inset 0 -3px #1d4ed8' : undefined,
+                                                boxShadow: gapSelected ? 'inset 0 0 0 2px #2563eb' : rangePreview?.row === `${row.positionKey}-${row.slot}` && j >= rangePreview.from && j <= rangePreview.to ? 'inset 0 3px #1d4ed8, inset 0 -3px #1d4ed8' : undefined,
                                                 filter: rangePreview?.row === `${row.positionKey}-${row.slot}` && j >= rangePreview.from && j <= rangePreview.to ? 'brightness(0.8)' : undefined }}
-                                            data-range-hour={j} data-range-row={`${row.positionKey}-${row.slot}`} data-position={row.name} data-excess={cell.isExcess}
-                                            tabIndex={onTransfer && cell.isExcess ? 0 : undefined}
-                                            aria-label={onTransfer && cell.isExcess ? `Seleccionar tramo de ${row.name} desde ${HOURS[j]}` : undefined}
+                                            data-range-hour={j} data-range-row={rowKey} data-position={row.name} data-position-key={row.positionKey} data-slot={row.slot} data-excess={cell.isExcess}
+                                            data-missing={missing} data-gap-selected={gapSelected || undefined}
+                                            role={gapMode && missing ? 'button' : undefined}
+                                            tabIndex={gapMode ? (missing ? 0 : undefined) : onTransfer && cell.isExcess ? 0 : undefined}
+                                            aria-pressed={gapMode && missing ? Boolean(gapSelected) : undefined}
+                                            aria-label={gapMode && missing ? `Seleccionar faltante de ${row.name}, carril ${row.slot + 1}, a las ${HOURS[j]}` : onTransfer && cell.isExcess && !gapMode ? `Seleccionar tramo de ${row.name} desde ${HOURS[j]}` : undefined}
+                                            onClick={gapMode ? () => selectGapCell(rowKey, j) : undefined}
                                             onKeyDown={event => {
+                                                if (gapMode) {
+                                                    if (event.key === 'Enter' || event.key === ' ') {
+                                                        event.preventDefault(); event.stopPropagation(); selectGapCell(rowKey, j);
+                                                    }
+                                                    return;
+                                                }
                                                 if (!onTransfer || !cell.isExcess) return;
                                                 if (event.key === 'Enter' || event.key === ' ') {
                                                     event.preventDefault();
@@ -262,7 +387,8 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                                             }}
                                             title={`${HOURS[j]}: ${cell.isTrainer ? (cell.isExcess ? 'Entrenador · Exceso' : 'Entrenador') : cell.color.includes('yellow') ? 'Faltante' : cell.color.includes('blue') ? 'Asignado' : cell.isExcess ? 'Exceso' : 'Sin requerimiento'}`}
                                         />
-                                    ))}
+                                        );
+                                    })}
                                 </tr>
                             ))
                         )}
@@ -277,7 +403,10 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
             {!isFullscreen && panel}
             {isFullscreen && createPortal(
                 <dialog ref={dialogRef} aria-labelledby="heatmap-dialog-title"
-                    onCancel={() => setIsFullscreen(false)}
+                    onCancel={event => {
+                        if (gapRef.current) { event.preventDefault(); clearGap(); }
+                        else setIsFullscreen(false);
+                    }}
                     onClose={() => setIsFullscreen(false)}
                     className="fixed inset-0 m-0 h-[100dvh] w-screen max-h-none max-w-none border-0 bg-slate-950/90 p-2 sm:p-4 backdrop:bg-black/70">
                     {panel}

@@ -1,13 +1,17 @@
 // Editor real con transporte aislado. No lee ni escribe Supabase.
 import { build } from 'esbuild';
-import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { startBukQaHttpServer } from './buk-qa-http-server.mjs';
+import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import postcss from 'postcss';
 import tailwind from 'tailwindcss';
-const fixture = JSON.parse(await readFile('artifacts/buk/fixture.json','utf8'));
+import { makeScheduleFocusQaFixture } from './schedule-focus-qa-fixture.mjs';
+const focusPreview = process.env.BUK_QA_FOCUS_PREVIEW === '1';
+const baseFixture = JSON.parse(await readFile('artifacts/buk/fixture.json','utf8'));
+const focusFixture = focusPreview ? makeScheduleFocusQaFixture(baseFixture) : null;
+const fixture = focusFixture?.fixture || baseFixture;
 const projectionHoursQa = process.env.BUK_QA_PROJECTION_HOURS === '1';
 const studyAvailabilityQa = process.env.BUK_QA_STUDY_AVAILABILITY === '1';
-const realtimeQa = projectionHoursQa || studyAvailabilityQa;
+const realtimeQa = projectionHoursQa || studyAvailabilityQa || focusPreview;
 if (process.env.BUK_QA_MANAGEMENT === '1') {
   fixture.staff[0].position = 'GERENTE';
   fixture.staff[1].position = 'ASISTENTE';
@@ -63,9 +67,11 @@ export const writeBatch=()=>{const ops=[];return {set:(ref,data)=>ops.push([ref,
 const auth=`const user={id:'qa-admin',uid:'qa-admin',email:'prueba@example.test'};export function useAuth(){return {currentUser:user,userRole:'admin',userData:{storeId:'qa-store'}}}`;
 const entry=`import React from 'react';import {createRoot} from 'react-dom/client';import {BrowserRouter} from 'react-router-dom';import WeeklyScheduleEditor from './src/components/WeeklyScheduleEditor.jsx';import ScheduleRequestForm from './src/components/ScheduleRequestForm.jsx';import ScheduleRequestsManager from './src/components/ScheduleRequestsManager.jsx';
 localStorage.setItem('schedule_editor_week:qa-admin:qa-store','2026-10-12');
+if(!${JSON.stringify(focusPreview)}&&!new URLSearchParams(location.search).has('vista')){const url=new URL(location.href);url.searchParams.set('vista','clasica');history.replaceState(history.state,'',url)}
 const query=new URLSearchParams(location.search),profile={...${JSON.stringify(fixture.staff[1])},storeId:'qa-store'};
 if(['ASISTENTE','GERENTE'].includes(query.get('position'))){profile.position=query.get('position');profile.modality='Full-Time'}
-createRoot(document.getElementById('root')).render(<BrowserRouter><div style={{padding:12,background:'#fff3cd',fontWeight:700}}>PRUEBA LOCAL BUK · 5 colaboradores ficticios · Guardar solo conserva datos de prueba · Semana 12 al 18 de octubre</div>{query.has('request')?<main style={{maxWidth:850,margin:'auto',padding:20}}><h1>Solicitud ficticia de Prueba PT1 BUK</h1><ScheduleRequestForm perfil={profile}/></main>:query.has('manager')?<ScheduleRequestsManager storeId="qa-store"/>:<WeeklyScheduleEditor/>}</BrowserRouter>);`;
+function PreviewNotice(){const ref=React.useRef(null);React.useLayoutEffect(()=>{if(!${JSON.stringify(focusPreview)})return;const root=document.documentElement,previous=root.style.getPropertyValue('--schedule-preview-banner-height');const measure=()=>root.style.setProperty('--schedule-preview-banner-height',ref.current.getBoundingClientRect().height+'px');measure();const observer=new ResizeObserver(measure);observer.observe(ref.current);return()=>{observer.disconnect();if(previous)root.style.setProperty('--schedule-preview-banner-height',previous);else root.style.removeProperty('--schedule-preview-banner-height')}},[]);return <div ref={ref} style={{padding:12,background:'#fff3cd',fontWeight:700}}>${focusPreview ? 'Vista de prueba · Datos ficticios · Guardar solo afecta esta prueba' : 'PRUEBA LOCAL BUK · 5 colaboradores ficticios · Guardar solo conserva datos de prueba · Semana 12 al 18 de octubre'}</div>}
+createRoot(document.getElementById('root')).render(<BrowserRouter><PreviewNotice/>{query.has('request')?<main style={{maxWidth:850,margin:'auto',padding:20}}><h1>Solicitud ficticia de Prueba PT1 BUK</h1><ScheduleRequestForm perfil={profile}/></main>:query.has('manager')?<ScheduleRequestsManager storeId="qa-store"/>:<WeeklyScheduleEditor/>}</BrowserRouter>);`;
 const supabaseTransport=`export const supabase={from(table){let patch,filters={};const chain={update(value){patch=value;return chain},eq(key,value){filters[key]=value;return chain},select(){return chain},async maybeSingle(){const response=await fetch('/qa-approval',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({table,patch,filters})});return response.json()}};return chain}};`;
 const result=await build({stdin:{contents:entry,loader:'jsx',resolveDir:process.cwd()},bundle:true,write:false,format:'iife',jsx:'automatic',loader:{'.png':'dataurl'},plugins:[{name:'qa-no-production',setup(b){
  b.onLoad({filter:/lib[\\/]supabase[\\/]firestoreCompat\.js$/},()=>({contents:transport,loader:'js'}));
@@ -74,54 +80,32 @@ const result=await build({stdin:{contents:entry,loader:'jsx',resolveDir:process.
 }}]});
 const css=(await postcss([tailwind({content:['./src/**/*.{js,jsx}']})]).process('@tailwind base;@tailwind components;@tailwind utilities;',{from:undefined})).css;
 const js=result.outputFiles.find(file=>file.path.endsWith('.js'))?.text||result.outputFiles[0].text;
-const savedDocuments=new Map();
-const eventClients=new Set();
-const qaControl={readErrors:[],rejectApprovals:false};
-let nextRequestId=1;
-const publish=path=>{if(realtimeQa)for(const client of eventClients)client.write('data: '+JSON.stringify({path})+'\n\n')};
-const server=createServer(async(req,res)=>{
- if(req.url==='/qa-events'){
-  res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive'});
-  res.write(': connected\n\n');eventClients.add(res);req.on('close',()=>eventClients.delete(res));
- }
- else if(req.url==='/qa-control'&&req.method==='POST'){
-  let body='';for await(const chunk of req)body+=chunk;Object.assign(qaControl,JSON.parse(body));res.setHeader('Content-Type','application/json');res.end(JSON.stringify({ok:true}));
- }
- else if(req.url.startsWith('/qa-collection')){
-  const path=new URL(req.url,'http://qa.local').searchParams.get('path');
-  res.setHeader('Content-Type','application/json');
-  if(qaControl.readErrors.includes(path)){res.statusCode=503;res.end(JSON.stringify({error:'Fallo de colección aislado'}));return}
-  res.end(JSON.stringify([...savedDocuments].filter(([key,data])=>key.startsWith(path+'/')&&data!=null).map(([key,data])=>({id:key.slice(path.length+1),data}))));
- }
- else if(req.url==='/qa-add'&&req.method==='POST'){
-  let body='';for await(const chunk of req)body+=chunk;const {path,data}=JSON.parse(body);
-  res.setHeader('Content-Type','application/json');
-  if(path!=='schedule_requests'){res.statusCode=400;res.end(JSON.stringify({error:'Colección no permitida en la prueba'}));return}
-  const id=nextRequestId++,key=path+'/'+id;savedDocuments.set(key,data);res.end(JSON.stringify({id}));publish(key);
- }
- else if(req.url==='/qa-approval'&&req.method==='POST'){
-  let body='';for await(const chunk of req)body+=chunk;const {table,patch,filters}=JSON.parse(body);
-  res.setHeader('Content-Type','application/json');
-  if(qaControl.rejectApprovals&&patch.status==='approved'){res.end(JSON.stringify({data:null,error:{message:'Conflicto con el horario de estudios actualizado.'}}));return}
-  const key=table+'/'+filters.id,prior=savedDocuments.get(key);
-  if(!prior||prior.status!==filters.status){res.end(JSON.stringify({data:null,error:null}));return}
-  savedDocuments.set(key,{...prior,...patch});res.end(JSON.stringify({data:{id:filters.id,status:patch.status},error:null}));publish(key);
- }
- else if(req.url.startsWith('/qa-document')){
-  res.setHeader('Content-Type','application/json');
-  if(req.method==='POST'){
-   let body='';for await(const chunk of req)body+=chunk;
-   const {path,data}=JSON.parse(body);savedDocuments.set(path,data);res.end(JSON.stringify({saved:true}));
-   publish(path);
-  }else{
-   const path=new URL(req.url,'http://qa.local').searchParams.get('path');
-   if(qaControl.readErrors.includes(path)){res.statusCode=503;res.end(JSON.stringify({error:'Fallo de lectura aislado'}));return}
-   res.end(JSON.stringify({found:savedDocuments.has(path),data:savedDocuments.get(path)}));
-  }
- }
- else if(req.url==='/app.js'){res.setHeader('Content-Type','text/javascript');res.end(js);}
- else if(req.url==='/style.css'){res.setHeader('Content-Type','text/css');res.end(css);}
- else {res.setHeader('Content-Type','text/html');res.end('<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Prueba BUK local</title><link rel="stylesheet" href="/style.css"><body><div id="root"></div><script src="/app.js"></script></body></html>');}
-});
+const initialDocuments=[];
+if (focusFixture) {
+ for (const person of fixture.staff) initialDocuments.push([`schedules/${person.id}_2026-10-12_to_2026-10-18`,fixture.schedules[person.id]]);
+ for (const [id,study] of Object.entries(focusFixture.studies)) initialDocuments.push([`study_schedules/${id}`,{staffId:id,...study}]);
+ initialDocuments.push(['stores/qa-store/config/schedule_projection',focusFixture.projection]);
+}
+const extraHoursTemplate=focusPreview ? await readFile('public/templates/Plantilla_Horas_Extras.xlsx') : undefined;
+if (focusPreview && process.env.BUK_QA_EXPORT_DIR) {
+ const target=process.env.BUK_QA_EXPORT_DIR;
+ await mkdir(`${target}/templates`,{recursive:true});
+ const launch=`import {readFile} from 'node:fs/promises';
+import {spawn} from 'node:child_process';
+import {startBukQaHttpServer} from './server.mjs';
+const [js,css,initialDocuments]=await Promise.all(['app.js','style.css','initial-documents.json'].map(name=>readFile(new URL(name,import.meta.url),'utf8')));
+const extraHoursTemplate=await readFile(new URL('./templates/Plantilla_Horas_Extras.xlsx',import.meta.url));\nconst port=Number(process.env.BUK_QA_PORT||5173);
+const server=startBukQaHttpServer({js,css,initialDocuments:JSON.parse(initialDocuments),extraHoursTemplate,realtimeQa:true,restrictConnections:true,port,host:process.env.BUK_QA_HOST||'127.0.0.1'});
+if(process.argv.includes('--abrir'))server.once('listening',()=>{const url='http://localhost:'+port+'/?vista=cobertura';const command=process.platform==='win32'?'cmd':process.platform==='darwin'?'open':'xdg-open';const args=process.platform==='win32'?['/c','start','',url]:[url];const child=spawn(command,args,{detached:true,stdio:'ignore'});child.on('error',()=>{});child.unref()});
+`;
+ await Promise.all([
+  writeFile(`${target}/app.js`,js),writeFile(`${target}/style.css`,css),
+  writeFile(`${target}/initial-documents.json`,JSON.stringify(initialDocuments)),
+  writeFile(`${target}/server.mjs`,await readFile(new URL('./buk-qa-http-server.mjs',import.meta.url),'utf8')),
+  writeFile(`${target}/iniciar.mjs`,launch),writeFile(`${target}/templates/Plantilla_Horas_Extras.xlsx`,extraHoursTemplate),
+ ]);
+ console.log('Preview exportado: '+target);
+}
 const port=Number(process.env.BUK_QA_PORT || 4179);
-server.listen(port,'127.0.0.1',()=>console.log('Editor BUK aislado: http://127.0.0.1:'+port+'/'));
+const host=process.env.BUK_QA_HOST || (focusPreview ? '0.0.0.0' : '127.0.0.1');
+startBukQaHttpServer({js,css,initialDocuments,realtimeQa,extraHoursTemplate,restrictConnections:focusPreview,port,host});

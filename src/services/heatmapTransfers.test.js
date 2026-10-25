@@ -78,13 +78,14 @@ test('el borrador conserva cambios de puesto al recargar y al confirmar guardado
 });
 
 
-test('un trainer naranja en exceso puede moverse y conserva su identidad y turno', () => {
+test('un trainer rojo en exceso puede moverse y vuelve a naranja al cubrir un faltante', () => {
   const trainers = [{ ...staff[0], position: 'COLABORADOR' }, { ...staff[1], position: 'ENTRENADOR' }];
   const current = getHeatmapAssignments(trainers, schedules, 'monday', requirements.positions, '2026-09-28');
   const before = buildHeatmapRows(current, requirements);
   const cell = before.find(row => row.name === 'Caja' && row.slot === 1).cells[HOURS.indexOf('10:00')];
-  assert.equal(cell.color, 'bg-orange-500');
+  assert.equal(cell.color, 'bg-red-500');
   assert.equal(cell.isExcess, true);
+  assert.equal(cell.isTrainer, true);
   const transfer = { ...move, staffId: 'b' };
   assert.equal(validateHeatmapTransfer(current, requirements, transfer), '');
   const updated = { ...schedules.b.monday, positionAssignments: replacePositionInterval(schedules.b.monday, transfer) };
@@ -92,6 +93,7 @@ test('un trainer naranja en exceso puede moverse y conserva su identidad y turno
   const destination = after.find(row => row.name === 'Cocina').cells[HOURS.indexOf('10:00')];
   assert.equal(destination.color, 'bg-orange-500');
   assert.equal(Boolean(destination.isExcess), false);
+  assert.equal(destination.isTrainer, true);
   assert.equal(updated.start, schedules.b.monday.start);
   assert.equal(updated.end, schedules.b.monday.end);
   assert.equal(updated.breakStart, schedules.b.monday.breakStart);

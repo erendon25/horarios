@@ -1,5 +1,7 @@
 # Posiciones de proyección por tienda
 
+La bolsa de HH disponibles y las HH históricas usadas para calcular el VHL excluyen a los perfiles con puesto Gerente o Asistente, normalizando mayúsculas, acentos y espacios. Los entrenadores siguen contando como personal operativo. El desglose identifica a los gerentes y asistentes excluidos; conserva FT48/PT24 y los demás filtros vigentes. Esta exclusión no elimina sus horarios ni su cobertura de posiciones en el mapa.
+
 La configuración se guarda en `store_configs`, con la clave compuesta `store_id,config_key` y `config_key=schedule_projection`. Las políticas existentes permiten al administrador escribir únicamente en su tienda y al superadmin administrar las tiendas. No se requiere una migración.
 
 Las posiciones, ajustes manuales y modo de VHL se guardan aunque todavía no exista una semana completa de ventas ni VHL histórico. Los requisitos calculados solo se reemplazan cuando sus datos están listos; el resto del documento JSON se conserva. Las solicitudes se serializan para que una respuesta lenta no reemplace una edición más reciente.

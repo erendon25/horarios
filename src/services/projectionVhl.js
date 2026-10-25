@@ -1,4 +1,5 @@
 import { getProjectionPositionDemand, resolveVestidoPositionId } from './projectionDemand.js';
+import { isExcludedProjectionStaffRole } from './projectionLabor.js';
 
 const WEEKDAYS = [
   'monday',
@@ -36,15 +37,16 @@ export const getScheduledShiftMinutes = (shift) => {
 };
 
 export const calculateHistoricalGeneralVhl = ({ totalSales, schedules = [], staff = [] }) => {
-  const traineeIds = new Set(
+  const excludedStaffIds = new Set(
     staff
-      .filter((member) => member?.isTrainee === true || member?.isTrainee === 'true' || member?.isTrainee === 1)
+      .filter((member) => isExcludedProjectionStaffRole(member)
+        || member?.isTrainee === true || member?.isTrainee === 'true' || member?.isTrainee === 1)
       .map((member) => member.id)
   );
 
   const totalMinutes = schedules.reduce((weekMinutes, schedule) => {
     const staffId = schedule?.staffId ?? schedule?.id?.split('_')[0];
-    if (traineeIds.has(staffId)) return weekMinutes;
+    if (excludedStaffIds.has(staffId)) return weekMinutes;
 
     return weekMinutes + WEEKDAYS.reduce(
       (dayMinutes, weekday) => dayMinutes + getScheduledShiftMinutes(schedule?.[weekday]),

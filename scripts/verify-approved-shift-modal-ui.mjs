@@ -73,7 +73,11 @@ try{
  await reload();await day().selectOption('sunday');assert.equal(await trigger().isDisabled(),true);assert.match(await trigger().textContent(),/Día libre/);
  await trigger().evaluate(button=>button.click());assert.equal(await picker().count(),0);
  const holiday=structuredClone(fixture.schedules.FT1);holiday.monday={...holiday.monday,start:'',end:'',feriado:true,off:false};
- await seed(paths.ft,holiday);await reload();assert.equal(await trigger().isDisabled(),true);assert.match(await trigger().textContent(),/Feriado/);
+ await seed(paths.ft,holiday);await reload();
+ // A disabled trigger also appears while availability/schedules are loading.
+ // Wait for the seeded holiday itself before asserting its locked behavior.
+ await poll(async()=>/Feriado/.test(await trigger().textContent()),'El horario remoto de feriado no terminó de cargar');
+ assert.equal(await trigger().isDisabled(),true);assert.match(await trigger().textContent(),/Feriado/);
  await seed(paths.ft,fixture.schedules.FT1);
  let releaseStudy,loading=true;const gate=new Promise(resolve=>{releaseStudy=resolve});
  const studyReads=/\/qa-collection\?path=study_schedules$/;

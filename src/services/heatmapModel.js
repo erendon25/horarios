@@ -238,7 +238,7 @@ export function buildHeatmapRows(assigned = [], requirements = {}) {
                     } else if (slotIsRequired && !slotIsAssigned) {
                         return { color: 'bg-yellow-300', text: '' };
                     } else if (!slotIsRequired && slotIsAssigned) {
-                        return { color: isTrainer ? 'bg-orange-500' : 'bg-red-500', isTrainer, isExcess: true, text: '' };
+                        return { color: 'bg-red-500', isTrainer, isExcess: true, text: '' };
                     } else {
                         return { color: 'bg-white', text: '' };
                     }
@@ -263,7 +263,7 @@ export function buildHeatmapRows(assigned = [], requirements = {}) {
                         const hasAssignment = ass > extraSlot;
 
                         return hasAssignment ?
-                            { color: isTrainer ? 'bg-orange-500' : 'bg-red-500', isTrainer, isExcess: true, text: '' } :
+                            { color: 'bg-red-500', isTrainer, isExcess: true, text: '' } :
                             { color: 'bg-white', text: '' };
                     });
 
