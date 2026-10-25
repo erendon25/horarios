@@ -16,7 +16,8 @@ import { calculateScheduleTotals, calculateScheduleDay, formatScheduleMinutes, g
 import ScheduleBreakControl from './ScheduleBreakControl';
 import BukScheduleTools from './BukScheduleTools';
 import BukApprovedShiftControl from './BukApprovedShiftControl';
-import { getAvailableApprovedBukOptions, makeApprovedBukPatch, findApprovedBukShiftByStart, getBukRestDays, applyBukSchedulePatch } from '../services/bukSchedule';
+import { getAvailableApprovedBukOptions, makeApprovedBukPatch, getBukRestDays, applyBukSchedulePatch } from '../services/bukSchedule';
+import { getShiftAvailability, filterShiftsByAvailability } from '../services/shiftAvailability';
 import { FaInfoCircle, FaExclamationTriangle, FaExclamationCircle } from 'react-icons/fa';
 import {
     Calendar,
@@ -138,6 +139,9 @@ export default function WeeklyScheduleEditor() {
     const [conflictAlerts, setConflictAlerts] = useState({});
     const [scheduleAttempt, setScheduleAttempt] = useState(0);
     const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'success' | 'error'
+    const [saveErrorMessage, setSaveErrorMessage] = useState('');
+    const [availabilityReload, setAvailabilityReload] = useState(0);
+    const [availabilityLoadError, setAvailabilityLoadError] = useState('');
     const [storeId, setStoreId] = useState('');
     const [approvedRequests, setApprovedRequests] = useState([]);
     const [approvedRequestsError, setApprovedRequestsError] = useState('');
@@ -327,6 +331,7 @@ export default function WeeklyScheduleEditor() {
         }
 
         setSaveStatus('saving');
+        setSaveErrorMessage('');
         const savedDraft = draftController.beginSave();
         try {
             const batch = writeBatch(db);
@@ -357,83 +362,40 @@ export default function WeeklyScheduleEditor() {
             setSaveStatus('success');
         } catch (err) {
             console.error("Error al guardar:", err);
+            setSaveErrorMessage(err?.message || 'No se pudo completar el guardado.');
             setSaveStatus('error');
         }
     };
 
-    const detectScheduleConflict = (staff, day, shift) => {
-        // Si no hay turno asignado (sin entrada, salida o posición), NO mostrar conflicto
-        if (!shift || !shift.start || !shift.end || !shift.position) {
-            return null;
-        }
-        // 🛑 No validar conflictos en feriados
-        const isFeriado = schedules[staff.id]?.[day]?.feriado;
-        if (isFeriado) return null;
-
-        const studyBlocks = staff.study_schedule?.[day]?.blocks || [];
+    const detectScheduleConflict = (person, day, shift) => {
+        if (!shift || shift.off || shift.feriado || shift.holiday || !shift.start || !shift.end) return null;
         const conflicts = [];
-
-        // ✅ Si el día está marcado como libre en estudio, no asignar
-        if (staff.study_schedule?.[day]?.free === true) {
-            conflicts.push('estudia'); // día libre → no asignable
+        if (person.studyAvailabilityStatus !== 'ready') {
+            conflicts.push('disponibilidad');
+        } else {
+            const availability = getShiftAvailability({ date: getDateStrForDay(day), shift, studySchedule: person.study_schedule });
+            if (!availability.available) conflicts.push(availability.reasons.some(reason => reason.code === 'requested_day_off') ? 'estudia' : 'conflicto');
         }
+        if (shift.position && !person.skills?.includes(shift.position)) conflicts.push('incompatible');
+        return conflicts.length ? conflicts : null;
+    };
 
-        const requiredSkill = shift.position;
-        const hasSkill = staff.skills?.includes(requiredSkill);
-        if (!hasSkill) {
-            conflicts.push('incompatible'); // sin habilidad → no apto
+    const getCompatibleBukOptions = (person, date, personSchedule, day, currentShift) => {
+        if (person?.studyAvailabilityStatus !== 'ready') return [];
+        const modality = getEffectiveModality(person, date);
+        const rests = getBukRestDays(modality, personSchedule);
+        const candidates = getAvailableApprovedBukOptions(modality, rests, personSchedule, day);
+        return filterShiftsByAvailability(candidates, { date, studySchedule: person.study_schedule, shiftPatch: currentShift });
+    };
+
+    const applyApprovedShift = (person, patch) => {
+        const current = schedules[person.id]?.[selectedDay] || {};
+        if (patch.start && patch.end) {
+            if (person.studyAvailabilityStatus !== 'ready') return alert('Espera a que se pueda consultar la disponibilidad del colaborador.');
+            const availability = getShiftAvailability({ date: getSelectedDateStr(), shift: { ...current, ...patch }, studySchedule: person.study_schedule });
+            if (!availability.available) return alert(availability.reasons[0]?.message || 'El turno ya no es compatible con su disponibilidad.');
         }
-
-        // Detectar conflictos de horario
-        const shiftStart = timeToMinutes(shift.start);
-        let shiftEndRaw = timeToMinutes(shift.end);
-
-        // Manejar cruce de medianoche
-        const isOvernight = shiftEndRaw <= shiftStart;
-        const shiftEnd = isOvernight ? shiftEndRaw + (24 * 60) : shiftEndRaw;
-
-        for (const block of studyBlocks) {
-            const blockStart = timeToMinutes(block.start);
-            const blockEnd = timeToMinutes(block.end);
-
-            // Caso 1: Traslape en el día actual
-            const overlapCurrent = shiftStart < blockEnd && Math.min(shiftEnd, 1440) > blockStart;
-
-            // Caso 2: Traslape después de medianoche (si el turno es overnight)
-            let overlapNext = false;
-            if (isOvernight) {
-                // Aquí deberíamos idealmente revisar el horario de estudio del DÍA SIGUIENTE,
-                // pero por simplicidad y según el requerimiento, validamos contra el bloque si choca con la parte post-medianoche
-                // (Nota: la mayoría de los estudios son diurnos, el riesgo mayor es el inicio del turno)
-                overlapNext = (shiftEnd > 1440) && (shiftEnd - 1440 > blockStart);
-            }
-
-            if (overlapCurrent || overlapNext) {
-                conflicts.push('conflicto');
-                break;
-            }
-        }
-
-        if (shift.splitShift && shift.start2 && shift.end2 && !conflicts.includes('conflicto')) {
-            const shiftStart = timeToMinutes(shift.start2);
-            let shiftEndRaw = timeToMinutes(shift.end2);
-            const isOvernight = shiftEndRaw <= shiftStart;
-            const shiftEnd = isOvernight ? shiftEndRaw + (24 * 60) : shiftEndRaw;
-
-            for (const block of studyBlocks) {
-                const blockStart = timeToMinutes(block.start);
-                const blockEnd = timeToMinutes(block.end);
-                const overlapCurrent = shiftStart < blockEnd && Math.min(shiftEnd, 1440) > blockStart;
-                const overlapNext = isOvernight && (shiftEnd > 1440) && (shiftEnd - 1440 > blockStart);
-
-                if (overlapCurrent || overlapNext) {
-                    conflicts.push('conflicto');
-                    break;
-                }
-            }
-        }
-
-        return conflicts.length > 0 ? conflicts : null;
+        draftController.edit(previous => ({ ...previous, [person.id]: applyBukSchedulePatch(previous[person.id], selectedDay, patch) }));
     };
 
 
@@ -444,6 +406,8 @@ export default function WeeklyScheduleEditor() {
         const current = schedules[staffId]?.[selectedDay] || {};
         const person = staff.find(p => p.id === staffId);
         const dateStr = getSelectedDateStr();
+        if (['start', 'end', 'start2', 'end2', 'extraHours', 'extraHoursPre', 'extraHoursPost'].includes(field)
+            && person?.studyAvailabilityStatus !== 'ready') return;
 
         // Convertir a número si es horas extras
         let finalValue = value;
@@ -456,10 +420,9 @@ export default function WeeklyScheduleEditor() {
             updates = { ...updates, bukApprovedShiftId: '', bukBreakMinutes: 0 };
         }
         if (!isBukScheduleExempt(person) && field === 'start') {
-            const modality = getEffectiveModality(person, dateStr);
-            const restDays = getBukRestDays(modality, schedules[staffId]);
             // Historical split shifts remain intact until an approved BUK shift is chosen.
-            const approved = !current.splitShift && findApprovedBukShiftByStart(modality, restDays, value, schedules[staffId], selectedDay);
+            const matching = !current.splitShift ? getCompatibleBukOptions(person, dateStr, schedules[staffId], selectedDay, current).filter(option => option.start === value) : [];
+            const approved = matching.length && new Set(matching.map(option => option.end)).size === 1 ? matching[0] : null;
             updates = approved
                 ? makeApprovedBukPatch(approved.id, current, selectedDay)
                 : { start: finalValue, bukApprovedShiftId: '', bukBreakMinutes: 0 };
@@ -671,6 +634,7 @@ export default function WeeklyScheduleEditor() {
         if (conflicts === 'estudia') return 'Solicito el dia Libre';
         if (conflicts === 'incompatible') return 'No tiene las habilidades requeridas';
         if (conflicts === 'conflicto') return 'Conflicto con horario de estudio';
+        if (conflicts === 'disponibilidad') return 'Disponibilidad pendiente de consultar';
         return 'Conflicto detectado';
     };
 
@@ -734,8 +698,10 @@ export default function WeeklyScheduleEditor() {
 
         for (const person of shuffledStaff) {
             const day = selectedDay;
+            const existing = schedules[person.id]?.[day];
+            if (person.studyAvailabilityStatus !== 'ready'
+                || existing?.start || existing?.end || existing?.off || existing?.feriado || existing?.holiday) continue;
             const study = person.study_schedule?.[day] || {};
-            const studyBlocks = study?.blocks || [];
 
             if (study?.free) {
                 newSchedules[person.id] = {
@@ -759,30 +725,14 @@ export default function WeeklyScheduleEditor() {
             let assigned = false;
 
             for (const blocks of shiftOptions) {
-                for (let i = 0; i <= HOURS.length - blocks; i++) {
+                for (let i = 0; i < HOURS.length - blocks; i++) {
                     const start = i;
                     const end = i + blocks;
                     const shiftMin = (end - start) * 15;
-                    const startMin = 360 + start * 15;
-                    const endMin = 360 + end * 15;
-
                     if (currentWeekMin + shiftMin > weeklyLimit) continue;
-
-                    const clash = studyBlocks.some(block => {
-                        const rawStart = block.start ?? block.startTime;
-                        const rawEnd = block.end ?? block.endTime;
-
-                        if (!rawStart || !rawEnd) {
-                            return false; // ignorar bloques mal definidos
-                        }
-
-                        const s = timeToMinutes(rawStart);
-                        const e = timeToMinutes(rawEnd);
-
-                        return !(endMin <= s - 60 || startMin >= e + 60);
-                    });
-
-                    if (clash) continue;
+                    if (!getShiftAvailability({ date: currentDayDateStr,
+                        shift: { start: HOURS[start], end: HOURS[end] },
+                        studySchedule: person.study_schedule }).available) continue;
 
                     for (let posIndex = 0; posIndex < positions.length; posIndex++) {
                         const pos = positions[posIndex];
@@ -868,18 +818,34 @@ export default function WeeklyScheduleEditor() {
             return nextSchedule;
         };
 
+        const eligibleCopies = new Map();
+        let skipped = 0;
+        for (const staffId of replicateTargetStaff) {
+            const person = staff.find(item => item.id === staffId);
+            for (const day of replicateTargetDays) {
+                const source = prevWeekSchedules[staffId]?.[day];
+                if (!source || hasScheduleContent(schedules[staffId]?.[day])) continue;
+                const noWork = source.off || source.feriado || source.holiday || (!source.start && !source.end);
+                if (!person || (!noWork && (person.studyAvailabilityStatus !== 'ready'
+                    || !getShiftAvailability({ date: getDateStrForDay(day), shift: source,
+                        studySchedule: person.study_schedule }).available))) {
+                    skipped += 1;
+                    continue;
+                }
+                eligibleCopies.set(`${staffId}:${day}`, sanitizeReplicatedSchedule(source, day));
+            }
+        }
         draftController.edit(prev => {
             const currentWeekSchedules = { ...prev };
 
             replicateTargetStaff.forEach(staffId => {
-                const prevPersonSchedule = prevWeekSchedules[staffId] || {};
                 currentWeekSchedules[staffId] = { ...currentWeekSchedules[staffId] };
 
                 replicateTargetDays.forEach(day => {
-                    const sourceDaySchedule = prevPersonSchedule[day];
+                    const sourceDaySchedule = eligibleCopies.get(`${staffId}:${day}`);
                     const currentDaySchedule = currentWeekSchedules[staffId][day];
                     if (sourceDaySchedule && !hasScheduleContent(currentDaySchedule)) {
-                        currentWeekSchedules[staffId][day] = sanitizeReplicatedSchedule(sourceDaySchedule, day);
+                        currentWeekSchedules[staffId][day] = sourceDaySchedule;
                     } else {
                         // Si no hay horario la semana pasada para ese día, podemos optar por no hacer nada o limpiar
                         // Según la petición, "replica el mismo horario", si no hay, no se replica.
@@ -891,110 +857,68 @@ export default function WeeklyScheduleEditor() {
         setShowReplicateModal(false);
         setReplicateTargetStaff([]);
         setReplicateTargetDays([]);
-        alert("Horarios de la semana pasada replicados correctamente. No olvides guardar los cambios.");
+        alert(`Horarios compatibles de la semana pasada replicados. ${skipped ? `Se omitieron ${skipped} turnos por disponibilidad no verificada o conflicto de estudios. ` : ''}No olvides guardar los cambios.`);
     };
-    // Reemplaza SOLO la parte que carga study_schedules dentro del useEffect que carga staff
-    // En el useEffect que carga staff, modifica esta parte:
+    // Keep availability live and separate a failed read from an empty schedule.
     useEffect(() => {
         if (!storeId) return;
+        let cancelled = false;
+        let loadedStaff = [];
+        let studies = new Map();
+        let studyStatus = 'loading';
+        let staffError = '';
+        const normalizeStudy = raw => Object.fromEntries(weekdays.map(day => {
+            const value = raw?.[day] ?? raw?.[day[0].toUpperCase() + day.slice(1)];
+            return [day, { free: value?.free === true || value?.free === 1 || value?.free === 'true',
+                blocks: Array.isArray(value) ? value : Array.isArray(value?.blocks) ? value.blocks : [] }];
+        }));
+        const publish = () => {
+            if (cancelled) return;
+            const todayMidnight = new Date();
+            todayMidnight.setHours(0, 0, 0, 0);
+            setStaff(loadedStaff.filter(person => {
+                if (!isOperationallyActiveStaff(person)) return false;
+                return !person.cessationDate || new Date(person.cessationDate + 'T00:00:00') >= todayMidnight;
+            }).map(person => ({ ...person,
+                study_schedule: studies.get(person.id) || studies.get(person.uid) || normalizeStudy({}),
+                studyAvailabilityStatus: studyStatus,
+            })));
+            setAvailabilityLoadError(staffError || (studyStatus === 'error'
+                ? 'No se pudo consultar la disponibilidad de estudios. Reintenta antes de asignar turnos.' : ''));
+        };
         const loadStaff = async () => {
             setLoading(true);
+            setAvailabilityLoadError('');
             try {
-                const q = query(collection(db, 'staff_profiles'), where('storeId', '==', storeId));
-                const snap = await getDocs(q);
-                const staffList = await Promise.all(
-                    snap.docs.map(async (docSnap) => {
-                        // Supabase conserva el campo `id` antiguo dentro de legacy_data para
-                        // trazabilidad. Debe prevalecer el id canónico del documento (UUID),
-                        // porque schedule_weeks.staff_id está relacionado con ese UUID.
-                        const staffData = { ...docSnap.data(), id: docSnap.id };
-
-                        // 🔥 Cargar study_schedule usando el UID del staff
-                        try {
-                            // Si el staff_profile tiene un campo 'uid', usarlo para study_schedules
-                            const studyScheduleId = staffData.uid || docSnap.id;
-                            const studyRef = doc(db, 'study_schedules', studyScheduleId);
-                            const studySnap = await getDoc(studyRef);
-
-                            if (studySnap.exists()) {
-                                const studyData = studySnap.data();
-
-                                // Normalizar estructura
-                                staffData.study_schedule = {};
-                                const dayMappings = {
-                                    'monday': 'monday', 'tuesday': 'tuesday', 'wednesday': 'wednesday',
-                                    'thursday': 'thursday', 'friday': 'friday', 'saturday': 'saturday', 'sunday': 'sunday',
-                                    'Monday': 'monday', 'Tuesday': 'tuesday', 'Wednesday': 'wednesday',
-                                    'Thursday': 'thursday', 'Friday': 'friday', 'Saturday': 'saturday', 'Sunday': 'sunday',
-                                };
-
-                                Object.keys(studyData).forEach(fieldName => {
-                                    const normalizedDay = dayMappings[fieldName];
-                                    if (normalizedDay && studyData[fieldName]) {
-                                        const dayData = studyData[fieldName];
-                                        staffData.study_schedule[normalizedDay] = {
-                                            free: dayData.free || false,
-                                            blocks: Array.isArray(dayData.blocks) ? dayData.blocks : []
-                                        };
-                                    }
-                                });
-
-                                // Asegurar que todos los días existan
-                                const allDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-                                allDays.forEach(day => {
-                                    if (!staffData.study_schedule[day]) {
-                                        staffData.study_schedule[day] = { free: false, blocks: [] };
-                                    }
-                                });
-
-                            } else {
-
-                                // Estructura vacía
-                                staffData.study_schedule = {
-                                    monday: { free: false, blocks: [] },
-                                    tuesday: { free: false, blocks: [] },
-                                    wednesday: { free: false, blocks: [] },
-                                    thursday: { free: false, blocks: [] },
-                                    friday: { free: false, blocks: [] },
-                                    saturday: { free: false, blocks: [] },
-                                    sunday: { free: false, blocks: [] }
-                                };
-                            }
-                        } catch (err) {
-                            staffData.study_schedule = {
-                                monday: { free: false, blocks: [] },
-                                tuesday: { free: false, blocks: [] },
-                                wednesday: { free: false, blocks: [] },
-                                thursday: { free: false, blocks: [] },
-                                friday: { free: false, blocks: [] },
-                                saturday: { free: false, blocks: [] },
-                                sunday: { free: false, blocks: [] }
-                            };
-                        }
-
-                        return staffData;
-                    })
-                );
-
-                // Filtrar colaboradores cesados: excluir si cessationDate < hoy
-                const todayMidnight = new Date();
-                todayMidnight.setHours(0, 0, 0, 0);
-
-                const activeStaff = staffList.filter(s => {
-                    if (!s.cessationDate) return true; // sin fecha de cese → activo
-                    const cessation = new Date(s.cessationDate + 'T00:00:00');
-                    return cessation >= todayMidnight; // cese hoy o futuro → aún activo
-                });
-
-                setStaff(activeStaff.filter(person => isOperationallyActiveStaff(person)));
-
-            } catch (err) {
+                const snapshot = await getDocs(query(collection(db, 'staff_profiles'), where('storeId', '==', storeId)));
+                if (cancelled) return;
+                loadedStaff = snapshot.docs.map(item => ({ ...item.data(), id: item.id }));
+            } catch (error) {
+                if (cancelled) return;
+                staffError = 'No se pudo cargar el personal de esta tienda.';
             } finally {
-                setLoading(false);
+                if (!cancelled) { publish(); setLoading(false); }
             }
         };
+        const unsubscribe = onSnapshot(collection(db, 'study_schedules'), snapshot => {
+            if (cancelled) return;
+            const next = new Map();
+            snapshot.docs.forEach(item => {
+                const data = item.data();
+                next.set(data.staffId || item.id, normalizeStudy(data));
+                if (data.uid) next.set(data.uid, normalizeStudy(data));
+            });
+            studies = next;
+            studyStatus = 'ready';
+            publish();
+        }, error => {
+            if (cancelled) return;
+            studyStatus = 'error';
+            publish();
+        });
         loadStaff();
-    }, [storeId, db]);
+        return () => { cancelled = true; unsubscribe(); };
+    }, [storeId, db, availabilityReload]);
 
 
     // Cargar horarios por ID de documento directo (100% confiable, sin índice).
@@ -1238,11 +1162,11 @@ export default function WeeklyScheduleEditor() {
         activeStaff.forEach(person => {
             weekdays.forEach(day => {
                 const shift = schedules[person.id]?.[day];
-                if (!shift || shift.off || shift.feriado || !shift.start || !shift.end || !shift.position) return;
+                if (!shift || shift.off || shift.feriado || !shift.start || !shift.end) return;
 
                 const detected = detectScheduleConflict(person, day, shift);
                 const conflictTypes = Array.isArray(detected) ? detected : (detected ? [detected] : []);
-                const studyConflictTypes = conflictTypes.filter(type => type === 'estudia' || type === 'conflicto');
+                const studyConflictTypes = conflictTypes.filter(type => type === 'estudia' || type === 'conflicto' || type === 'disponibilidad');
                 if (studyConflictTypes.length === 0) return;
 
                 conflicts.push({
@@ -1358,6 +1282,11 @@ export default function WeeklyScheduleEditor() {
 
             <div className="max-w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
 
+                {availabilityLoadError && <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                    <p>{availabilityLoadError}</p>
+                    <button type="button" onClick={() => setAvailabilityReload(value => value + 1)} className="rounded-lg border border-red-300 bg-white px-3 py-2 font-semibold">Reintentar disponibilidad</button>
+                </div>}
+
                 {wk && (
                     <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-950" role="status">
                         <p className="font-semibold">
@@ -1370,6 +1299,7 @@ export default function WeeklyScheduleEditor() {
                         {!draft.ready && !draft.loadError && <p>Cargando la versión del servidor…</p>}
                         {draft.persistenceError && <p role="alert" className="mt-2 font-semibold text-red-700">{draft.persistenceError}</p>}
                         {saveStatus === 'error' && <p role="alert" className="mt-2 font-semibold text-red-700">Error al guardar en el servidor. Tus cambios siguen en borrador; vuelve a pulsar Guardar para reintentar.</p>}
+                        {saveStatus === 'error' && saveErrorMessage && <p className="mt-1 text-red-700">{saveErrorMessage}</p>}
                         {draft.loadError && (
                             <p role="alert" className="mt-2 text-red-700">
                                 {draft.loadError}
@@ -1949,11 +1879,9 @@ export default function WeeklyScheduleEditor() {
                                                                     </span>
                                                                     <BukApprovedShiftControl
                                                                         person={{ ...p, modality: getEffectiveModality(p, getSelectedDateStr()) }}
-                                                                        shift={d} schedule={schedules[p.id]} day={selectedDay}
-                                                                        onApply={patch => draftController.edit(prev => ({
-                                                                            ...prev,
-                                                                            [p.id]: applyBukSchedulePatch(prev[p.id], selectedDay, patch)
-                                                                        }))} />
+                                                                        shift={d} schedule={schedules[p.id]} day={selectedDay} date={getSelectedDateStr()}
+                                                                        onRetryAvailability={() => setAvailabilityReload(value => value + 1)}
+                                                                        onApply={patch => applyApprovedShift(p, patch)} />
                                                                     {isChangeDay && (
                                                                         <span className="text-[9px] font-bold text-blue-600 animate-pulse mt-1">
                                                                             🔄 CAMBIO HOY
@@ -1965,18 +1893,18 @@ export default function WeeklyScheduleEditor() {
                                                     </td>
                                                     <td className="w-[120px] px-2 py-4 text-center align-top">
                                                         {isCeased ? '--' : <div className="flex flex-col gap-2">
-                                                            <input type="time" value={d.start || ''} onChange={e => handleChange(p.id, 'start', e.target.value)} disabled={d.feriado || d.off} title="Entrada" className="w-full border-2 rounded-lg px-2 py-2 text-center font-bold" />
+                                                            <input type="time" value={d.start || ''} onChange={e => handleChange(p.id, 'start', e.target.value)} disabled={d.feriado || d.off || p.studyAvailabilityStatus !== 'ready'} title="Entrada" className="w-full border-2 rounded-lg px-2 py-2 text-center font-bold" />
                                                             {d.splitShift && <label className="text-[10px] text-amber-800">Segundo tramo conservado
-                                                                <input type="time" value={d.start2 || ''} onChange={e => handleChange(p.id, 'start2', e.target.value)} disabled={d.feriado || d.off} title="Entrada del segundo tramo" className="w-full border-2 border-amber-200 rounded-lg px-2 py-2 text-center font-bold" />
+                                                                <input type="time" value={d.start2 || ''} onChange={e => handleChange(p.id, 'start2', e.target.value)} disabled={d.feriado || d.off || p.studyAvailabilityStatus !== 'ready'} title="Entrada del segundo tramo" className="w-full border-2 border-amber-200 rounded-lg px-2 py-2 text-center font-bold" />
                                                             </label>}
                                                             {requiresScheduleBreak(d, effModality) && <ScheduleBreakControl shift={d} modality={effModality} name={`${p.name} ${p.lastName || ''}`.trim()} onChange={value => handleChange(p.id, 'breakStart', value)} />}
                                                         </div>}
                                                     </td>
                                                     <td className="w-[120px] px-2 py-4 text-center align-top">
                                                         {isCeased ? '--' : <div className="flex flex-col gap-2">
-                                                            <input type="time" value={d.end || ''} onChange={e => handleChange(p.id, 'end', e.target.value)} disabled={d.feriado || d.off} title="Salida" className="w-full border-2 rounded-lg px-2 py-2 text-center font-bold" />
+                                                            <input type="time" value={d.end || ''} onChange={e => handleChange(p.id, 'end', e.target.value)} disabled={d.feriado || d.off || p.studyAvailabilityStatus !== 'ready'} title="Salida" className="w-full border-2 rounded-lg px-2 py-2 text-center font-bold" />
                                                             {d.splitShift && <label className="text-[10px] text-amber-800">Segundo tramo conservado
-                                                                <input type="time" value={d.end2 || ''} onChange={e => handleChange(p.id, 'end2', e.target.value)} disabled={d.feriado || d.off} title="Salida del segundo tramo" className="w-full border-2 border-amber-200 rounded-lg px-2 py-2 text-center font-bold" />
+                                                                <input type="time" value={d.end2 || ''} onChange={e => handleChange(p.id, 'end2', e.target.value)} disabled={d.feriado || d.off || p.studyAvailabilityStatus !== 'ready'} title="Salida del segundo tramo" className="w-full border-2 border-amber-200 rounded-lg px-2 py-2 text-center font-bold" />
                                                             </label>}
                                                         </div>}
                                                     </td>
@@ -1989,7 +1917,7 @@ export default function WeeklyScheduleEditor() {
                                                                 step="0.5"
                                                                 value={d.extraHoursPre ?? ''}
                                                                 onChange={e => handleChange(p.id, 'extraHoursPre', e.target.value)}
-                                                                disabled={d.feriado || d.off}
+                                                                disabled={d.feriado || d.off || p.studyAvailabilityStatus !== 'ready'}
                                                                 placeholder="0"
                                                                 className="w-16 px-2 py-2 border border-blue-200 bg-blue-50 rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
                                                             />
@@ -2004,7 +1932,7 @@ export default function WeeklyScheduleEditor() {
                                                                 step="0.5"
                                                                 value={d.extraHoursPost ?? d.extraHours ?? ''}
                                                                 onChange={e => handleChange(p.id, 'extraHoursPost', e.target.value)}
-                                                                disabled={d.feriado || d.off}
+                                                                disabled={d.feriado || d.off || p.studyAvailabilityStatus !== 'ready'}
                                                                 placeholder="0"
                                                                 className="w-16 px-2 py-2 border border-gray-300 rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
                                                             />

@@ -2,18 +2,25 @@ import { isBukScheduleExempt } from '../services/scheduleStaffOrder.js';
 import React, { useState } from 'react';
 import { getApprovedBukOptions, getAvailableApprovedBukOptions, getBukWeeklyShiftQuota, makeApprovedBukPatch, getBukRestDays, approvedBukShiftLabel, getBukCatalogShift } from '../services/bukSchedule';
 import { formatScheduleMinutes } from '../services/scheduleHours';
+import { filterShiftsByAvailability, getShiftAvailability } from '../services/shiftAvailability';
 
-export default function BukApprovedShiftControl({ person, shift, schedule, day, onApply }) {
+export default function BukApprovedShiftControl({ person, shift, schedule, day, date, onApply, onRetryAvailability }) {
   const full = String(person.modality || '').toLowerCase() === 'full-time';
   const rests = getBukRestDays(person.modality, schedule);
   const holiday = Boolean(shift?.feriado ?? shift?.holiday);
   const locked = Boolean(shift?.off || holiday);
   const [error, setError] = useState('');
   const allOptions = getApprovedBukOptions(person.modality, full ? 1 : rests);
-  const options = getAvailableApprovedBukOptions(person.modality, full ? 1 : rests, schedule, day);
+  const quotaOptions = getAvailableApprovedBukOptions(person.modality, full ? 1 : rests, schedule, day);
+  const availabilityStatus = person.studyAvailabilityStatus || 'loading';
+  const options = availabilityStatus === 'ready'
+    ? filterShiftsByAvailability(quotaOptions, { date, studySchedule: person.study_schedule, shiftPatch: shift }) : [];
   const quota = getBukWeeklyShiftQuota(person.modality, rests, schedule, day);
   const selected = !shift?.splitShift && allOptions.find(item => item.start === shift?.start && item.end === shift?.end);
-  const overQuota = selected && !options.some(item => item.id === selected.id);
+  const overQuota = selected && !quotaOptions.some(item => item.id === selected.id);
+  const availability = availabilityStatus === 'ready' ? getShiftAvailability({ date, shift, studySchedule: person.study_schedule }) : null;
+  const studyConflict = !locked && availability && !availability.available;
+  const unavailableSelection = selected && (overQuota || studyConflict || availabilityStatus !== 'ready');
   const buk = getBukCatalogShift(shift, day);
   const manual = !locked && !selected && Boolean(shift?.start || shift?.end);
   if (isBukScheduleExempt(person)) return <p className="text-[10px] text-gray-600">Horario libre · no se envía a BUK</p>;
@@ -25,7 +32,7 @@ export default function BukApprovedShiftControl({ person, shift, schedule, day, 
     </label>}
     <label className="block">Ingreso / salida aprobados
       <select aria-label={`Horario aprobado BUK de ${person.name}`} value={locked ? '' : selected?.id || ''}
-        disabled={locked}
+        disabled={locked || availabilityStatus !== 'ready'}
         title={shift?.off ? 'Quita la marca Libre para asignar un turno.' : undefined}
         onChange={event => {
           if (locked || !event.target.value) return;
@@ -34,7 +41,7 @@ export default function BukApprovedShiftControl({ person, shift, schedule, day, 
           catch (cause) { setError(cause.message); }
         }} className="w-full border rounded">
         <option value="">{shift?.off ? 'Día libre' : holiday ? 'Feriado compensado' : manual ? 'Horario manual' : 'Elegir ingreso…'}</option>
-        {!locked && overQuota && <option value={selected.id} disabled>{approvedBukShiftLabel(selected)} · Revisar distribución</option>}
+        {!locked && unavailableSelection && <option value={selected.id} disabled>{approvedBukShiftLabel(selected)} · {studyConflict ? 'No disponible por estudios' : availabilityStatus !== 'ready' ? 'Disponibilidad pendiente' : 'Revisar distribución'}</option>}
         {options.map(item => <option key={item.id} value={item.id}>{approvedBukShiftLabel(item)}</option>)}
       </select>
     </label>
@@ -45,7 +52,11 @@ export default function BukApprovedShiftControl({ person, shift, schedule, day, 
     {!full && rests === 3 && <p className="text-blue-800">3 turnos de 6 h 45 min con break de 45 min y 1 de 5 h 45 min sin break.</p>}
     {!full && rests === 4 && <p className="text-blue-800">2 turnos de 8 h 45 min y 1 de 8 h 30 min. Todos con break de 45 min.</p>}
     {!full && !locked && options.length > 0 && <p className="text-blue-800">Por completar, sin contar este día: {quota.filter(slot => slot.remaining > 0).map(slot => `${slot.remaining} de ${formatScheduleMinutes(slot.duration)} h`).join(' y ')}.</p>}
-    {!full && !locked && !options.length && <p className="text-amber-700">Los turnos del plan ya están asignados en los otros días. Revisa los descansos o modifica otro día.</p>}
+    {!locked && availabilityStatus === 'loading' && <p className="text-blue-800">Cargando disponibilidad…</p>}
+    {!locked && availabilityStatus === 'error' && <p role="alert" className="text-red-700">No se pudo consultar la disponibilidad. {onRetryAvailability && <button type="button" onClick={onRetryAvailability} className="underline">Reintentar disponibilidad</button>}</p>}
+    {!full && !locked && availabilityStatus === 'ready' && !quotaOptions.length && <p className="text-amber-700">Los turnos del plan ya están asignados en los otros días. Revisa los descansos o modifica otro día.</p>}
+    {!locked && availabilityStatus === 'ready' && quotaOptions.length > 0 && !options.length && <p className="text-amber-700">No hay turnos aprobados compatibles con su disponibilidad para este día.</p>}
+    {studyConflict && <p className="text-amber-700">El horario actual tiene un conflicto: {availability.reasons[0]?.message} Elige otro turno; no se ha borrado el horario guardado.</p>}
     {!locked && overQuota && <p className="text-amber-700">Este turno supera la distribución semanal. Elige uno de los turnos disponibles.</p>}
     {manual && <p className="text-amber-700">{shift?.splitShift ? 'Turno partido conservado. Elige un horario BUK para reemplazar ambos tramos.' : 'Fuera del plan aprobado: revisa ingreso y salida.'}</p>}
     {error && <p role="alert">{error}</p>}
