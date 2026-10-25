@@ -110,18 +110,20 @@ try {
     await poll(() => field.evaluate(element => element === document.activeElement), 'Opening the add form must focus its name input');
     await checkLayout(modal, `${size}: formulario`);
     await field.fill(`QA ${size}`);
+    assert.equal(await modal.getByRole('button', { name: 'Agregar', exact: true }).isDisabled(), true, 'A new position requires an explicit production/service group');
+    await modal.locator('form').getByLabel('Grupo del área').selectOption(viewport.width === 1440 ? 'service' : 'production');
     if (viewport.width === 1440) {
       const form = modal.locator('form');
-      await form.getByRole('combobox').selectOption('fixed');
+      await form.getByLabel('Lógica').selectOption('fixed');
       assert.equal(await form.getByLabel('Mínimo', { exact: true }).isDisabled(), true);
       assert.equal(await form.getByLabel('Personal fijo', { exact: true }).isEnabled(), true);
       assert.equal(await form.getByLabel('Ticket', { exact: true }).isDisabled(), true);
       assert.equal(await form.getByLabel('Trx/colaborador', { exact: true }).isDisabled(), true);
       assert.equal(await form.getByLabel('Factor', { exact: true }).isDisabled(), true);
-      await form.getByRole('combobox').selectOption('driver');
+      await form.getByLabel('Lógica').selectOption('driver');
       assert.equal(await form.getByLabel('Ticket', { exact: true }).isEnabled(), true);
       assert.equal(await form.getByLabel('Trx/colaborador', { exact: true }).isDisabled(), true);
-      await form.getByRole('combobox').selectOption('service');
+      await form.getByLabel('Lógica').selectOption('service');
       assert.equal(await form.getByLabel('Trx/colaborador', { exact: true }).isEnabled(), true);
       await form.getByLabel('Ticket', { exact: true }).fill('35.5');
       await form.getByLabel('Trx/colaborador', { exact: true }).fill('45');
@@ -139,6 +141,7 @@ try {
     if (viewport.width === 1440) {
       const saved = (await state()).configurations['store-b'].positions.find(position => position.name === `QA ${size}`);
       assert.equal(saved.logic, 'service');
+      assert.equal(saved.department, 'service');
       assert.equal(saved.ticketAverage, '35.5');
       assert.equal(saved.transactionsPerCollaborator, '45');
       assert.equal(saved.factor, '1.03');

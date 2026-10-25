@@ -4,6 +4,7 @@ import { collection, doc, getDoc, getDocs, orderBy, query, setDoc, where } from 
 import { db } from '../supabase';
 import ProjectionPositionFields from './ProjectionPositionFields';
 import { getProjectionStaffColor } from '../services/projectionStaffColor';
+import { getProjectionDepartment, PROJECTION_DEPARTMENTS, summarizeProjectionStaffGroups } from '../services/projectionStaffGroups';
 import {
   buildProjectionSalesByDay,
   selectLatestCompleteSalesWeek,
@@ -138,6 +139,7 @@ const getNumber = (value) => {
 
 const makeStoredPosition = (position) => ({
   ...position,
+  department: getProjectionDepartment(position.department) || '',
   capacity: position.capacity ?? '',
   ticketAverage: position.ticketAverage ?? '',
   transactionsPerCollaborator: position.transactionsPerCollaborator ?? '',
@@ -200,6 +202,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
   const saveVersionRef = useRef(0);
   const [newPosition, setNewPosition] = useState({
     name: '',
+    department: '',
     logic: 'sales',
     capacity: DEFAULT_TOTAL_CAPACITY,
     ticketAverage: DEFAULT_TICKET_AVERAGE,
@@ -610,6 +613,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
         generalRequiredStaff,
         requiredByPosition,
         totalStaffAtHour,
+        staffByDepartment: summarizeProjectionStaffGroups(positions, requiredByPosition),
       };
     });
 
@@ -776,7 +780,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
   };
 
   const handleAddPosition = () => {
-    if (!newPosition.name.trim()) return;
+    if (!newPosition.name.trim() || !getProjectionDepartment(newPosition.department)) return;
     setPositions((prev) => [
       ...prev,
       {
@@ -785,7 +789,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
         name: newPosition.name.trim(),
       },
     ]);
-    setNewPosition((prev) => ({ ...prev, name: '' }));
+    setNewPosition((prev) => ({ ...prev, name: '', department: '' }));
     setIsAddingPosition(false);
   };
 
@@ -814,6 +818,8 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
     setIsPositionsModalOpen(false);
     setIsAddingPosition(false);
   };
+
+  const unclassifiedPositions = positions.filter(position => !getProjectionDepartment(position.department));
 
   if (configError) {
     return (
@@ -1115,6 +1121,13 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
           </p>
         </div>
 
+        {unclassifiedPositions.length > 0 && (
+          <div data-testid="projection-unclassified-notice" className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-5 py-3 text-sm text-amber-900">
+            <p className="min-w-0 flex-1">Hay {unclassifiedPositions.length} {unclassifiedPositions.length === 1 ? 'área sin clasificar' : 'áreas sin clasificar'}. Elige su Grupo del área en Configurar Posiciones. Sus colaboradores figuran en «Sin clasificar» y siguen incluidos en el total general.</p>
+            <button type="button" onClick={() => setIsPositionsModalOpen(true)} className="shrink-0 rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-bold hover:bg-amber-100">Clasificar áreas</button>
+          </div>
+        )}
+
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
@@ -1144,6 +1157,9 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
                 <tr key={position.id} data-position-id={position.id} className="hover:bg-slate-50/80 transition-colors">
                   <td className="p-4 sticky left-0 bg-white shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] z-10 font-medium text-slate-700">
                     {position.name}
+                    <span className={`mt-1 block text-[10px] font-semibold ${getProjectionDepartment(position.department) ? 'text-slate-500' : 'text-amber-700'}`}>
+                      {PROJECTION_DEPARTMENTS[getProjectionDepartment(position.department)] || 'Sin clasificar'}
+                    </span>
                   </td>
                   <td className="p-3 text-center bg-slate-50 text-xs font-bold text-slate-600">
                     {LOGIC_LABELS[position.logic]}
@@ -1169,7 +1185,23 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
                 </tr>
               ))}
 
-              <tr className="bg-slate-800 text-white font-semibold">
+              {[
+                { key: 'production', label: 'Producción', className: 'bg-emerald-50 text-emerald-900' },
+                { key: 'service', label: 'Servicio', className: 'bg-sky-50 text-sky-900' },
+                ...(unclassifiedPositions.length > 0 ? [{ key: 'unclassified', label: 'Sin clasificar', className: 'bg-amber-50 text-amber-900' }] : []),
+              ].map(group => (
+                <tr key={group.key} data-staff-total={group.key} className={`${group.className} font-semibold`}>
+                  <td className={`sticky left-0 z-10 p-4 ${group.className}`}>{group.label}</td>
+                  <td className="p-4 text-center text-xs">Subtotal</td>
+                  {scheduleMatrix.columns.map(col => (
+                    <td key={col.hour} data-hour={col.hour} className="p-3 text-center font-extrabold" title={`${group.label}: ${col.staffByDepartment[group.key]} ${col.staffByDepartment[group.key] === 1 ? 'colaborador' : 'colaboradores'}`}>
+                      {col.staffByDepartment[group.key]}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+
+              <tr data-staff-total="all" className="bg-slate-800 text-white font-semibold">
                 <td className="p-4 sticky left-0 bg-slate-800 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.2)] z-10">
                   Total Colaboradores Requeridos
                 </td>
@@ -1177,6 +1209,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
                 {scheduleMatrix.columns.map((col) => (
                   <td
                     key={col.hour}
+                    data-hour={col.hour}
                     title={`Base venta ÷ VHL: ${col.generalRequiredStaff.toFixed(2)} · Total asignado: ${col.totalStaffAtHour}`}
                     className={`p-3 text-center font-extrabold ${
                       col.totalStaffAtHour > 5 ? 'text-amber-400' : 'text-white'
@@ -1276,6 +1309,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
               </div>
 
               <section aria-label="Posiciones configuradas" className="min-w-0 space-y-3">
+                <p className="text-xs text-slate-600">El Grupo del área separa los colaboradores requeridos entre Producción y Servicio.</p>
                 {positions.length === 0 && (
                   <p className="rounded-xl border border-dashed border-slate-300 p-4 text-sm text-slate-500">Todavía no hay posiciones. Usa Nueva posición para agregar una.</p>
                 )}
@@ -1307,6 +1341,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
                 <form id="projection-new-position-form" ref={newPositionFormRef} noValidate onSubmit={(event) => { event.preventDefault(); handleAddPosition(); }} className="min-w-0 scroll-mt-3">
                   <fieldset className="min-w-0 rounded-xl border border-orange-200 bg-orange-50/50 p-3 sm:p-4">
                     <legend className="px-1 text-sm font-bold text-orange-800">Nueva posición</legend>
+                    <p className="mb-3 text-xs text-slate-600">Completa el nombre y el Grupo del área para agregarla.</p>
                     <ProjectionPositionFields position={newPosition} onChange={(changes) => setNewPosition((previous) => ({ ...previous, ...changes }))}
                       idPrefix="projection-new-position" nameLabel="Nombre de nueva posición" nameInputRef={newPositionNameRef} />
                     <p className="mt-3 text-xs text-slate-500">Usa Fijo / no venta para áreas como Limpieza, Horno, Lavado o Do Sheet.</p>
@@ -1328,7 +1363,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
               <div className="flex shrink-0 gap-2">
                 <button type="button" onClick={closePositionsModal} className="flex-1 rounded-lg border border-slate-300 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100 sm:flex-none">Cerrar</button>
                 {isAddingPosition ? (
-                  <button type="submit" form="projection-new-position-form" disabled={!newPosition.name.trim()} className="flex-1 whitespace-nowrap rounded-lg bg-orange-600 px-4 py-2 text-sm font-bold text-white hover:bg-orange-700 disabled:opacity-50 sm:flex-none">Agregar</button>
+                  <button type="submit" form="projection-new-position-form" disabled={!newPosition.name.trim() || !getProjectionDepartment(newPosition.department)} className="flex-1 whitespace-nowrap rounded-lg bg-orange-600 px-4 py-2 text-sm font-bold text-white hover:bg-orange-700 disabled:opacity-50 sm:flex-none">Agregar</button>
                 ) : (
                   <button type="button" onClick={() => setIsAddingPosition(true)} className="flex-1 whitespace-nowrap rounded-lg bg-orange-600 px-4 py-2 text-sm font-bold text-white hover:bg-orange-700 sm:flex-none">Nueva posición</button>
                 )}

@@ -33,6 +33,15 @@ export default function ProjectionPositionFields({
           <option value="fixed">Fijo / no venta</option>
         </select>
       </label>
+      <label htmlFor={fieldId('department')} className={`${labelClass} col-span-2 sm:col-span-1 lg:col-span-2`}>
+        <span className="mb-1 block">Grupo del área</span>
+        <select id={fieldId('department')} aria-label="Grupo del área" value={position.department || ''} required
+          onChange={(event) => onChange({ department: event.target.value })} className={inputClass}>
+          <option value="">Seleccionar grupo...</option>
+          <option value="production">Producción</option>
+          <option value="service">Servicio</option>
+        </select>
+      </label>
       <label htmlFor={fieldId('min')} className={labelClass}>
         <span className="mb-1 block">Mínimo</span>
         <input id={fieldId('min')} type="number" min="0" step="1" value={position.minStaff ?? ''}

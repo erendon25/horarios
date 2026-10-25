@@ -54,10 +54,10 @@ try {
   await page.route('https://**/*', route => { unexpectedNetwork.push(route.request().url()); return route.abort(); });
   const fixture = {
     positions: [
-      { id: 'max5', name: 'Límite cinco', logic: 'sales', maxStaff: 5, factor: 1 },
-      { id: 'max3', name: 'Límite tres', logic: 'sales', maxStaff: 3, factor: 1 },
-      { id: 'unlimited', name: 'Sin máximo', logic: 'sales', maxStaff: '', factor: 1 },
-      { id: 'fixed-zero', name: 'Fijo cero', logic: 'fixed', fixedStaff: 0 },
+      { id: 'max5', name: 'Límite cinco', logic: 'sales', maxStaff: 5, factor: 1, department: 'production' },
+      { id: 'max3', name: 'Límite tres', logic: 'sales', maxStaff: 3, factor: 1, department: 'service' },
+      { id: 'unlimited', name: 'Sin máximo', logic: 'sales', maxStaff: '', factor: 1, department: 'production' },
+      { id: 'fixed-zero', name: 'Fijo cero', logic: 'fixed', fixedStaff: 0, department: 'service' },
     ],
     manualStaffByDay: {}, generalVhl: null, generalVhlMode: 'historical',
   };

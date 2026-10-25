@@ -12,13 +12,17 @@ Configurar Posiciones usa tarjetas con campos etiquetados que se ajustan al anch
 
 En Distribución de Personal e Ingresos por Hora, cada posición tiene una escala de color según su propio Tope de personal. Cero personas es neutro y una persona es azul; desde dos personas avanza de amarillo a naranja y llega a rojo al alcanzar o superar el límite. Un límite de una persona se muestra rojo desde una; con límite cero, cualquier asignación positiva es roja. Las posiciones fijas usan Personal fijo. Si no hay límite configurado, desde dos personas se muestra amarillo, sin inventar un umbral rojo de tres. El tooltip indica cantidad y límite. Cambiar el tope actualiza el color inmediatamente sin cambiar la cantidad asignada.
 
+Cada posición incluye Grupo del área: Producción o Servicio. La clasificación se elige explícitamente, por separado de la lógica de cálculo. La tabla muestra por hora ambos subtotales y mantiene el total general. Las áreas antiguas sin grupo muestran un aviso y el subtotal Sin clasificar; siguen contando en el total. Este subtotal desaparece al clasificar todas las áreas. Las nuevas posiciones requieren nombre y grupo. Reclasificar mueve las cantidades entre subtotales sin alterar dotación, límites, ajustes manuales ni colores. El grupo se guarda dentro de la configuración propia de cada tienda.
+
 ## Verificación
 
 ```sh
 PLAYWRIGHT_MODULE=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-projection-store-ui.mjs
 PLAYWRIGHT_MODULE=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-projection-modal-responsive.mjs
 node --test src/services/projectionStaffColor.test.js
+node --test src/services/projectionStaffGroups.test.js
 PLAYWRIGHT_MODULE=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-projection-staff-colors.mjs
+PLAYWRIGHT_MODULE=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-projection-staff-groups.mjs
 PGLITE_MODULE=/tmp/planilla-backend-runtime/node_modules/@electric-sql/pglite/dist/index.js node scripts/test-projection-store-config-db.mjs
 node --experimental-vm-modules --test src/services/positionCoverage.test.js src/lib/supabase/firestoreCompat.test.js
 ```
@@ -36,3 +40,5 @@ La rama mantiene cambios de ventas pendientes de publicación. El build de la ra
 Para la corrección responsive posterior, `scripts/prepare-projection-modal-production.mjs` parte de `tmp/staff-permissions-production` y verifica el bundle publicado `index-Dm9qh2vS.js`. Usar `--overlay --with-position-fields` para añadir únicamente ScheduleProjectionDashboard y ProjectionPositionFields. Compilar y publicar desde `tmp/projection-modal-production`; conservar el resto de fuentes y los assets verificados de la publicación anterior.
 
 Para los colores por límite, `scripts/prepare-projection-colors-production.mjs` parte de `tmp/projection-modal-production`, verifica `index-CJagACKa.js` y conserva sus assets. Usar `--overlay --with-color-service` y publicar únicamente `tmp/projection-colors-production`, con los cambios de Dashboard y projectionStaffColor. No se modifican HeatmapMatrix, horarios, permisos ni datos de tiendas.
+
+Para el desglose por grupo, `scripts/prepare-projection-groups-production.mjs` parte de `tmp/projection-colors-production`, verifica `index-Dwb8sZbS.js` y conserva sus assets. Usar `--overlay --with-groups-service` y publicar desde `tmp/projection-groups-production`, únicamente con los cambios de Dashboard, ProjectionPositionFields y projectionStaffGroups. No requiere una migración de base de datos ni asigna grupos automáticamente a tiendas reales.

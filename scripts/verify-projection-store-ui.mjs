@@ -31,6 +31,7 @@ try{
  await row(modal,'Salón').getByRole('button',{name:/Remover/}).click();
  await modal.getByRole('button',{name:'Nueva posición',exact:true}).click();
  await modal.getByLabel('Nombre de nueva posición',{exact:true}).fill('Nueva A');
+ await modal.locator('form').getByLabel('Grupo del área').selectOption('production');
  await modal.getByRole('button',{name:'Agregar',exact:true}).click();
  await close(modal);
  // Refresh while the 700ms autosave is pending: the Page must not unmount it.
