@@ -25,3 +25,20 @@ PGLITE_MODULE=/tmp/planilla-backend-runtime/node_modules/@electric-sql/pglite/di
 El recorrido de navegador carga el archivo real, verifica 32 altas persistidas con los nombres y DNI esperados, 20 Part-Time, 12 Full-Time, dos entrenadores y dos asistentes. Comprueba recarga, archivo repetido sin duplicados, perfil inactivo sin cambios, área incorrecta, archivo inválido, cancelación y vista móvil. Las pruebas de base verifican permisos por tienda, atomicidad, validación, omisiones, edición posterior y datos adicionales.
 
 Las capturas y resultados quedan en `output/staff-planilla-qa/`, excluido de Git. El archivo de personal y sus datos no se incorporan al repositorio.
+
+También se verificó el AdminDashboard completo con las 32 altas: búsqueda por DNI/nombre, orden del carnet y tarjetas de personal. La tarjeta Full-Time cuenta 10 personas y la tarjeta de asistentes otras 2; la vista previa de importación conserva las 12 modalidades Full-Time.
+
+## Publicación aislada
+
+La rama contiene cambios de ventas todavía pendientes de publicación. No desplegar directamente el build de la raíz para esta funcionalidad.
+
+`scripts/prepare-staff-planilla-production.mjs` reconstruye la versión actual publicada a partir de `47f0482`, las correcciones de acceso de `5f11c2b` y el hotfix de canales. Antes de agregar la importación, exige reproducir exactamente `index-BWcnu6Yd.js`, SHA-256 `91dc9c022b67257028c48da3dc2780d7b6e37d921d1d09bb4eeeac0a19d5b450`. Luego superpone únicamente el botón, el componente y sus dos servicios.
+
+```sh
+node scripts/prepare-staff-planilla-production.mjs
+python scripts/retain-staff-planilla-production-assets.py
+```
+
+Copiar al directorio aislado solo los assets verificados en `output/staff-planilla-qa/previous-live-assets.json`; compilar y desplegar desde `tmp/staff-planilla-production`. La retención verifica MIME y SHA-256 y descarta archivos locales que nunca fueron publicados. Se conservaron 33 assets públicos, sin incorporar los bundles de ventas pendientes.
+
+La migración aplicada con el conector se registra como `20261025004514_import_staff_planilla.sql`; el nombre local se alineó a esa versión para mantener el historial consistente. La publicación no ejecuta la importación de personal: el administrador debe revisar y confirmar la vista previa en el panel.
