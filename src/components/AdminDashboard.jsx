@@ -59,6 +59,7 @@ import { db } from "../supabase";
 import StudyScheduleEditor from './StudyScheduleEditor';
 import ModalSelectorDePosiciones from './ModalSelectorDePosiciones';
 import StaffModal from './StaffModal';
+import StaffPlanillaImport from './StaffPlanillaImport';
 import SanitaryCardQuickEdit from './SanitaryCardQuickEdit';
 import ArchivedStaffHistory from './ArchivedStaffHistory';
 import VHLConsultation from './VHLConsultation';
@@ -1783,6 +1784,7 @@ function AdminDashboard() {
                                 <Plus className="w-4 h-4" />
                                 Agregar Personal
                             </button>
+                            <StaffPlanillaImport storeId={userData?.storeId} storeName={storeName} staff={staff} onImported={fetchAllStaffProfiles} />
                         </div>
                     </div>
                 </div>
