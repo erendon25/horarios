@@ -1,4 +1,4 @@
-// Real WeeklyScheduleEditor + heatmap header with isolated local document/SSE transport.
+// Real WeeklyScheduleEditor + adjacent programmed/projected HH, with isolated document/SSE transport.
 // Verifies only the selected day's source-hour total, with no weekly card.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -17,6 +17,8 @@ const projectionPath='stores/qa-store/config/schedule_projection';
 const pass=message=>{passed.push(message);console.log(`PASS: ${message}`)};
 const poll=async(action,message)=>{for(let i=0;i<100;i++){if(await action())return;await new Promise(resolve=>setTimeout(resolve,100));}throw Error(message)};
 const summary=(scope=page)=>scope.getByTestId('projection-hours-summary');
+const comparison=()=>page.getByTestId('heatmap-hours-comparison');
+const heatmapRegion=(scope=page)=>scope.getByRole('region',{name:'Matriz de cobertura por posición y horario',exact:true});
 const value=async(id,scope=page)=>(await scope.getByTestId(id).locator('dd').textContent()).replace(/\s+/g,' ').trim();
 const expectHours=async(day,dayLabel='Lunes',scope=page)=>{
  await poll(async()=>await value('projection-hours-day',scope)===day
@@ -31,9 +33,24 @@ const setProjection=async(data,path=projectionPath)=>{
  assert.equal(response.ok(),true);
 };
 const daySelect=()=>page.locator('select').filter({has:page.locator('option[value="monday"]')}).first();
-const programmed=()=>page.getByText('Total HH',{exact:false}).first().locator('xpath=..').textContent();
+const programmed=()=>page.getByTestId('heatmap-total-hours').textContent();
+const checkAdjacentHours=async(label)=>{
+ const pair=comparison();await pair.scrollIntoViewIfNeeded();
+ assert.equal(await pair.getByTestId('heatmap-total-hours').count(),1);
+ assert.equal(await summary(pair).count(),1,'La cabecera debe contener un solo resumen de proyección');
+ assert.equal(await summary().count(),1,'El mapa normal no debe duplicar las HH de proyección');
+ assert.equal(await summary(heatmapRegion().locator('xpath=..')).count(),0,'El bloque oscuro normal no debe repetir el resumen');
+ const actual=await pair.getByTestId('heatmap-total-hours').boundingBox(),projected=await summary(pair).boundingBox(),bounds=await pair.boundingBox();
+ assert.ok(actual&&projected&&bounds,`${label}: ambas HH deben ser visibles`);
+ assert.ok(projected.x>=actual.x+actual.width-1,`${label}: la proyección debe estar a la derecha del Total HH`);
+ assert.ok(Math.min(actual.y+actual.height,projected.y+projected.height)>Math.max(actual.y,projected.y),`${label}: ambas HH deben compartir la misma fila`);
+ const viewport=page.viewportSize();
+ assert.ok(bounds.x>=-1&&bounds.x+bounds.width<=viewport.width+1,`${label}: ambas HH deben caber en el ancho visible`);
+ assert.ok(await pair.evaluate(element=>element.scrollWidth<=element.clientWidth+1),`${label}: el par de HH no debe desbordarse horizontalmente`);
+ observations.push({comparisonViewport:label,actual,projected,bounds});
+};
 const checkMapHeight=async(label,scope=page)=>{
- const bounds=await scope.getByRole('region',{name:'Matriz de cobertura por posición y horario',exact:true}).evaluate(element=>{
+ const bounds=await heatmapRegion(scope).evaluate(element=>{
   const rect=element.getBoundingClientRect();return {x:rect.x,y:rect.y,width:rect.width,height:rect.height};
  });
  observations.push({mapViewport:label,bounds});
@@ -70,13 +87,14 @@ try{
  await expectHours('Cargando…');
  gateOpen=true;releaseInitial();
  await expectHours('12 h');
+ await checkAdjacentHours('1500x1000 escritorio');
  assert.ok(!/12\s*h/.test(await programmed()),'The programmed staff total must remain independent of the 12 projected hours');
  const originalProgrammed=await programmed();
  const region=page.getByRole('region',{name:'Matriz de cobertura por posición y horario',exact:true});
  assert.equal(await region.locator('thead th[scope="col"]').count(),73,'The heatmap retains its 73 quarter-hour labels including 25:00');
  assert.equal((await region.locator('thead th[scope="col"]').last().textContent()).trim(),'25:00');
- await summary().screenshot({path:`${output}/resumen-desktop.png`});
- pass('La carga muestra pendiente y luego12h solo del lunes, sin tarjeta semanal, conservando las HH programadas y la matriz de15min');
+ await comparison().screenshot({path:`${output}/resumen-desktop.png`});
+ pass('La carga muestra pendiente y luego12h del lunes junto a Total HH, sin duplicado inferior ni tarjeta semanal; conserva las HH programadas y matriz de15min');
 
  await daySelect().selectOption('tuesday');await expectHours('6 h','Martes');
  await daySelect().selectOption('wednesday');await expectHours('0 h','Miércoles');
@@ -106,6 +124,7 @@ try{
  await dialog.screenshot({path:`${output}/resumen-fullscreen-actualizado.png`});
  await dialog.getByRole('button',{name:'Minimizar mapa de cobertura',exact:true}).click();
  await expectHours('16 h');assert.equal(await programmed(),originalProgrammed);
+ await checkAdjacentHours('1500x1000 al cerrar pantalla completa');
  pass('La vista ampliada comparte el resumen y recibe cambios en vivo de su tienda; un cambio de otra tienda no lo reemplaza');
 
  // The last visible heatmap column is one quarter-hour cell, but its source
@@ -122,26 +141,29 @@ try{
  pass('Un error de lectura muestra No disponible y la suscripción recupera los valores al restablecerse');
 
  await page.setViewportSize({width:991,height:435});
+ await checkAdjacentHours('991x435 horizontal');
  await checkMapHeight('991x435 embedded');
  await page.setViewportSize({width:390,height:844});
+ await checkAdjacentHours('390x844 móvil');
  await checkMapHeight('390x844 embedded');
  await summary().scrollIntoViewIfNeeded();
  const bounds=await summary().boundingBox();
  assert.ok(bounds&&bounds.x>=-1&&bounds.width<=390&&bounds.x+bounds.width<=391,'The compact summary must fit the mobile viewport');
  const overflow=await summary().evaluate(element=>({width:element.clientWidth,scroll:element.scrollWidth}));
  assert.ok(overflow.scroll<=overflow.width+1,'Projection summary must not overflow horizontally');
- await summary().screenshot({path:`${output}/resumen-mobile.png`});
+ await comparison().screenshot({path:`${output}/resumen-mobile.png`});
  await page.getByRole('button',{name:'Maximizar mapa de cobertura',exact:true}).click();
  const mobileDialog=page.getByRole('dialog');await mobileDialog.waitFor();
  await checkMapHeight('390x844 fullscreen',mobileDialog);
  await expectHours('12 h','Lunes',mobileDialog);
+ assert.equal(await summary(mobileDialog).count(),1,'El diálogo móvil debe contener un único resumen');
  const mobileBounds=await summary(mobileDialog).boundingBox();
  assert.ok(mobileBounds&&mobileBounds.x>=-1&&mobileBounds.x+mobileBounds.width<=391&&mobileBounds.y>=-1&&mobileBounds.y+mobileBounds.height<=845);
  await mobileDialog.screenshot({path:`${output}/resumen-mobile-fullscreen.png`});
  await page.keyboard.press('Escape');
  assert.deepEqual(await page.evaluate(()=>window.bukQaWrites),[],'Reading projection hours and using filters must not save staff schedules');
  assert.deepEqual(errors,[]);assert.deepEqual(unexpectedNetwork,[]);
- pass('El resumen cabe en móvil y pantalla completa; consultar y filtrar no escribe horarios');
+ pass('Total HH y proyección permanecen alineados en móvil; pantalla completa conserva un resumen y consultar/filtrar no escribe horarios');
  await writeFile(`${output}/resultado.json`,JSON.stringify({status:'PASS',passed,observations,errors,unexpectedNetwork,
   scope:'Real WeeklyScheduleEditor and heatmap header with isolated HTTP documents and SSE; no production access'},null,2));
 }catch(error){

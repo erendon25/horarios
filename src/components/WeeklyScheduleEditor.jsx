@@ -9,6 +9,7 @@ import ScheduleHeatmapMatrix from './ScheduleHeatmapMatrix';
 import WeeklyScheduleExcelButton from './WeeklyScheduleExcelButton';
 import { getHeatmapAssignments, getProjectionForDay, getExportShiftSegments, getPositionSegments, canLimitPositionCoverage } from '../services/scheduleExportData';
 import { summarizeProjectionHours } from '../services/projectionHours';
+import ProjectionHoursSummary from './ProjectionHoursSummary';
 import { operationalStaffCount } from '../services/projectionStaffCount';
 import SchedulePositionControl from './SchedulePositionControl';
 import { validateHeatmapTransfer, replacePositionInterval } from '../services/heatmapTransfers';
@@ -2048,27 +2049,30 @@ export default function WeeklyScheduleEditor() {
 
                                     return (
                                         <div className="flex items-center justify-between gap-2 mt-2 bg-gray-50 p-2.5 rounded-lg border border-gray-200 shadow-sm flex-wrap">
-                                            <div className="flex flex-col gap-0.5 border-r border-gray-200 pr-3 w-1/4">
+                                            <div className="flex min-w-[80px] flex-1 flex-col gap-0.5 border-r border-gray-200 pr-3">
                                                 <span className="text-gray-500 text-[9px] uppercase font-bold tracking-wider">Ventas / TRX</span>
                                                 <span className="font-bold text-green-600 text-xs">
                                                     S/ {Math.round(vta)} / {Math.round(txs)}
                                                 </span>
                                             </div>
-                                            <div className="flex flex-col gap-0.5 border-r border-gray-200 pr-3 flex-1">
+                                            <div data-testid="heatmap-hours-comparison" className="grid min-w-[180px] flex-[2_1_180px] grid-cols-2 gap-3 border-r border-gray-200 pr-3">
+                                            <div data-testid="heatmap-total-hours" className="flex min-w-0 flex-col gap-0.5 border-r border-gray-200 pr-3">
                                                 <span className="text-gray-500 text-[9px] uppercase font-bold tracking-wider">Total HH <span className="text-orange-500 lowercase opacity-80">(c/extras)</span></span>
                                                 <span className="font-bold text-indigo-600 text-xs">
                                                     {Math.round(totalHours * 10) / 10}h
                                                     {totalHoursWithExtras > totalHours && <span className="text-orange-500 ml-1">({Math.round(totalHoursWithExtras * 10) / 10}h)</span>}
                                                 </span>
                                             </div>
-                                            <div className="flex flex-col gap-0.5 border-r border-gray-200 pr-3 flex-1">
+                                            <ProjectionHoursSummary summary={projectionHours} dayLabel={weekdayLabels[selectedDay]} compact />
+                                            </div>
+                                            <div className="flex min-w-[60px] flex-1 flex-col gap-0.5 border-r border-gray-200 pr-3">
                                                 <span className="text-gray-500 text-[9px] uppercase font-bold tracking-wider">VHL <span className="text-orange-500 lowercase opacity-80">(c/extras)</span></span>
                                                 <span className="font-bold text-blue-600 text-xs">
                                                     S/ {vhl}
                                                     {totalHoursWithExtras > totalHours && <span className="text-orange-500 ml-1">(S/ {vhlExt})</span>}
                                                 </span>
                                             </div>
-                                            <div className="flex flex-col gap-0.5 flex-1">
+                                            <div className="flex min-w-[60px] flex-1 flex-col gap-0.5">
                                                 <span className="text-gray-500 text-[9px] uppercase font-bold tracking-wider">THL <span className="text-orange-500 lowercase opacity-80">(c/extras)</span></span>
                                                 <span className="font-bold text-purple-600 text-xs">
                                                     {thl}
@@ -2085,6 +2089,7 @@ export default function WeeklyScheduleEditor() {
                                     assigned={assignedArray}
                                     requirements={safeRequirements}
                                     projectionHours={projectionHours}
+                                    showProjectionSummary={false}
                                     date={getSelectedDateStr() || ''}
                                     dayLabel={weekdayLabels[selectedDay]}
                                     canExport={userRole === 'admin' || userRole === 'superadmin'}
