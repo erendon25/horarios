@@ -26,6 +26,14 @@ Prueba seleccionar un ingreso aprobado, comprobar la salida calculada, conservar
 
 El plan de descansos se comparte entre los siete días de la semana de cada colaborador y se conserva en el borrador y al guardar. Las selecciones antiguas que difieran entre días se interpretan con los descansos reales de la semana. Los rangos aprobados muestran su duración, incluso al cruzar medianoche; si incluyen refrigerio, también muestran las horas netas. Cambiar el plan conserva los horarios, posiciones, extras y breaks ya escritos; los turnos que queden fuera del nuevo plan se señalan para revisión.
 
+Los descansos reales también corrigen un plan antiguo uniforme que haya quedado
+desactualizado: dos días marcados como Libre muestran PT2 aunque los siete días
+tengan guardado PT1. Consultar no modifica el horario. Una selección manual puede
+preparar un objetivo distinto antes de marcar o quitar sus descansos; se conserva
+mientras se avanza hacia ese objetivo. Al alcanzarlo, o al alejarse de él, el plan
+vuelve a seguir automáticamente los descansos asignados. Este estado se conserva
+en el borrador y al guardar, sin cambiar el esquema de la base de datos.
+
 La pestaña **HORARIOS APROBADOS** del archivo «Planificación de horarios(1).xlsm» es la referencia para los refrigerios. Se comprobaron sus 261 rangos y las reglas de A2, D2, G2, J2 y M2 contra el catálogo del programa. Las cuatro opciones Part-Time completan 23:45 semanales:
 
 | Opción | Distribución | Refrigerio |

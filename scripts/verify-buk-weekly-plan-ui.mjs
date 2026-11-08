@@ -187,6 +187,45 @@ try {
   await page.getByRole('button',{name:'Excel BUK',exact:true}).waitFor();
   assert.equal(await page.getByLabel('Modalidad de planificación',{exact:true}).count(),0);
   pass('Cambio a tres descansos, navegación móvil y recarga conservan el plan; la preferencia anterior no reactiva GeoVictoria');
+
+  // Reproduce persisted legacy metadata: all seven days say PT1 but two are off.
+  // Reading this week must show PT2 immediately, without silently saving it.
+  await page.setViewportSize({width:1440,height:1000});
+  const stale=structuredClone(fixture.schedules.PT1);
+  const keys=['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
+  for(const key of keys) stale[key]={...stale[key],bukRestDays:1};
+  stale.saturday={off:true,bukRestDays:1};
+  const path='schedules/PT1_2026-10-12_to_2026-10-18';
+  assert.ok((await page.request.post(`${base}/qa-document`,{data:{path,data:stale}})).ok());
+  await page.evaluate(()=>{for(const key of Object.keys(localStorage))if(key.startsWith('schedule_draft_v2:'))localStorage.removeItem(key)});
+  await page.reload();await rests.waitFor();await day.selectOption('monday');
+  assert.equal(await rests.inputValue(),'2','Actual rests override stale uniform metadata on load');
+  assert.deepEqual(await page.evaluate(()=>window.bukQaWrites),[],'Loading a legacy week does not save it');
+  picker=await openPicker(approved);
+  assert.ok((await picker.locator('[data-shift-id]').evaluateAll(cards=>cards.map(card=>card.dataset.shiftId))).every(id=>id.startsWith('PT2-')));
+  assert.ok(await picker.locator('[data-shift-id="PT2-33"]').count());
+  await closePicker(picker);
+  for(const [key,off,expected] of [['friday',true,'3'],['thursday',true,'4'],['thursday',false,'3'],['friday',false,'2'],['saturday',false,'1'],['saturday',true,'2']]) {
+    await day.selectOption(key);
+    await row.locator('td').nth(restColumn).getByRole('checkbox').setChecked(off);
+    assert.equal(await rests.inputValue(),expected,`${key}: ${off}`);
+  }
+  await day.selectOption('monday');
+  await chooseShift(approved,'PT2-33');
+  assert.equal(await row.getByTitle('Salida',{exact:true}).inputValue(),'01:00');
+  await page.getByRole('button',{name:/^Guardar/}).click();
+  await page.getByRole('button',{name:/^Guardado/}).waitFor();
+  const corrected=(await (await page.request.get(`${base}/qa-document?path=${encodeURIComponent(path)}`)).json()).data;
+  assert.ok(keys.every(key=>corrected[key].bukRestDays===2));
+  assert.equal(corrected.monday.position,stale.monday.position);
+  assert.deepEqual(corrected.tuesday, {...stale.tuesday,bukRestDays:2});
+  await page.evaluate(()=>{for(const key of Object.keys(localStorage))if(key.startsWith('schedule_draft_v2:'))localStorage.removeItem(key)});
+  await page.reload();await rests.waitFor();await day.selectOption('monday');
+  assert.equal(await rests.inputValue(),'2');
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await rests.inputValue(),'2');
+  await row.locator('td').nth(1).screenshot({path:`${output}/dos-descansos-corregidos-mobile.png`});
+  pass('Plan antiguo PT1 con dos libres carga como PT2; agregar/quitar 1–4 descansos actualiza opciones, guarda y recarga sin perder otros turnos');
   assert.deepEqual(errors,[]);
   await writeFile(`${output}/resultado.json`,JSON.stringify({status:'PASS',passed,errors,scope:'Editor React real, borradores reales y transporte/identidades ficticias con persistencia HTTP aislada; sin escrituras de producción'},null,2));
 } catch(error) {

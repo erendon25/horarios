@@ -27,14 +27,22 @@ const weeklyRestPlan = schedule => {
 };
 const countRestDays = schedule => SCHEDULE_DAYS.filter(day => schedule[day]?.off).length;
 const clampRestDays = value => Math.min(4, Math.max(1, value));
+const pendingRestPlan = schedule => {
+  const target = weeklyRestPlan(schedule);
+  const actual = countRestDays(schedule);
+  // Only an explicit selector choice can temporarily lead the assigned rests.
+  // The count stamp invalidates that choice if another editing flow changes them.
+  return target !== null && target !== actual
+    && SCHEDULE_DAYS.every(day => schedule[day]?.bukRestDaysBasis === actual) ? target : null;
+};
 
-// New selections are stored on all seven days so the existing draft and server
-// metadata round-trip the weekly plan. Older, mixed daily selections use the
-// week's actual rest count before falling back to a deterministic saved choice.
+// Actual rests take precedence over stale saved plans. An explicitly selected
+// target can still be prepared before marking its days; both it and its count
+// stamp round-trip through the existing draft/server day metadata.
 export function getBukRestDays(modality, schedule = {}) {
   if (normalize(modality).startsWith('FULL')) return 1;
-  const weekly = weeklyRestPlan(schedule);
-  if (weekly !== null) return weekly;
+  const pending = pendingRestPlan(schedule);
+  if (pending !== null) return pending;
   const actual = countRestDays(schedule);
   if (actual) return clampRestDays(actual);
   const saved = SCHEDULE_DAYS.map(day => schedule[day]?.bukRestDays).find(validRestDays);
@@ -45,15 +53,30 @@ export function getBukRestDays(modality, schedule = {}) {
 
 export function applyBukSchedulePatch(schedule = {}, day, patch) {
   const next = { ...schedule, [day]: { ...schedule[day], ...patch } };
-  let rests = validRestDays(patch.bukRestDays) ? Number(patch.bukRestDays) : null;
-  if (rests === null && Object.hasOwn(patch, 'off') && Boolean(patch.off) !== Boolean(schedule[day]?.off)) {
-    // Follow checkbox changes when the current plan matches the completed week;
-    // keep an explicitly chosen target while its rest days are still being set.
-    if (weeklyRestPlan(schedule) === null || getBukRestDays('Part-Time', schedule) === countRestDays(schedule)) {
-      rests = clampRestDays(countRestDays(next));
-    }
+  const before = countRestDays(schedule), actual = countRestDays(next);
+  const pending = pendingRestPlan(schedule);
+  const selectsPlan = Object.keys(patch).length === 1 && validRestDays(patch.bukRestDays);
+  let rests = null, basis;
+  if (selectsPlan) {
+    rests = Number(patch.bukRestDays);
+    if (rests !== actual) basis = actual;
+  } else if (actual !== before) {
+    // Preserve a deliberate target only while moving toward it. Once reached,
+    // or when moving away, checkbox changes follow the real count again.
+    const approaching = pending !== null && Math.abs(pending - actual) < Math.abs(pending - before);
+    rests = approaching ? pending : clampRestDays(actual);
+    if (approaching && rests !== actual) basis = actual;
+  } else if (validRestDays(patch.bukRestDays)) {
+    // Approved-shift patches also carry bukRestDays; they are not a new plan
+    // selection and must not resurrect stale metadata or clear a pending target.
+    rests = pending ?? (actual ? clampRestDays(actual) : Number(patch.bukRestDays));
+    if (pending !== null) basis = actual;
   }
-  if (rests !== null) for (const key of SCHEDULE_DAYS) next[key] = { ...next[key], bukRestDays: rests };
+  if (rests !== null) for (const key of SCHEDULE_DAYS) {
+    next[key] = { ...next[key], bukRestDays: rests };
+    if (basis === undefined) delete next[key].bukRestDaysBasis;
+    else next[key].bukRestDaysBasis = basis;
+  }
   return next;
 }
 

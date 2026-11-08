@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {getBukRestDays, applyBukSchedulePatch, approvedBukShiftLabel, approvedBukShifts, findApprovedBukShiftByStart} from './bukSchedule.js';
+import {getBukRestDays, applyBukSchedulePatch, approvedBukShiftLabel, approvedBukShifts, findApprovedBukShiftByStart, makeApprovedBukPatch, getAvailableApprovedBukOptions} from './bukSchedule.js';
 import {createScheduleDraft, DRAFT_DAYS} from './scheduleDraft.js';
 
 test('dos descansos reales resuelven los planes diarios históricos de forma uniforme', () => {
@@ -24,7 +24,8 @@ test('elegir un plan lo aplica a toda la semana sin alterar horarios, posiciones
   const next=applyBukSchedulePatch(schedule,'tuesday',{bukRestDays:2});
   for(const day of DRAFT_DAYS) {
     assert.equal(next[day].bukRestDays,2);
-    const {bukRestDays,...rest}=next[day];
+    const {bukRestDays,bukRestDaysBasis,...rest}=next[day];
+    assert.equal(bukRestDaysBasis,1,'The explicit target remembers the current rest count');
     const {bukRestDays:old,...original}=schedule[day] || {};
     assert.deepEqual(rest,original,day);
   }
@@ -76,4 +77,92 @@ test('los rangos muestran su duración real al cruzar medianoche y distinguen el
   assert.equal(approvedBukShiftLabel(option('PT1','21:00')),'21:00 → 01:00 · 4 h (sin break)');
   assert.match(approvedBukShiftLabel(option('FT1','06:15')),/8 h 45 min \(8 h netas; break de 45 min\)$/);
   assert.match(approvedBukShiftLabel(approvedBukShifts.find(item=>item.group==='PT3' && item.duration===405)),/6 h 45 min \(6 h netas; break de 45 min\)$/);
+});
+
+test('un plan guardado de un descanso no oculta los dos descansos reales al cargar', () => {
+  const schedule = Object.fromEntries(DRAFT_DAYS.map(day => [day, { bukRestDays: 1 }]));
+  schedule.saturday.off = true;
+  schedule.sunday.off = true;
+  const before = structuredClone(schedule);
+  assert.equal(getBukRestDays('Part-Time', schedule), 2);
+  assert.equal(findApprovedBukShiftByStart('Part-Time', getBukRestDays('Part-Time', schedule), '20:15').end, '01:00');
+  assert.deepEqual(schedule, before, 'Loading does not rewrite saved shifts');
+});
+
+test('un plan desactualizado sigue cada descanso agregado o retirado', () => {
+  let schedule = Object.fromEntries(DRAFT_DAYS.map(day => [day, { bukRestDays: 1 }]));
+  schedule.saturday.off = true;
+  schedule.sunday.off = true;
+  for (const [day, off, expected] of [
+    ['friday', true, 3], ['thursday', true, 4],
+    ['friday', false, 3], ['thursday', false, 2],
+    ['saturday', false, 1], ['sunday', false, 1],
+  ]) {
+    schedule = applyBukSchedulePatch(schedule, day, { off });
+    assert.equal(getBukRestDays('Part-Time', schedule), expected, `${day}: ${off}`);
+    assert.ok(DRAFT_DAYS.every(key => schedule[key].bukRestDays === expected));
+  }
+});
+
+test('un plan antiguo mayor que los descansos reales tampoco domina la semana', () => {
+  const schedule = Object.fromEntries(DRAFT_DAYS.map(day => [day, { bukRestDays: 4 }]));
+  schedule.sunday.off = true;
+  assert.equal(getBukRestDays('Part-Time', schedule), 1);
+  const next = applyBukSchedulePatch(schedule, 'saturday', { off: true });
+  assert.equal(getBukRestDays('Part-Time', next), 2);
+  assert.ok(getAvailableApprovedBukOptions('Part-Time', getBukRestDays('Part-Time', next), next, 'monday').every(option => option.group === 'PT2'));
+});
+
+test('el objetivo explícito se conserva hasta alcanzarlo, luego cada cambio usa los descansos reales', () => {
+  let schedule = applyBukSchedulePatch({}, 'monday', { bukRestDays: 3 });
+  schedule = applyBukSchedulePatch(schedule, 'sunday', { off: true });
+  const option = approvedBukShifts.find(item => item.group === 'PT3');
+  schedule = applyBukSchedulePatch(schedule, 'monday', makeApprovedBukPatch(option.id));
+  assert.equal(getBukRestDays('Part-Time', JSON.parse(JSON.stringify(schedule))), 3);
+  schedule = applyBukSchedulePatch(schedule, 'saturday', { off: true });
+  assert.equal(getBukRestDays('Part-Time', schedule), 3);
+  schedule = applyBukSchedulePatch(schedule, 'friday', { off: true });
+  assert.ok(DRAFT_DAYS.every(day => !Object.hasOwn(schedule[day], 'bukRestDaysBasis')));
+  schedule = applyBukSchedulePatch(schedule, 'friday', { off: false });
+  assert.equal(getBukRestDays('Part-Time', schedule), 2);
+  schedule = applyBukSchedulePatch(schedule, 'thursday', { bukRestDays: 1 });
+  assert.equal(getBukRestDays('Part-Time', schedule), 1, 'An explicitly reduced target can also be prepared');
+  schedule = applyBukSchedulePatch(schedule, 'saturday', { off: false });
+  assert.equal(getBukRestDays('Part-Time', schedule), 1);
+  schedule = applyBukSchedulePatch(schedule, 'saturday', { off: true });
+  assert.equal(getBukRestDays('Part-Time', schedule), 2);
+});
+
+test('los descansos editados por otro flujo invalidan un objetivo pendiente sin mutar los datos', () => {
+  const schedule = applyBukSchedulePatch({}, 'monday', { bukRestDays: 4 });
+  schedule.saturday.off = true;
+  schedule.sunday.off = true;
+  const before = structuredClone(schedule);
+  assert.equal(getBukRestDays('Part-Time', schedule), 2);
+  assert.deepEqual(schedule, before);
+});
+
+test('alejarse de un objetivo pendiente lo cancela y los marcadores incompletos no lo reactivan', () => {
+  let schedule = applyBukSchedulePatch({}, 'monday', { bukRestDays: 3 });
+  schedule = applyBukSchedulePatch(schedule, 'sunday', { off: true });
+  const partial = structuredClone(schedule);
+  delete partial.monday.bukRestDaysBasis;
+  assert.equal(getBukRestDays('Part-Time', partial), 1);
+  partial.monday.bukRestDaysBasis = '1';
+  assert.equal(getBukRestDays('Part-Time', partial), 1);
+  schedule = applyBukSchedulePatch(schedule, 'sunday', { off: false });
+  assert.equal(getBukRestDays('Part-Time', schedule), 1);
+  assert.ok(DRAFT_DAYS.every(day => !Object.hasOwn(schedule[day], 'bukRestDaysBasis')));
+});
+
+test('reemplazar un descanso con turno o feriado no mantiene el plan anterior de su parche', () => {
+  for (const holiday of [false, true]) {
+    const schedule = { saturday: { off: true }, sunday: { off: true } };
+    const option = approvedBukShifts.find(item => item.group === 'PT2');
+    const next = applyBukSchedulePatch(schedule, 'saturday', { ...makeApprovedBukPatch(option.id), feriado: holiday });
+    assert.equal(getBukRestDays('Part-Time', next), 1);
+    assert.ok(DRAFT_DAYS.every(day => next[day].bukRestDays === 1));
+    assert.equal(next.saturday.feriado, holiday);
+    assert.equal(next.sunday.off, true);
+  }
 });
