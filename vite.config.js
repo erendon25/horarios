@@ -2,10 +2,11 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { viteStaticCopy } from 'vite-plugin-static-copy';
 import { execFileSync } from 'node:child_process';
+import { fingerprintProductionSources, PRODUCTION_PATHS } from './scripts/production-state.mjs';
 
 const releaseInfo = () => ({
   name: 'release-info',
-  generateBundle() {
+  async generateBundle() {
     const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
     this.emitFile({
       type: 'asset',
@@ -14,7 +15,8 @@ const releaseInfo = () => ({
         commit: git('rev-parse', 'HEAD'),
         branch: git('branch', '--show-current'),
         builtAt: new Date().toISOString(),
-        sourceModified: Boolean(git('status', '--porcelain', '--', 'src', 'public', 'scripts', 'package.json', 'package-lock.json', 'vite.config.js', 'firebase.json')),
+        sourceModified: Boolean(git('status', '--porcelain', '--untracked-files=all', '--', ...PRODUCTION_PATHS)),
+        sourceFingerprint: await fingerprintProductionSources(),
       }, null, 2),
     });
   },

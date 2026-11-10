@@ -110,7 +110,7 @@ try{
   await vhl(250);
   await checkCounts('Base ocho, Vestido limitado a cinco',{'cocina':5,'custom-qa-1':5,'sheetout-qa':10,'landing-qa':2.5,'service-qa':2,'driver-qa':10/9,'fixed-qa':2});
   await checkGroups(22.5,46/9,497/18);
-  const distribution=page.getByRole('heading',{name:'Distribucion de Personal e Ingresos por Hora',exact:true}).locator('xpath=../..');
+  const distribution=page.getByRole('heading',{name:'Distribución de personal e ingresos cada 15 minutos',exact:true}).locator('xpath=../..');
   await distribution.screenshot({path:`${output}/vestido-tope-cinco-derivados.png`});
   await edit('sheetout-qa','Tope de personal',7);
   await edit('landing-qa','Mínimo',4);
@@ -146,7 +146,7 @@ try{
   await poll(async()=>{
     const saved=(await state()).configurations['store-a'];
     return saved.vestidoPositionId==='cocina'&&saved.manualStaffByDay?.lunes?.cocina?.['12:00']===3
-      &&saved.requirements?.monday?.matrix?.['0']?.['1']===3&&saved.requirements?.monday?.matrix?.['2']?.['0']===6;
+      &&saved.requirements?.monday?.matrix?.['0']?.['4']===3&&saved.requirements?.monday?.matrix?.['2']?.['0']===6;
   },'Reference, manual allocations, or derived weekly requirements were not persisted');
   const beforeReload=await visuals();
   await page.reload();await row('cocina').waitFor();

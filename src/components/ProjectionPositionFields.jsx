@@ -1,6 +1,6 @@
 import React from 'react';
 
-const inputClass = 'block w-full min-w-0 max-w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-100 disabled:text-slate-400';
+const inputClass = 'block h-8 w-full min-w-0 max-w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 disabled:bg-slate-100 disabled:text-slate-400';
 const labelClass = 'block min-w-0 text-xs font-semibold text-slate-600';
 
 export default function ProjectionPositionFields({
@@ -17,7 +17,7 @@ export default function ProjectionPositionFields({
   const fieldId = (name) => `${idPrefix}-${name}`;
 
   return (
-    <div className="grid min-w-0 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+    <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
       <label htmlFor={fieldId('name')} className={`${labelClass} col-span-2 sm:col-span-2 lg:col-span-2`}>
         <span className="mb-1 block">{nameLabel}</span>
         <input ref={nameInputRef} id={fieldId('name')} type="text" required value={position.name}
@@ -48,7 +48,7 @@ export default function ProjectionPositionFields({
         <span className="mb-1 block">Mínimo</span>
         <input id={fieldId('min')} type="number" min="0" step="1" value={position.minStaff ?? ''}
           onChange={(event) => onChange({ minStaff: event.target.value })} disabled={isFixed}
-          placeholder="0" title="Mínimo por hora operativa" className={inputClass} />
+          placeholder="0" title="Mínimo de personas durante cada tramo operativo" className={inputClass} />
       </label>
       <label htmlFor={fieldId('max')} className={labelClass}>
         <span className="mb-1 block">{isFixed ? 'Personal fijo' : 'Tope de personal'}</span>

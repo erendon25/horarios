@@ -9,6 +9,8 @@
     "test:profile-photo:e2e": "node scripts/test-competition-e2e.mjs --profile-photo",
     "prebuild": "node scripts/verify-env.mjs",
     "build": "vite build",
+    "test:production": "node scripts/test-production.mjs",
+    "deploy:production": "firebase deploy --only hosting:lc-scheduler --project lc-scheduler",
     "preview": "vite preview"
   },
   "dependencies": {

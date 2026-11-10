@@ -1,5 +1,6 @@
 import { getExportShiftSegments, normalizeSchedulePosition } from './scheduleExportData.js';
 import { operationalStaffCount } from './projectionStaffCount.js';
+import { projectionQuantityAtMinute } from './projectionTimeline.js';
 
 export function validatePositionRange(shift, positions, range) {
   if (!positions.some(position => normalizeSchedulePosition(position) === normalizeSchedulePosition(range.position))) {
@@ -35,8 +36,7 @@ export function transferCandidates(assigned, source, minute) {
 
 function requiredAt(requirements, position, minute) {
   const index = (requirements.positions || []).findIndex(item => normalizeSchedulePosition(item) === normalizeSchedulePosition(position));
-  const column = Math.floor((minute - 480) / 60);
-  return column < 0 || index < 0 ? 0 : operationalStaffCount(requirements.matrix?.[index]?.[column]);
+  return index < 0 ? 0 : operationalStaffCount(projectionQuantityAtMinute(requirements, index, minute));
 }
 
 export function validateHeatmapTransfer(assigned, requirements, transfer) {

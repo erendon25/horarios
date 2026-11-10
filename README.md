@@ -80,28 +80,42 @@ Comprueba que tienes acceso al proyecto:
 firebase projects:list
 ```
 
-Luego despliega únicamente el hosting:
+Publica desde `main`, después de confirmar y subir los cambios:
 
 ```bash
-firebase deploy --only hosting:lc-scheduler
+git switch main
+git pull --ff-only origin main
+npm run deploy:production
 ```
 
 Firebase publica el contenido de `build/` según `firebase.json`.
-El hook `predeploy` compila antes de publicar para evitar reutilizar una carpeta
-`build/` de otra rama. Cada compilación incluye `/release.json` con el commit,
-la rama, la fecha de compilación y si había cambios de código sin guardar en Git.
-Antes de publicar, integra todos los cambios aprobados en `main`: compilar una
-rama atrasada también publica una aplicación atrasada.
+El hook `predeploy` detiene la publicación si la rama no es `main`, hay código
+sin confirmar, `HEAD` no coincide con `origin/main` o falta en su historia el
+commit que ya está publicado. También ejecuta las pruebas de regresión y genera
+un build nuevo. Antes de subirlo vuelve a comprobar el estado de Git y exige que
+el build corresponda al mismo commit y a la misma huella del código fuente.
+
+Cada compilación incluye `/release.json` con el commit, la rama, la fecha,
+el estado del código y su huella SHA-256. Si producción no tiene una versión
+verificable, la publicación se detiene para investigarla antes de reemplazarla.
+Los controles evitan publicar accidentalmente otra rama o un build atrasado;
+las pruebas y la revisión siguen siendo necesarias para detectar regresiones.
 
 ## Flujo recomendado para futuras actualizaciones
 
 ```bash
-git checkout main
-git pull origin main
-npm install
-copy .env.example .env
-npm run build
-firebase deploy --only hosting:lc-scheduler
+git switch main
+git pull --ff-only origin main
+npm ci
+# Editar, revisar y confirmar los archivos del cambio.
+git push origin main
+npm run deploy:production
 ```
 
-En Linux/macOS reemplaza `copy .env.example .env` por `cp .env.example .env`.
+Conserva tu `.env` existente. Si utilizas una rama temporal para aislar trabajo,
+intégrala en `main` antes de publicar; ninguna rama de trabajo es fuente de
+producción. No uses `reset --hard`, no descartes trabajo local y no promociones
+versiones antiguas de Hosting para saltarte estas comprobaciones.
+
+La auditoría de funciones históricas pendientes está en
+[`docs/AUDITORIA_COBERTURA_PUBLICADA_2026_11_10.md`](docs/AUDITORIA_COBERTURA_PUBLICADA_2026_11_10.md).

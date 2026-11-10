@@ -6,7 +6,12 @@
   "hosting": {
     "target": "lc-scheduler",
     "public": "build",
-    "predeploy": ["npm run build"],
+    "predeploy": [
+      "node scripts/verify-production-deploy.mjs",
+      "npm run test:production",
+      "npm run build",
+      "node scripts/verify-production-build.mjs"
+    ],
     "ignore": [
       "firebase.json",
       "**/.*",
