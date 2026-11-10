@@ -42,6 +42,7 @@ import {
     addDoc,
     collection,
     getDocs,
+    getStoreStaffForStudyExport,
     query,
     where,
     getDoc,
@@ -744,12 +745,12 @@ function AdminDashboard() {
         const storeId = userData.storeId;
         const context = studyExportContext.current;
         try {
-            const [profilesSnapshot, storeSnapshot] = await Promise.all([
-                getDocs(query(collection(db, 'staff_profiles'), where('storeId', '==', storeId))),
+            const [storeProfiles, storeSnapshot] = await Promise.all([
+                getStoreStaffForStudyExport(storeId),
                 getDoc(doc(db, 'stores', storeId)),
             ]);
             const name = storeSnapshot.exists() ? storeSnapshot.data().name : '';
-            const profiles = profilesSnapshot.docs.map(item => ({ id: item.id, ...item.data() }))
+            const profiles = storeProfiles
                 .filter(person => person.storeId === storeId && isStaffActive(person));
             // Fetch by profile id: includes collaborators without a linked app account.
             const people = [];

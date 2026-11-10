@@ -11,7 +11,7 @@ function harness(overrides = {}) {
     setExportingStudies: value => states.push(value), studyExportContext: context, db: {},
     query: (...args) => args, collection: (_db, name) => name, where: (...args) => args,
     doc: (_db, name, id) => ({ name, id }),
-    getDocs: async () => ({ docs: [{ id: 'unlinked', data: () => ({ storeId: 'store', name: 'Ana' }) }, { id: 'other', data: () => ({ storeId: 'other' }) }] }),
+    getStoreStaffForStudyExport: async () => [{ id: 'unlinked', storeId: 'store', name: 'Ana' }, { id: 'other', storeId: 'other' }],
     getDoc: async ref => { calls.push(ref); return { exists: () => true, data: () => ref.name === 'stores' ? { name: 'PORONGOCHE' } : { monday: { free: true } } }; },
     isStaffActive: () => true,
     buildStudyAvailabilityWorkbook: async data => { calls.push(data); return { xlsx: { writeBuffer: async () => new Uint8Array([1]) } }; },
@@ -38,14 +38,14 @@ test('no descarga archivo parcial si falla lectura', async () => {
   assert.equal(h.deps.studyExportBusy.current, false);
 });
 test('cambiar cuenta durante lectura cancela descarga y recupera botón', async () => {
-  const h = harness(); const original = h.deps.getDocs;
+  const h = harness(); const original = h.deps.getStoreStaffForStudyExport;
   // Build a harness whose async read switches the shared context before returning.
   const shared = { current: 'user:store' };
-  const changed = harness({ studyExportContext: shared, getDocs: async () => { shared.current = 'other:store'; return original(); } });
+  const changed = harness({ studyExportContext: shared, getStoreStaffForStudyExport: async () => { shared.current = 'other:store'; return original(); } });
   await changed.run(); assert.equal(changed.downloads.length, 0); assert.deepEqual(changed.states, [true, false]);
 });
 test('desmontar no descarga ni modifica estado al terminar', async () => {
   const shared = { current: 'user:store' };
-  const h = harness({ studyExportContext: shared, getDocs: async () => { shared.current = ''; return { docs: [] }; } });
+  const h = harness({ studyExportContext: shared, getStoreStaffForStudyExport: async () => { shared.current = ''; return []; } });
   await h.run(); assert.equal(h.downloads.length, 0); assert.deepEqual(h.states, [true]);
 });
