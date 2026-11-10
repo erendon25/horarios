@@ -19,7 +19,7 @@ test('excluye otras tiendas, inactivos, cesados e históricos; incluye no vincul
   assert.equal(buildStudyAvailabilityRows({ ...input, staff }).length, 4);
 });
 test('horas inválidas abortan en lugar de producir archivo incompleto', () => {
-  for (const block of [{ start: '', end: '10:00' }, { start: '25:00', end: '26:00' }, { start: '12:60', end: '14:00' }, { start: '12:00', end: '12:00' }, { start: '20:00', end: '08:00' }]) {
+  for (const block of [{ start: '', end: '10:00' }, { start: '25:00', end: '26:00' }, { start: '12:60', end: '14:00' }, { start: '12:00', end: '12:00' }, { start: '24:00', end: '08:00' }]) {
     assert.throws(() => buildStudyAvailabilityRows({ ...input, staff: [{ ...person, study_schedule: { monday: { blocks: [block] } } }] }), /no son válidos/);
   }
   assert.throws(() => buildStudyAvailabilityRows({ ...input, staff: [] }), /No hay/);
@@ -44,4 +44,22 @@ test('reabre xlsx, mantiene texto sin fórmulas, encabezados y horas Excel', asy
 test('nombre archivo no contiene rutas', () => {
   assert.equal(studyAvailabilityFilename('PORONGOCHE'), 'Disponibilidades_PORONGOCHE.xlsx');
   assert.ok(!studyAvailabilityFilename('../tienda: A\\B').includes('/'));
+});
+
+ test('exporta cruces de medianoche con hora y día siguiente explícito', async () => {
+  for (const [start, end, expectedEnd] of [['16:00', '01:00', 25 / 24], ['23:00', '12:30', 36.5 / 24], ['16:00', '24:00', 1]]) {
+    const data = { ...input, staff: [{ ...person, study_schedule: { saturday: { blocks: [{ start, end }] } } }] };
+    const rows = buildStudyAvailabilityRows(data);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0][6], expectedEnd);
+    assert.match(rows[0][3], /día siguiente/);
+    assert.equal(rows[0][4], 'Sábado');
+    const wb = await buildStudyAvailabilityWorkbook(data);
+    const restored = new ExcelJS.Workbook();
+    await restored.xlsx.load(await wb.xlsx.writeBuffer());
+    const cell = restored.getWorksheet('Horarios de estudio').getCell('G2');
+    assert.equal(cell.numFmt, 'hh:mm');
+    assert.equal(cell.value.getUTCDate(), 31);
+    assert.match(JSON.stringify(cell.note), /día siguiente/);
+  }
 });

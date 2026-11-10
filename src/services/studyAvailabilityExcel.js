@@ -7,7 +7,7 @@ const timeMinutes = value => {
   const match = text(value).match(/^(\d{1,2}):(\d{2})(?::00)?$/);
   if (!match) return null;
   const hour = Number(match[1]), minute = Number(match[2]);
-  return hour < 24 && minute < 60 ? hour * 60 + minute : null;
+  return minute < 60 && (hour < 24 || (hour === 24 && minute === 0)) ? hour * 60 + minute : null;
 };
 
 // Read-only export: never changes a day-off flag or the source study hours.
@@ -28,11 +28,12 @@ export function buildStudyAvailabilityRows({ staff, storeId, storeName, referenc
       if (day.blocks != null && !Array.isArray(day.blocks)) throw new Error(`Revisa los estudios de ${name} (${label}).`);
       const blocks = (day.blocks || []).map(block => {
         const start = timeMinutes(block?.start), end = timeMinutes(block?.end);
-        if (start === null || end === null || start >= end) throw new Error(`Revisa el horario de ${name} (${label}): desde y hasta no son válidos.`);
-        return { start, end };
+        if (start === null || end === null || start >= 1440 || start === end) throw new Error(`Revisa el horario de ${name} (${label}): desde y hasta no son válidos.`);
+        // An end earlier than the start belongs to the following day (e.g. 16:00–01:00).
+        return { start, end: end < start ? end + 1440 : end };
       }).sort((a, b) => a.start - b.start || a.end - b.end);
       for (const block of blocks) {
-        rows.push([storeName, name, text(person.cargo) || text(person.position), 'Horario de estudio', label, block.start / 1440, block.end / 1440]);
+        rows.push([storeName, name, text(person.cargo) || text(person.position), block.end >= 1440 ? 'Horario de estudio (hasta el día siguiente)' : 'Horario de estudio', label, block.start / 1440, block.end / 1440]);
       }
     }
   }
@@ -62,6 +63,7 @@ export async function buildStudyAvailabilityWorkbook(input) {
       if (number === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF334155' } };
       else if (number % 2 === 0) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } };
       if (number > 1 && column >= 6) cell.numFmt = 'hh:mm';
+      if (number > 1 && column === 7 && cell.value >= 1) cell.note = 'Esta hora corresponde al día siguiente del indicado en la columna DÍA.';
     });
   });
   sheet.getCell('D1').note = 'Los días libres solicitados se representan únicamente en este archivo de 08:00 a 23:00. No se modifican los datos ni las reglas de disponibilidad de la aplicación. Los estudios conservan las horas declaradas, sin añadir traslados.';
