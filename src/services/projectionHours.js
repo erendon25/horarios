@@ -1,3 +1,5 @@
+import { projectionIntervalMinutes } from './projectionTimeline.js';
+
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const isObject = (value) => value !== null && typeof value === 'object';
 const isIndex = (key) => /^(0|[1-9]\d*)$/.test(key) && Number.isSafeInteger(Number(key));
@@ -24,9 +26,8 @@ const hoursForDay = (source, projectionPositions) => {
     if (!isObject(row)) continue;
     for (const [column, value] of Object.entries(row)) {
       if (!isIndex(column)) continue;
-      // Each raw cell represents one hour times its required headcount. It is
-      // independent of rendered lanes, 15-minute colors and the exit marker.
-      hours += quantity(value);
+      // Headcount × interval duration. Legacy matrices remain hourly.
+      hours += quantity(value) * projectionIntervalMinutes(source) / 60;
       if (!Number.isFinite(hours)) return null;
     }
   }

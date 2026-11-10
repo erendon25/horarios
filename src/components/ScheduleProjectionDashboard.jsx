@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import './ScheduleProjectionDashboard.css';
 import { AlertTriangle, CalendarRange, Calculator, CheckCircle, RefreshCw, Settings, Users } from 'lucide-react';
 import { collection, doc, getDoc, getDocs, orderBy, query, setDoc, where } from '../lib/supabase/firestoreCompat';
 import { db } from '../supabase';
@@ -7,6 +8,7 @@ import { getProjectionStaffColor } from '../services/projectionStaffColor';
 import { summarizeProjectionAvailableHours } from '../services/projectionLabor';
 import { getProjectionDepartment, PROJECTION_DEPARTMENTS, summarizeProjectionStaffGroups } from '../services/projectionStaffGroups';
 import { resolveVestidoPositionId } from '../services/projectionDemand';
+import { expandProjectionHours, normalizeProjectionManualStaff, PROJECTION_INTERVAL_MINUTES } from '../services/projectionTimeline';
 import {
   buildProjectionSalesByDay,
   selectLatestCompleteSalesWeek,
@@ -238,7 +240,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
         setVestidoPositionId(resolveVestidoPositionId(loadedPositions, data.vestidoPositionId));
         if (snap.exists()) {
           if (data.manualStaffByDay) {
-            setManualStaffByDay(data.manualStaffByDay);
+            setManualStaffByDay(normalizeProjectionManualStaff(data.manualStaffByDay, data.manualStaffIntervalMinutes));
           }
           if (Number(data.generalVhl) > 0) {
             setGeneralVhl(Number(data.generalVhl));
@@ -448,7 +450,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
   }, [salesByDay]);
 
   const operativeHours = useMemo(() => detectOperativeHours(salesByDay), [salesByDay]);
-  const operativeHoursSet = useMemo(() => new Set(operativeHours), [operativeHours]);
+  const operativeSlots = useMemo(() => expandProjectionHours(operativeHours), [operativeHours]);
 
   const calculationSalesByDay = useMemo(() => {
     return DAYS.reduce((result, day) => {
@@ -468,8 +470,8 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
   const buildScheduleMatrix = (hourlySales, dayKey) => {
     let totalRequiredHours = 0;
 
-    const columns = operativeHours.map((hour) => {
-      const sale = hourlySales[hour] || 0;
+    const columns = operativeSlots.map(({ hour, sourceHour }) => {
+      const sale = (hourlySales[sourceHour] || 0) / 4;
       const manualByPosition = Object.fromEntries(
         positions
           .map((position) => [position.id, manualStaffByDay?.[dayKey]?.[position.id]?.[hour]])
@@ -481,11 +483,11 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
         positions,
         vestidoPositionId,
         manualByPosition,
-        isOperativeHour: operativeHoursSet.has(hour),
+        intervalMinutes: PROJECTION_INTERVAL_MINUTES,
       });
       const { generalRequiredStaff, vestidoStaff, requiredByPosition, totalStaffAtHour } = allocation;
 
-      totalRequiredHours += totalStaffAtHour;
+      totalRequiredHours += totalStaffAtHour * PROJECTION_INTERVAL_MINUTES / 60;
 
       return {
         hour,
@@ -505,14 +507,11 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
     return DAYS.reduce((acc, day) => {
       const hourlySales = calculationSalesByDay[day.key] || createEmptyHourlySales(operativeHours);
       const matrix = buildScheduleMatrix(hourlySales, day.key);
-      const rows = positions.map((position) =>
-        operativeHours.map((hour) => {
-          const column = matrix.columns.find((col) => col.hour === hour);
-          return column?.requiredByPosition[position.id] || 0;
-        })
-      );
+      const rows = positions.map(position => matrix.columns.map(column => column.requiredByPosition[position.id] || 0));
 
       acc[DAY_TO_WEEKDAY[day.key]] = {
+        intervalMinutes: PROJECTION_INTERVAL_MINUTES,
+        startMinutes: Number(operativeHours[0].split(':')[0]) * 60,
         positions: positions.map((position) => position.name),
         matrix: compressRows(rows),
       };
@@ -535,6 +534,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
       generalVhl: Number(generalVhl) > 0 ? Number(generalVhl) : null,
       generalVhlMode: isGeneralVhlManual ? 'manual' : 'historical',
       manualStaffByDay,
+      manualStaffIntervalMinutes: PROJECTION_INTERVAL_MINUTES,
     };
     if (salesHistoryLoaded && salesSource && vhlLoaded && Number(generalVhl) > 0) {
       Object.assign(changes, {
@@ -800,7 +800,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
                 {' · '}{salesSource.totalTransactions.toLocaleString('es-PE')} transacciones
                 {historicalGeneralVhl > 0 ? ` · VHL general S/. ${historicalGeneralVhl.toFixed(2)}` : ''}
                 {historicalLaborHours > 0 ? ` · ${historicalLaborHours.toFixed(2)} HH` : ''}
-                {operativeHours.length > 0 ? ` · Rango operativo: ${operativeHours[0]} – ${operativeHours[operativeHours.length - 1]}` : ''}
+                {operativeHours.length > 0 ? ` · Rango operativo: ${operativeHours[0]} – ${String((Number(operativeHours[operativeHours.length - 1].split(':')[0]) + 1) % 24).padStart(2, '0')}:00 · Tramos de 15 min` : ''}
               </p>
             ) : null}
             {!vhlLoading && vhlError ? (
@@ -816,47 +816,47 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
         ) : null}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6 gap-6 mb-6">
-        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 flex items-center gap-4">
-          <div className="p-3 bg-orange-100 text-orange-600 rounded-lg">
-            <Calculator className="w-6 h-6" />
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6 gap-3 mb-4">
+        <div className="bg-white p-3 rounded-xl shadow-sm border border-slate-200 flex items-center gap-3">
+          <div className="p-2 bg-orange-100 text-orange-600 rounded-lg">
+            <Calculator className="w-5 h-5" />
           </div>
           <div>
-            <span className="text-sm text-slate-500 block font-medium">Venta Real del Dia</span>
-            <span className="text-2xl font-bold text-slate-900">S/. {selectedDaySales.toFixed(2)}</span>
+            <span className="text-xs text-slate-500 block font-medium">Venta Real del Dia</span>
+            <span className="text-lg font-bold text-slate-900">S/. {selectedDaySales.toFixed(2)}</span>
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-xl shadow-sm border border-emerald-200 flex items-center gap-4">
-          <div className="p-3 bg-emerald-100 text-emerald-600 rounded-lg">
-            <Calculator className="w-6 h-6" />
+        <div className="bg-white p-3 rounded-xl shadow-sm border border-emerald-200 flex items-center gap-3">
+          <div className="p-2 bg-emerald-100 text-emerald-600 rounded-lg">
+            <Calculator className="w-5 h-5" />
           </div>
           <div>
-            <span className="text-sm text-slate-500 block font-medium">Venta Base del Dia</span>
-            <span className="text-2xl font-bold text-emerald-700">S/. {selectedDayCalculationSales.toFixed(2)}</span>
+            <span className="text-xs text-slate-500 block font-medium">Venta Base del Dia</span>
+            <span className="text-lg font-bold text-emerald-700">S/. {selectedDayCalculationSales.toFixed(2)}</span>
             <span className="text-xs text-slate-400 block mt-0.5">
               {selectedDayProjectedSales > 0 ? 'Proyeccion configurada' : 'Distribucion historica aplicada'}
             </span>
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 flex items-center gap-4">
-          <div className="p-3 bg-amber-100 text-amber-600 rounded-lg">
-            <Calculator className="w-6 h-6" />
+        <div className="bg-white p-3 rounded-xl shadow-sm border border-slate-200 flex items-center gap-3">
+          <div className="p-2 bg-amber-100 text-amber-600 rounded-lg">
+            <Calculator className="w-5 h-5" />
           </div>
           <div>
-            <span className="text-sm text-slate-500 block font-medium">Venta Semanal de Calculo</span>
-            <span className="text-2xl font-bold text-slate-900">S/. {weeklyCalculationSales.toFixed(2)}</span>
+            <span className="text-xs text-slate-500 block font-medium">Venta Semanal de Calculo</span>
+            <span className="text-lg font-bold text-slate-900">S/. {weeklyCalculationSales.toFixed(2)}</span>
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-xl shadow-sm border border-violet-200 flex items-center gap-4">
-          <div className="p-3 bg-violet-100 text-violet-600 rounded-lg">
-            <Calculator className="w-6 h-6" />
+        <div className="bg-white p-3 rounded-xl shadow-sm border border-violet-200 flex items-center gap-3">
+          <div className="p-2 bg-violet-100 text-violet-600 rounded-lg">
+            <Calculator className="w-5 h-5" />
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2">
-              <label htmlFor="general-vhl" className="text-sm text-slate-500 block font-medium">
+              <label htmlFor="general-vhl" className="text-xs text-slate-500 block font-medium">
                 VHL General (S/.)
               </label>
               <span className="text-[10px] font-black uppercase tracking-wide text-violet-600">
@@ -874,7 +874,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
                 setIsGeneralVhlManual(true);
                 setGeneralVhl(event.target.value);
               }}
-              className="mt-1 w-full rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-xl font-bold text-violet-800 outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-200 disabled:opacity-60"
+              className="mt-1 h-8 w-full max-w-[140px] rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-base font-bold text-violet-800 outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-200 disabled:opacity-60"
               aria-describedby="general-vhl-help"
             />
             <div id="general-vhl-help" className="mt-1 flex items-center justify-between gap-2 text-[10px] text-slate-400">
@@ -895,13 +895,13 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 flex items-center gap-4">
-          <div className="p-3 bg-blue-100 text-blue-600 rounded-lg">
-            <Users className="w-6 h-6" />
+        <div className="bg-white p-3 rounded-xl shadow-sm border border-slate-200 flex items-center gap-3">
+          <div className="p-2 bg-blue-100 text-blue-600 rounded-lg">
+            <Users className="w-5 h-5" />
           </div>
           <div className="min-w-0 flex-1">
-            <span className="text-sm text-slate-500 block font-medium">Bolsa de Horas Disponibles</span>
-            <span className="text-2xl font-bold text-slate-900">
+            <span className="text-xs text-slate-500 block font-medium">Bolsa de Horas Disponibles</span>
+            <span className="text-lg font-bold text-slate-900">
               {totalAvailableHours} hrs <span className="text-xs text-slate-400 font-normal">/semana</span>
             </span>
             <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
@@ -923,19 +923,19 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
           </div>
         </div>
 
-        <div className={`p-5 rounded-xl shadow-sm border flex items-center gap-4 ${
+        <div className={`p-3 rounded-xl shadow-sm border flex items-center gap-3 ${
           hasHourDeficit
             ? 'bg-red-50 border-red-200 text-red-900'
             : 'bg-emerald-50 border-emerald-200 text-emerald-900'
         }`}>
-          <div className={`p-3 rounded-lg ${
+          <div className={`p-2 rounded-lg ${
             hasHourDeficit ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'
           }`}>
-            {hasHourDeficit ? <AlertTriangle className="w-6 h-6" /> : <CheckCircle className="w-6 h-6" />}
+            {hasHourDeficit ? <AlertTriangle className="w-5 h-5" /> : <CheckCircle className="w-5 h-5" />}
           </div>
           <div>
-            <span className="text-sm opacity-80 block font-medium">Horas Teoricas Requeridas</span>
-            <span data-testid="projection-required-week-hours" className="text-2xl font-bold">{weeklyRequiredHours.toFixed(0)} hrs</span>
+            <span className="text-xs opacity-80 block font-medium">Horas Teoricas Requeridas</span>
+            <span data-testid="projection-required-week-hours" className="text-lg font-bold">{weeklyRequiredHours.toFixed(0)} hrs</span>
             <span className="text-xs block mt-0.5 font-bold opacity-80">
               VHL resultante S/. {resultingGeneralVhl.toFixed(2)}
             </span>
@@ -992,11 +992,10 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="p-5 border-b border-slate-100 bg-slate-50/50">
-          <h3 className="font-semibold text-slate-900">Distribucion de Personal e Ingresos por Hora</h3>
+          <h3 className="font-semibold text-slate-900">Distribución de personal e ingresos cada 15 minutos</h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            Vestido se calcula con la venta de la hora dividida entre el VHL general. Las áreas por factor multiplican las personas asignadas a Vestido. La distribución por hora y las horas teóricas se muestran sin decimales.
-            Cada área conserva sus mínimos, topes y ajustes manuales.
-            Haz clic para sumar una persona y Ctrl + clic para restarla.
+            Las ventas históricas por hora se reparten entre cuatro tramos. Las horas requeridas suman 0,25 h por persona y tramo; VHL, mínimos y topes conservan su escala por hora.
+            Cada ajuste afecta solo a 15 minutos. Clic o Enter: sumar · Ctrl + clic o Ctrl + Enter: restar.
           </p>
           <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
             <span className="inline-flex items-center gap-1"><span aria-hidden="true" className="h-3 w-3 rounded bg-blue-100" />1 persona</span>
@@ -1019,41 +1018,40 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
           </div>
         )}
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
+        <div className="projection-grid-scroll" role="region" aria-label="Proyección por tramos de 15 minutos" tabIndex={0}>
+          <table className="projection-grid" style={{ width: 160 + scheduleMatrix.columns.length * 40 }}>
+            <colgroup>
+              <col style={{ width: 160 }} />
+              {scheduleMatrix.columns.map(col => <col key={col.hour} style={{ width: 40 }} />)}
+            </colgroup>
             <thead>
               <tr className="bg-slate-100 text-slate-700 uppercase text-[11px] font-bold tracking-wider border-b border-slate-200">
-                <th className="p-4 min-w-[220px] bg-slate-100 sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">Area / Posicion / Parametro</th>
-                <th className="p-4 text-center bg-slate-200/60 font-bold text-slate-900">Logica</th>
+                <th scope="col" className="projection-area bg-slate-100">Área / posición</th>
                 {scheduleMatrix.columns.map((col) => (
-                  <th key={col.hour} className="p-3 text-center min-w-[95px]">{col.hour}</th>
+                  <th key={col.hour} scope="col" data-slot={col.hour} data-hour-start={col.hour.endsWith(':00')} title={`${col.hour} · tramo de 15 minutos`}>{col.hour}</th>
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-200 text-sm">
+            <tbody className="divide-y divide-slate-200 text-xs">
               <tr className="bg-orange-50/60 font-semibold text-orange-950">
-                <td className="p-4 sticky left-0 bg-orange-50 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] z-10 flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-orange-500"></span>
-                  Venta base por Hora (S/.)
+                <td className="projection-area bg-orange-50">
+                  Venta base (S/)
+                  <span className="projection-detail">Por tramo de 15 min</span>
                 </td>
-                <td className="p-4 text-center bg-orange-100/40">-</td>
                 {scheduleMatrix.columns.map((col) => (
-                  <td key={col.hour} className="p-3 text-center text-orange-700 font-bold">
-                    S/. {displayWhole(col.sale)}
+                  <td key={col.hour} data-sale-slot={col.hour} data-hour-start={col.hour.endsWith(':00')} title={`Venta base a las ${col.hour}: S/ ${col.sale.toFixed(2)}`} className="text-orange-700 font-bold">
+                    {displayWhole(col.sale)}
                   </td>
                 ))}
               </tr>
 
               {positions.map((position) => (
                 <tr key={position.id} data-position-id={position.id} className="hover:bg-slate-50/80 transition-colors">
-                  <td className="p-4 sticky left-0 bg-white shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] z-10 font-medium text-slate-700">
-                    {position.name}
-                    <span className={`mt-1 block text-[10px] font-semibold ${getProjectionDepartment(position.department) ? 'text-slate-500' : 'text-amber-700'}`}>
-                      {PROJECTION_DEPARTMENTS[getProjectionDepartment(position.department)] || 'Sin clasificar'}
+                  <td className="projection-area bg-white font-medium text-slate-700" title={`${position.name} · ${position.id === vestidoPositionId ? 'Venta por hora ÷ VHL general' : LOGIC_LABELS[position.logic]}`}>
+                    <span className="projection-name">{position.name}</span>
+                    <span className={`projection-detail ${getProjectionDepartment(position.department) ? 'text-slate-500' : 'text-amber-700'}`}>
+                      {PROJECTION_DEPARTMENTS[getProjectionDepartment(position.department)] || 'Sin clasificar'} · {position.id === vestidoPositionId ? 'VHL' : ({ sales: 'Factor', service: 'Trx', driver: 'Driver', fixed: 'Fijo' }[position.logic])}
                     </span>
-                  </td>
-                  <td className="p-3 text-center bg-slate-50 text-xs font-bold text-slate-600">
-                    {position.id === vestidoPositionId ? 'Venta por hora ÷ VHL general' : LOGIC_LABELS[position.logic]}
                   </td>
                   {scheduleMatrix.columns.map((col) => {
                     const requiredStaff = col.requiredByPosition[position.id] || 0;
@@ -1063,12 +1061,22 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
                       <td
                         key={col.hour}
                         data-hour={col.hour}
+                        data-hour-start={col.hour.endsWith(':00')}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`${position.name}, ${col.hour}: ${shownStaff} personas`}
+                        onKeyDown={event => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            handleStaffCellClick(event, position.id, col.hour, requiredStaff);
+                          }
+                        }}
                         onClick={(event) =>
                           handleStaffCellClick(event, position.id, col.hour, requiredStaff)
                         }
                         title={`${shownStaff} ${shownStaff === '1' ? 'persona' : 'personas'} · ${staffColor.limit === null ? 'Sin límite configurado' : `Límite: ${displayWhole(staffColor.limit)}`}. Clic: sumar | Ctrl + clic: restar`}
                         style={staffColor.style}
-                        className={`p-3 text-center transition-all cursor-pointer select-none hover:ring-2 hover:ring-inset hover:ring-orange-400 ${requiredStaff > 0 ? 'font-bold' : 'font-normal'}`}
+                        className={`text-center transition-colors cursor-pointer select-none hover:ring-2 hover:ring-inset hover:ring-orange-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-orange-500 ${requiredStaff > 0 ? 'font-bold' : 'font-normal'}`}
                       >
                         {shownStaff}
                       </td>
@@ -1083,10 +1091,9 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
                 ...(unclassifiedPositions.length > 0 ? [{ key: 'unclassified', label: 'Sin clasificar', className: 'bg-amber-50 text-amber-900' }] : []),
               ].map(group => (
                 <tr key={group.key} data-staff-total={group.key} className={`${group.className} font-semibold`}>
-                  <td className={`sticky left-0 z-10 p-4 ${group.className}`}>{group.label}</td>
-                  <td className="p-4 text-center text-xs">Subtotal</td>
+                  <td className={`projection-area ${group.className}`}>{group.label}<span className="projection-detail">Subtotal</span></td>
                   {scheduleMatrix.columns.map(col => (
-                    <td key={col.hour} data-hour={col.hour} className="p-3 text-center font-extrabold" title={`${group.label}: ${displayWhole(col.staffByDepartment[group.key])} ${displayWhole(col.staffByDepartment[group.key]) === '1' ? 'colaborador' : 'colaboradores'}`}>
+                    <td key={col.hour} data-hour={col.hour} data-hour-start={col.hour.endsWith(':00')} className="text-center font-extrabold" title={`${group.label}: ${displayWhole(col.staffByDepartment[group.key])} ${displayWhole(col.staffByDepartment[group.key]) === '1' ? 'colaborador' : 'colaboradores'}`}>
                       {displayWhole(col.staffByDepartment[group.key])}
                     </td>
                   ))}
@@ -1094,16 +1101,16 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
               ))}
 
               <tr data-staff-total="all" className="bg-slate-800 text-white font-semibold">
-                <td className="p-4 sticky left-0 bg-slate-800 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.2)] z-10">
-                  Total Colaboradores Requeridos
+                <td className="projection-area bg-slate-800">
+                  Total requerido
                 </td>
-                <td className="p-4 text-center bg-slate-900">-</td>
                 {scheduleMatrix.columns.map((col) => (
                   <td
                     key={col.hour}
                     data-hour={col.hour}
+                    data-hour-start={col.hour.endsWith(':00')}
                     title={`Base de Vestido (venta ÷ VHL): ${displayWhole(col.generalRequiredStaff)} · Personas en Vestido: ${displayWhole(col.vestidoStaff)} · Total asignado: ${displayWhole(col.totalStaffAtHour)}`}
-                    className={`p-3 text-center font-extrabold ${
+                    className={`text-center font-extrabold ${
                       col.totalStaffAtHour > 5 ? 'text-amber-400' : 'text-white'
                     }`}
                   >

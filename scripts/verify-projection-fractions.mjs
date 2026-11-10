@@ -22,7 +22,7 @@ const open=async()=>{await page.getByRole('button',{name:'Configurar Posiciones'
 const pass=message=>{passed.push(message);console.log(`PASS: ${message}`)};
 const distributionTable=()=>cell('cocina').locator('xpath=ancestor::table');
 const assertWholeDistribution=async()=>{
- const quantities=await distributionTable().locator('tbody td').evaluateAll(elements=>elements.map(element=>({text:element.textContent.trim(),title:element.getAttribute('title')||''})));
+ const quantities=await distributionTable().locator('tbody td[data-hour]').evaluateAll(elements=>elements.map(element=>({text:element.textContent.trim(),title:element.getAttribute('title')||''})));
  for(const {text,title}of quantities){
   assert.doesNotMatch(text,/\d[.,]\d/,`La tabla no debe mostrar cantidades decimales: ${text}`);
   assert.doesNotMatch(title,/\d[.,]\d/,`El tooltip no debe mostrar cantidades decimales: ${title}`);
@@ -50,9 +50,10 @@ const check=async({vestido,factor,production,all,day,week})=>{
  await modal.getByRole('button',{name:'Cerrar',exact:true}).click();
  observations.push({vestido:await count('cocina'),factor:await count('fraction'),production:await total('production'),service:await total('service'),all:await total('all'),dayRaw:day,weekRaw:week,dayDisplay,weekDisplay,balanceDisplay:Number(balance[3])});
 };
+const rawAt=(config,row)=>{const day=config.requirements?.monday;return day?.matrix?.[row]?.[(720-(day.startMinutes??480))/(day.intervalMinutes??60)];};
 const rawSavedHours=requirements=>{
  const day=source=>Object.values(source?.matrix||{}).reduce((sum,row)=>sum+Object.values(row||{}).reduce((total,value)=>total+Number(value),0),0);
- return {day:day(requirements.monday),week:Object.values(requirements).reduce((sum,source)=>sum+day(source),0)};
+ return {day:day(requirements.monday)*(requirements.monday.intervalMinutes??60)/60,week:Object.values(requirements).reduce((sum,source)=>sum+day(source)*(source.intervalMinutes??60)/60,0)};
 };
 try{
  await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Fractional projection QA startup timeout')),30000);server.once('error',error=>{clearTimeout(timeout);reject(error)});server.once('exit',code=>{clearTimeout(timeout);reject(Error(`QA server exited${code}`))});server.stdout.on('data',data=>{if(data.toString().includes('Projection store QA:')){clearTimeout(timeout);resolve()}})});
@@ -70,36 +71,36 @@ try{
  await seedProjectionDemandQaFixture(page.request,base,fixture);
  await page.goto(base);await cell('cocina').waitFor();
  await check({vestido:2.2,factor:0.88,production:3.08,all:4.33,day:6.83,week:47.81});
- const distribution=page.getByRole('heading',{name:'Distribucion de Personal e Ingresos por Hora',exact:true}).locator('xpath=../..');
+ const distribution=page.getByRole('heading',{name:'Distribución de personal e ingresos cada 15 minutos',exact:true}).locator('xpath=../..');
  await distribution.screenshot({path:`${output}/distribucion-personal-sin-decimales.png`});
  await poll(async()=>{
   const saved=(await state()).configurations['store-a'];
-  return near(saved.requirements?.monday?.matrix?.['0']?.['1'],2.2)&&near(saved.requirements?.monday?.matrix?.['1']?.['1'],0.88);
+  return near(rawAt(saved,0),2.2)&&near(rawAt(saved,1),0.88);
  },'Saved projection requirements must retain the fractional staffing');
  const initialHours=rawSavedHours((await state()).configurations['store-a'].requirements);
  closeTo(initialHours.day,6.83);closeTo(initialHours.week,47.81);
  pass('La distribución muestra personal y totales enteros, conserva2.2/.88/1.25 en datos y HH6.83/47.81; las tarjetas muestran7/48');
 
  await cell('cocina').click();
- await check({vestido:3.2,factor:1.28,production:4.48,all:5.73,day:8.23,week:49.21});
+ await check({vestido:3.2,factor:1.28,production:4.48,all:5.73,day:7.18,week:48.16});
  await poll(async()=>near((await state()).configurations['store-a'].manualStaffByDay?.lunes?.cocina?.['12:00'],3.2),'Manual source3.2 must persist without rounding');
  await cell('cocina').click({modifiers:['Control']});
  await check({vestido:2.2,factor:0.88,production:3.08,all:4.33,day:6.83,week:47.81});
  await cell('fraction').click();
- await check({vestido:2.2,factor:1.88,production:4.08,all:5.33,day:7.83,week:48.81});
+ await check({vestido:2.2,factor:1.88,production:4.08,all:5.33,day:7.08,week:48.06});
  await poll(async()=>{
   const saved=(await state()).configurations['store-a'];
   return near(saved.manualStaffByDay?.lunes?.cocina?.['12:00'],2.2)&&near(saved.manualStaffByDay?.lunes?.fraction?.['12:00'],1.88);
  },'Manual decimal values must be persisted without rounding');
  await page.reload();await cell('cocina').waitFor();
- await check({vestido:2.2,factor:1.88,production:4.08,all:5.33,day:7.83,week:48.81});
+ await check({vestido:2.2,factor:1.88,production:4.08,all:5.33,day:7.08,week:48.06});
  pass('Los clics manuales guardan3.2/1.88 sin redondear, propagan fracciones y sobreviven a la recarga con presentación entera');
 
  const saved=(await state()).configurations['store-a'];
- closeTo(saved.requirements.monday.matrix['0']['1'],2.2);
- closeTo(saved.requirements.monday.matrix['1']['1'],1.88);
- closeTo(saved.requirements.monday.matrix['2']['1'],1.25);
- const manualHours=rawSavedHours(saved.requirements);closeTo(manualHours.day,7.83);closeTo(manualHours.week,48.81);
+ closeTo(rawAt(saved,0),2.2);
+ closeTo(rawAt(saved,1),1.88);
+ closeTo(rawAt(saved,2),1.25);
+ const manualHours=rawSavedHours(saved.requirements);closeTo(manualHours.day,7.08);closeTo(manualHours.week,48.06);
 
  const fractionalIncome=makeProjectionDemandQaFixture({storeId:'store-b',hourlySale:1100.25,generalVhl:500});
  fractionalIncome.configuration.vestidoPositionId='cocina';
@@ -111,8 +112,8 @@ try{
  const table=distributionTable();
  const hours=(await table.locator('thead th').allTextContents()).map(text=>text.trim());
  const incomeText=(await table.locator('tbody tr').first().locator('td').nth(hours.indexOf('12:00')).textContent()).trim();
- assert.equal(incomeText.replace(/\s+/g,' '),'S/. 1100','El ingreso por hora debe mostrarse sin decimales');
- await poll(async()=>near((await state()).configurations['store-b'].requirements?.monday?.matrix?.['0']?.['1'],2.2005),'Fractional income projection did not persist');
+ assert.equal(incomeText.replace(/\s+/g,' '),'275','El ingreso por cuarto debe mostrarse sin decimales');
+ await poll(async()=>near(rawAt((await state()).configurations['store-b'],0),2.2005),'Fractional income projection did not persist');
  const incomeSaved=(await state()).configurations['store-b'];
  const incomeHours=rawSavedHours(incomeSaved.requirements);closeTo(incomeHours.day,6.8307);closeTo(incomeHours.week,47.8149);
  assert.equal(incomeSaved.salesByDay.lunes['12:00'],1100.25);
@@ -127,7 +128,7 @@ try{
  await assertWholeDistribution();
  await distribution.screenshot({path:`${output}/distribucion-mobile-sin-decimales.png`});
  observations.push({incomeText,dayRaw:incomeHours.day,weekRaw:incomeHours.week});
- pass('El ingreso1100.25 se presentaS/.1100 y la tabla móvil no muestra decimales; datos2.2005/.8802 y HH6.8307/47.8149 se conservan precisos');
+ pass('El ingreso horario1100.25 se reparte en cuartos que se presentan275 y la tabla móvil no muestra decimales; datos2.2005/.8802 y HH6.8307/47.8149 se conservan precisos');
  assert.deepEqual(errors,[]);assert.deepEqual(unexpectedNetwork,[]);
  await writeFile(`${output}/resultado.json`,JSON.stringify({status:'PASS',passed,observations,errors,unexpectedNetwork,
   scope:'Local-only real React projection with isolated HTTP fixtures; no production access, deployment, or commit'},null,2));

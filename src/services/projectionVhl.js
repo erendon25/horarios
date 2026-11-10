@@ -83,12 +83,16 @@ export const calculatePositionStaffByGeneralVhl = ({
   manualByPosition = {},
   getPositionDemand,
   isOperativeHour = true,
+  intervalMinutes = 60,
 }) => {
   const finiteNonnegative = (value) => {
     const number = Number(value);
     return Number.isFinite(number) && number >= 0 ? number : 0;
   };
-  const normalizedSale = finiteNonnegative(sale);
+  // VHL and service/driver capacities are hourly rates; a quarter-hour sale
+  // represents one quarter of that work, not one quarter of the headcount.
+  const durationHours = intervalMinutes === 15 ? 0.25 : 1;
+  const normalizedSale = finiteNonnegative(sale) / durationHours;
   const normalizedVhl = finiteNonnegative(generalVhl);
   const generalRequiredStaff = normalizedVhl > 0 && normalizedSale > 0
     ? finiteNonnegative(normalizedSale / normalizedVhl)

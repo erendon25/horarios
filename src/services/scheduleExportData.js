@@ -118,7 +118,10 @@ export function getProjectionForDay(requirements, projectionPositions, day) {
   const source = requirements[day] || {};
   const fallback = projectionPositions.map(position => typeof position === 'string' ? position : position?.name).filter(Boolean);
   const positions = Array.isArray(source.positions) && source.positions.length ? source.positions : fallback;
-  const asArray = value => Array.isArray(value) ? value : Object.keys(value || {}).sort((a, b) => +a - +b).map(key => value[key]);
-  const matrix = asArray(source.matrix).map(asArray);
-  return { positions, matrix: positions.map((_, i) => matrix[i] || Array(21).fill(0)) };
+  // Keep sparse numeric indices and timeline metadata intact for coverage,
+  // candidate checks and the seven exported daily worksheets.
+  const timeline = {};
+  if (Object.hasOwn(source, 'intervalMinutes')) timeline.intervalMinutes = source.intervalMinutes;
+  if (Object.hasOwn(source, 'startMinutes')) timeline.startMinutes = source.startMinutes;
+  return { ...timeline, positions, matrix: positions.map((_, i) => source.matrix?.[i] || []) };
 }

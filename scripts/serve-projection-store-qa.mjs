@@ -55,7 +55,7 @@ function App(){
 createRoot(document.getElementById('root')).render(<App/>);
 `;
 const bundle = await build({ stdin: { contents: entry, loader: 'jsx', resolveDir: process.cwd() },
-  bundle: true, write: false, format: 'iife', jsx: 'automatic',
+  bundle: true, write: false, outdir: 'output/projection-store-qa/bundle', format: 'iife', jsx: 'automatic',
   plugins: [{ name: 'isolated-projection-store-transport', setup(builder) {
     builder.onLoad({ filter: /lib[\\/]supabase[\\/]firestoreCompat\.js$/ }, () => ({ contents: transport, loader: 'js' }));
     builder.onLoad({ filter: /contexts[\\/]AuthContext\.jsx$/ }, () => ({ contents: auth, loader: 'jsx' }));
@@ -63,7 +63,8 @@ const bundle = await build({ stdin: { contents: entry, loader: 'jsx', resolveDir
   } }],
 });
 const css = (await postcss([tailwind({ content: ['./src/**/*.{js,jsx}'] })])
-  .process('@tailwind base;@tailwind components;@tailwind utilities;', { from: undefined })).css;
+  .process('@tailwind base;@tailwind components;@tailwind utilities;', { from: undefined })).css
+  + '\n' + (bundle.outputFiles.find(file => file.path.endsWith('.css'))?.text || '');
 const json = (response,value) => { response.setHeader('Content-Type','application/json');response.end(JSON.stringify(value)); };
 const body = async request => { let raw='';for await(const chunk of request)raw+=chunk;return JSON.parse(raw||'{}'); };
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms || 0));
@@ -125,7 +126,7 @@ const server = createServer(async(request,response)=>{
    }
    throw Error('Unexpected operation');
   }
-  if(request.url==='/app.js'){response.setHeader('Content-Type','text/javascript');return response.end(bundle.outputFiles[0].text);}
+  if(request.url==='/app.js'){response.setHeader('Content-Type','text/javascript');return response.end(bundle.outputFiles.find(file => file.path.endsWith('.js')).text);}
   if(request.url==='/style.css'){response.setHeader('Content-Type','text/css');return response.end(css);}
   response.setHeader('Content-Type','text/html');
   response.end('<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Proyección multi-tienda QA</title><link rel="stylesheet" href="/style.css"><body><div id="root"></div><script src="/app.js"></script></body></html>');
