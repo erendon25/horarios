@@ -10,6 +10,8 @@ import WeeklyScheduleExcelButton from './WeeklyScheduleExcelButton';
 import { getHeatmapAssignments, getProjectionForDay, getExportShiftSegments, getPositionSegments, canLimitPositionCoverage } from '../services/scheduleExportData';
 import { summarizeProjectionHours } from '../services/projectionHours';
 import ProjectionHoursSummary from './ProjectionHoursSummary';
+import ScheduleRestDayMetric from './ScheduleRestDayMetric';
+import { countAssignedRestDays } from '../services/scheduleRestDays';
 import ScheduleFocusToolbar from './ScheduleFocusToolbar';
 import ScheduleFocusStaffPanel from './ScheduleFocusStaffPanel';
 import ScheduleFocusShiftEditor from './ScheduleFocusShiftEditor';
@@ -2195,6 +2197,9 @@ export default function WeeklyScheduleEditor() {
 
                                     const vhlExt = totalHoursWithExtras > 0 ? (vta / totalHoursWithExtras).toFixed(1) : "0.0";
                                     const thlExt = totalHoursWithExtras > 0 ? (txs / totalHoursWithExtras).toFixed(1) : "0.0";
+                                    const assignedRestCount = countAssignedRestDays({
+                                        staff: activeStaff, schedules, day: selectedDay, date: getSelectedDateStr(),
+                                    });
 
                                     if (focusMode) return <div className="mt-2 flex flex-wrap items-center gap-3 rounded-lg border border-gray-200 bg-gray-50 p-2">
                                         {globalFiltersActive && <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">Vista filtrada</span>}
@@ -2205,13 +2210,12 @@ export default function WeeklyScheduleEditor() {
                                             </div>
                                             <ProjectionHoursSummary summary={projectionHours} dayLabel={weekdayLabels[selectedDay]} compact />
                                         </div>
-                                        <details className="relative text-xs"><summary className="cursor-pointer rounded-lg border border-gray-200 bg-white px-3 py-2 font-semibold text-gray-700">Más métricas</summary>
-                                            <dl className="absolute right-0 z-30 mt-1 grid w-56 grid-cols-2 gap-3 rounded-xl border bg-white p-3 shadow-lg">
-                                                <div><dt>Ventas / TRX</dt><dd className="font-bold text-green-700">S/ {Math.round(vta)} / {Math.round(txs)}</dd></div>
-                                                <div><dt>VHL (c/extras)</dt><dd className="font-bold text-blue-700">S/ {vhl}{totalHoursWithExtras > totalHours && ` (S/ ${vhlExt})`}</dd></div>
-                                                <div><dt>THL (c/extras)</dt><dd className="font-bold text-purple-700">{thl}{totalHoursWithExtras > totalHours && ` (${thlExt})`}</dd></div>
-                                            </dl>
-                                        </details>
+                                        <dl data-testid="heatmap-extra-metrics" aria-label="Métricas del día" className="grid min-w-0 flex-[1_1_280px] grid-cols-3 gap-x-3 gap-y-1 text-xs">
+                                            <div className="min-w-0"><dt className="text-[10px] font-semibold uppercase text-gray-500">Ventas / TRX</dt><dd className="break-words font-bold tabular-nums text-green-700">S/ {Math.round(vta)} / {Math.round(txs)}</dd></div>
+                                            <div className="min-w-0"><dt className="text-[10px] font-semibold uppercase text-gray-500">VHL (c/extras)</dt><dd className="break-words font-bold tabular-nums text-blue-700">S/ {vhl}{totalHoursWithExtras > totalHours && ` (S/ ${vhlExt})`}</dd></div>
+                                            <div className="min-w-0"><dt className="text-[10px] font-semibold uppercase text-gray-500">THL (c/extras)</dt><dd className="break-words font-bold tabular-nums text-purple-700">{thl}{totalHoursWithExtras > totalHours && ` (${thlExt})`}</dd></div>
+                                        </dl>
+                                        <ScheduleRestDayMetric count={assignedRestCount} ready={draft.ready} dayLabel={weekdayLabels[selectedDay]} />
                                     </div>;
 
                                     return (
@@ -2246,6 +2250,7 @@ export default function WeeklyScheduleEditor() {
                                                     {totalHoursWithExtras > totalHours && <span className="text-orange-500 ml-1">({thlExt})</span>}
                                                 </span>
                                             </div>
+                                            <ScheduleRestDayMetric count={assignedRestCount} ready={draft.ready} dayLabel={weekdayLabels[selectedDay]} />
                                         </div>
                                     );
                                 })()}

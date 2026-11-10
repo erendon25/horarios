@@ -1,10 +1,10 @@
 import { operationalStaffCount } from './projectionStaffCount.js';
+import { projectionQuantityAtMinute } from './projectionTimeline.js';
 
 // Shared by the on-screen matrix and all daily Excel worksheets.
 const HEATMAP_START_MINUTES = 7 * 60;
 const HEATMAP_END_MINUTES = 25 * 60;
 const HEATMAP_INTERVAL_MINUTES = 15;
-const PROJECTION_START_MINUTES = 8 * 60;
 const isOnBreak = (person, minute) => minute >= person.breakStartMinutes && minute < person.breakEndMinutes;
 
 export const HOURS = Array.from(
@@ -51,33 +51,6 @@ export function buildHeatmapRows(assigned = [], requirements = {}) {
 
     // === PROYECCION ===
     const positions = Array.isArray(requirements.positions) ? requirements.positions : [];
-    const compressed = requirements.matrix || {};
-
-    // Cada llave en compressed es un índice (0...20) basado en la proyección desde las 08:00.
-    // El mapa empieza a las 07:00, por eso anteponemos cuatro intervalos de 15 minutos.
-    const projectionOffsetSlots = Math.max(
-        0,
-        (PROJECTION_START_MINUTES - HEATMAP_START_MINUTES) / HEATMAP_INTERVAL_MINUTES
-    );
-    const expanded = Object.keys(compressed)
-        .sort((a, b) => Number(a) - Number(b))
-        .map(k => {
-            const sourceRow = Array.isArray(compressed[k])
-                ? compressed[k]
-                : Object.keys(compressed[k] || {})
-                    .sort((a, b) => Number(a) - Number(b))
-                    .map(col => compressed[k][col]);
-            const fullRow = [];
-
-            // Alineación de 07:00 a 08:00
-            for (let i = 0; i < projectionOffsetSlots; i++) fullRow.push(0);
-
-            for(let i=0; i<21; i++) {
-               const qty = operationalStaffCount(sourceRow[i]);
-               fullRow.push(qty, qty, qty, qty);
-            }
-            return fullRow.slice(0, HOURS.length);
-        });
 
     positions.forEach((pos, i) => {
         const norm = normalize(pos);
@@ -85,7 +58,9 @@ export function buildHeatmapRows(assigned = [], requirements = {}) {
         displayNames.set(norm, name);
         need[norm] = need[norm] || {};
 
-        const row = expanded[i] || Array(HOURS.length).fill(0);
+        const row = HOURS.map((_, column) => operationalStaffCount(projectionQuantityAtMinute(
+            requirements, i, HEATMAP_START_MINUTES + column * HEATMAP_INTERVAL_MINUTES
+        )));
         row.forEach((qty, j) => {
             if (qty > 0) {
                 need[norm][HOURS[j]] = qty;
