@@ -62,13 +62,13 @@ const entry=`import React from 'react';import {createRoot} from 'react-dom/clien
 const profile=${JSON.stringify(profile)};const mode=new URLSearchParams(location.search).get('mode')||location.pathname;
 const content=mode==='/admin'?<main className="mx-auto max-w-4xl p-3"><ScheduleAccessSettings storeId="qa-store"/></main>:mode==='/study'?<main className="mx-auto max-w-3xl p-4"><StudyScheduleForm storeId="qa-store"/></main>:mode==='/request'?<main className="mx-auto max-w-3xl p-4"><ScheduleRequestForm perfil={profile}/></main>:mode==='/requests'?<main className="mx-auto max-w-3xl p-4"><MyScheduleRequests perfil={profile}/></main>:<CollaboratorDashboard/>;
 createRoot(document.getElementById('root')).render(<BrowserRouter><div className="bg-amber-100 p-3 font-semibold">PRUEBA LOCAL · datos ficticios · sin acceso a producción</div>{content}</BrowserRouter>);`;
-const unrelated=/components\/(WeeklyView|CollaboratorSuggestiveGoals|HolidayBalancePanel|HolidayForm|ProfilePhotoEditor|ModalSelectorDePosiciones)\.jsx$/;
+const unrelated=/components[\\/](WeeklyView|CollaboratorSuggestiveGoals|HolidayBalancePanel|HolidayForm|ProfilePhotoEditor|ModalSelectorDePosiciones)\.jsx$/;
 const bundle=await build({stdin:{contents:entry,loader:'jsx',resolveDir:process.cwd()},bundle:true,write:false,format:'iife',jsx:'automatic',loader:{'.png':'dataurl'},plugins:[{name:'isolated-schedule-access',setup(builder){
- builder.onLoad({filter:/lib\/supabase\/firestoreCompat\.js$/},()=>({contents:transport,loader:'js'}));
- builder.onLoad({filter:/contexts\/AuthContext\.jsx$/},()=>({contents:auth,loader:'js'}));
- builder.onLoad({filter:/lib\/supabase\/client\.js$/},()=>({contents:client,loader:'js'}));
+ builder.onLoad({filter:/lib[\\/]supabase[\\/]firestoreCompat\.js$/},()=>({contents:transport,loader:'js'}));
+ builder.onLoad({filter:/contexts[\\/]AuthContext\.jsx$/},()=>({contents:auth,loader:'js'}));
+ builder.onLoad({filter:/lib[\\/]supabase[\\/]client\.js$/},()=>({contents:client,loader:'js'}));
  builder.onLoad({filter:unrelated},()=>({contents:'export default function UnrelatedPanel(){return null}',loader:'jsx'}));
- builder.onLoad({filter:/services\/competition\.js$/},()=>({contents:'export async function hasPublishedCompetition(){return false}',loader:'js'}));
+ builder.onLoad({filter:/services[\\/]competition\.js$/},()=>({contents:'export async function hasPublishedCompetition(){return false}',loader:'js'}));
 }}]});
 const css=(await postcss([tailwind({content:['./src/**/*.{js,jsx}']})]).process('@tailwind base;@tailwind components;@tailwind utilities;',{from:undefined})).css;
 const server=createServer(async(request,response)=>{

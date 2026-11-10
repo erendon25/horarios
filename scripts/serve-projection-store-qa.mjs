@@ -57,9 +57,9 @@ createRoot(document.getElementById('root')).render(<App/>);
 const bundle = await build({ stdin: { contents: entry, loader: 'jsx', resolveDir: process.cwd() },
   bundle: true, write: false, format: 'iife', jsx: 'automatic',
   plugins: [{ name: 'isolated-projection-store-transport', setup(builder) {
-    builder.onLoad({ filter: /lib\/supabase\/firestoreCompat\.js$/ }, () => ({ contents: transport, loader: 'js' }));
-    builder.onLoad({ filter: /contexts\/AuthContext\.jsx$/ }, () => ({ contents: auth, loader: 'jsx' }));
-    builder.onLoad({ filter: /src\/supabase\.js$/ }, () => ({ contents: 'export const db={};', loader: 'js' }));
+    builder.onLoad({ filter: /lib[\\/]supabase[\\/]firestoreCompat\.js$/ }, () => ({ contents: transport, loader: 'js' }));
+    builder.onLoad({ filter: /contexts[\\/]AuthContext\.jsx$/ }, () => ({ contents: auth, loader: 'jsx' }));
+    builder.onLoad({ filter: /src[\\/]supabase\.js$/ }, () => ({ contents: 'export const db={};', loader: 'js' }));
   } }],
 });
 const css = (await postcss([tailwind({ content: ['./src/**/*.{js,jsx}'] })])

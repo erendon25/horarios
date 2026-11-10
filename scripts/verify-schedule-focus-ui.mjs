@@ -40,6 +40,7 @@ try{
  await poll(async()=>(await map().locator('td[data-range-hour]').count())>0,'La matriz no terminó de cargar');
  await assertMap();assert.equal(await panel().count(),0,'El panel debe iniciar cerrado');
  const trainerNormal=map().locator('td[title$=": Entrenador"]').first(),trainerExcess=map().locator('td[title$=": Entrenador · Exceso"]').first();
+ await poll(async()=>await trainerNormal.count()&&await trainerExcess.count(),'La cobertura de entrenadores no terminó de cargar');
  assert.ok(await trainerNormal.count());assert.ok(await trainerExcess.count());assert.match(await trainerNormal.getAttribute('class'),/bg-orange-500/);assert.match(await trainerExcess.getAttribute('class'),/bg-red-500/);
  const baseMap=await digest(),baseTotal=await page.getByTestId('heatmap-total-hours').textContent(),baseProjection=await page.getByTestId('projection-hours-day').textContent();
  await page.screenshot({path:`${output}/focus-desktop-mapa.png`});

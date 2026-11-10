@@ -388,3 +388,36 @@ test('desmarcar feriado envía false y no reaparece al volver a cargar el horari
   assert.equal(reloaded.monday.holiday,false);
   assert.equal(reloaded.monday.start,'08:00');
 });
+
+test('exportación filtra en servidor y pagina más de 1000 perfiles incluso con límite menor', async () => {
+  const rows = Array.from({ length: 1203 }, (_, i) => ({ id: String(i).padStart(5, '0'), first_name: `Persona ${i}`, store_id: 'store', position: 'PT', metadata: {} }));
+  const calls = [];
+  const client = { from(table) {
+    assert.equal(table, 'staff_profiles');
+    const query = {
+      select(columns, options) { assert.equal(columns, '*'); assert.equal(options.count, 'exact'); return query; },
+      eq(key, value) { assert.equal(key, 'store_id'); assert.equal(value, 'store'); return query; },
+      order(key, options) { assert.equal(key, 'id'); assert.equal(options.ascending, true); return query; },
+      async range(from, to) { calls.push([from, to]); return { data: rows.slice(from, Math.min(to + 1, from + 200)), count: rows.length, error: null }; },
+    };
+    return query;
+  } };
+  const compat = await loadCompat(client);
+  const result = await compat.getStoreStaffForStudyExport('store');
+  assert.equal(result.length, 1203);
+  assert.equal(result.at(-1).name, 'Persona 1202');
+  assert.equal(result.at(-1).storeId, 'store');
+  assert.equal(calls.length, 7);
+  assert.equal(calls[1][0], 200);
+});
+
+test('exportación rechaza falta de tienda, páginas incompletas o errores de permisos', async () => {
+  for (const result of [{ data: [], count: 1, error: null }, { data: [], count: null, error: null }, { data: null, error: { code: '42501', message: 'Sin permisos' } }]) {
+    let called = false;
+    const query = { select() { return query; }, eq() { return query; }, order() { return query; }, async range() { called = true; return result; } };
+    const compat = await loadCompat({ from: () => query });
+    await assert.rejects(compat.getStoreStaffForStudyExport(''), /tienda/);
+    assert.equal(called, false);
+    await assert.rejects(compat.getStoreStaffForStudyExport('store'), /incompleta|completa|permisos/);
+  }
+});

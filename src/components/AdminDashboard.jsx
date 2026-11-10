@@ -49,6 +49,7 @@ import {
     deleteDoc,
     addDoc,
     collection,
+    getStoreStaffForStudyExport,
     getDocs,
     query,
     where,
@@ -66,6 +67,7 @@ import ArchivedStaffHistory from './ArchivedStaffHistory';
 import VHLConsultation from './VHLConsultation';
 import ScheduleRequestsManager from './ScheduleRequestsManager';
 import { isStaffActive } from './Training/staffStatus';
+import { buildStudyAvailabilityWorkbook, studyAvailabilityFilename } from '../services/studyAvailabilityExcel';
 import TrainingProgressReport from './TrainingProgressReport';
 import { summarizeStaffDashboard, sortStaffBySanitaryCard } from './staffDashboardSummary';
 
@@ -211,6 +213,15 @@ function AdminDashboard() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [storeName, setStoreName] = useState("");
+    const [exportingStudies, setExportingStudies] = useState(false);
+    const studyExportBusy = useRef(false);
+    const studyExportContext = useRef('');
+    const exportContextKey = `${currentUser?.uid || ''}:${userData?.storeId || ''}`;
+    studyExportContext.current = exportContextKey;
+    useEffect(() => {
+        studyExportContext.current = exportContextKey;
+        return () => { studyExportContext.current = ''; };
+    }, [exportContextKey]);
     const [showScheduleEditor, setShowScheduleEditor] = useState(false);
     const [selectedStaff, setSelectedStaff] = useState(null);
     const [holidayRefresh, setHolidayRefresh] = useState(0);
@@ -373,6 +384,43 @@ function AdminDashboard() {
     const handleViewHolidays = (colab) => {
         setSelectedStaff(colab);
         setShowHolidayModal(true);
+    };
+
+    const handleExportStudyAvailability = async () => {
+        if (studyExportBusy.current || !userData?.storeId || !currentUser?.uid) return;
+        studyExportBusy.current = true;
+        setExportingStudies(true);
+        const storeId = userData.storeId;
+        const context = studyExportContext.current;
+        try {
+            const [storeProfiles, storeSnapshot] = await Promise.all([
+                getStoreStaffForStudyExport(storeId),
+                getDoc(doc(db, 'stores', storeId)),
+            ]);
+            const name = storeSnapshot.exists() ? storeSnapshot.data().name : '';
+            const profiles = storeProfiles
+                .filter(person => person.storeId === storeId && isStaffActive(person));
+            // Fetch by profile id: includes collaborators without a linked app account.
+            const people = [];
+            for (let i = 0; i < profiles.length; i += 5) {
+                if (studyExportContext.current !== context) return;
+                const batch = await Promise.all(profiles.slice(i, i + 5).map(async person => {
+                    const snapshot = await getDoc(doc(db, 'study_schedules', person.id));
+                    return { ...person, study_schedule: snapshot.exists() ? snapshot.data() : {} };
+                }));
+                people.push(...batch);
+            }
+            if (studyExportContext.current !== context) return;
+            const workbook = await buildStudyAvailabilityWorkbook({ staff: people, storeId, storeName: name });
+            const buffer = await workbook.xlsx.writeBuffer();
+            if (studyExportContext.current !== context) return;
+            saveAs(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), studyAvailabilityFilename(name));
+        } catch (err) {
+            if (studyExportContext.current === context) alert(`No se pudo descargar el Excel: ${err.message}`);
+        } finally {
+            studyExportBusy.current = false;
+            if (studyExportContext.current) setExportingStudies(false);
+        }
     };
 
     const fetchAllStaffProfiles = async () => {
@@ -1773,6 +1821,16 @@ function AdminDashboard() {
                                 <option value="asc">Carnet: vence primero</option>
                                 <option value="desc">Carnet: vence después</option>
                             </select>
+
+                            <button
+                                onClick={handleExportStudyAvailability}
+                                disabled={loading || exportingStudies || !userData?.storeId}
+                                title="Descarga los estudios y días libres de todos los colaboradores activos de esta tienda, sin aplicar los filtros de búsqueda. Días libres: 08:00 a 23:00."
+                                className="flex items-center gap-2 px-4 py-3 border border-emerald-200 text-emerald-700 rounded-xl hover:bg-emerald-50 transition-all text-sm font-bold whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                <Download className="w-4 h-4" />
+                                {exportingStudies ? 'Preparando Excel...' : 'Descargar disponibilidades'}
+                            </button>
 
                             <button
                                 onClick={fetchAllStaffProfiles}
