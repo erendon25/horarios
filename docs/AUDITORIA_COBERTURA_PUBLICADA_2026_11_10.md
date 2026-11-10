@@ -102,3 +102,18 @@ La prueba de aceptación debe cubrir los flujos anteriores con datos ficticios:
 tarjeta → mapa, día libre/compensación, deshacer/rehacer, guardado explícito,
 historial y vista semanal, conteos y métricas por cuarto, breaks, categorías,
 semanas contiguas y cancelación cuando cambian la tienda, fecha o disponibilidad.
+
+## Nueva métrica solicitada: descansos asignados
+
+Se preparó «Descansos asignados» en la cabecera visible del mapa, para cobertura
+y vista clásica. Cuenta personas activas de toda la tienda con `off` asignado en
+el borrador del día seleccionado, sin depender de los filtros. No suma feriados
+compensados, preferencias de descanso en estudios ni personas sin turno.
+La cifra cambia al editar y al cambiar de día; cero y carga pendiente se muestran
+de manera distinta. Se recuperó también el bloque siempre visible de Ventas/TRX,
+VHL y THL que existía en la publicación de referencia.
+
+Validación: seis pruebas de conteo y cuatro escenarios de navegador aprobados,
+incluidos borrador/recarga, filtros, ambas vistas y ancho móvil. Build correcto.
+Esta preparación todavía no está publicada y no completa por sí sola la
+recuperación del resto de funciones enumeradas en la auditoría.
