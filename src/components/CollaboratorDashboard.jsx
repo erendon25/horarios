@@ -4,11 +4,13 @@ import { getFirestore, collection, query, where, getDocs, doc, getDoc, updateDoc
 import { useAuth } from "../contexts/AuthContext";
 // import ExtraHoursForm from "./ExtraHoursForm"; // ELIMINADO
 import HolidayForm from "./HolidayForm";
+import HolidayBalancePanel from './HolidayBalancePanel';
 import StudyScheduleForm from "./StudyScheduleForm";
 import ScheduleRequestForm from "./ScheduleRequestForm";
 import WeeklyView from "./WeeklyView";
 import CollaboratorSuggestiveGoals from "./CollaboratorSuggestiveGoals";
 import { canDownloadSchedulePdf } from "../services/schedulePdfAuthorization";
+import { hasPublishedCompetition } from "../services/competition";
 import {
   BookOpen,
   Calendar,
@@ -33,6 +35,10 @@ import {
 } from "lucide-react";
 import { MOTIVATIONAL_QUOTES } from "../constants/quotes";
 import ModalSelectorDePosiciones from "./ModalSelectorDePosiciones";
+import ProfilePhotoEditor from './ProfilePhotoEditor';
+import CollaboratorScheduleActions from './CollaboratorScheduleActions';
+import MyScheduleRequests from './MyScheduleRequests';
+import { useScheduleAccessPolicy } from '../hooks/useScheduleAccessPolicy';
 
 const CollaboratorDashboard = () => {
   const { currentUser, logout, userRole, updatePassword } = useAuth();
@@ -44,6 +50,7 @@ const CollaboratorDashboard = () => {
   const [passwordError, setPasswordError] = useState("");
   const [passwordSuccess, setPasswordSuccess] = useState(false);
   const [perfil, setPerfil] = useState(null);
+  const [competitionPublished, setCompetitionPublished] = useState(false);
   const [storeName, setStoreName] = useState("");
   const [loading, setLoading] = useState(true);
   const [modalType, setModalType] = useState(null);
@@ -59,6 +66,8 @@ const CollaboratorDashboard = () => {
   const [storeStaff, setStoreStaff] = useState([]);
   const [selectedTrainerStaff, setSelectedTrainerStaff] = useState(null);
   const [storeRequirements, setStoreRequirements] = useState([]);
+  const [requestRefreshKey, setRequestRefreshKey] = useState(0);
+  const scheduleAccess = useScheduleAccessPolicy(perfil?.storeId);
 
   const handleChangePassword = async () => {
     setPasswordError("");
@@ -122,7 +131,43 @@ const CollaboratorDashboard = () => {
     return false;
   };
 
+  const canEditStudies = scheduleAccess.status === 'ready' && Boolean(scheduleAccess.policy)
+    && !scheduleAccess.policy.adminOnlyStudyEditing && !isRestricted();
+  const canRequestSchedule = scheduleAccess.status === 'ready' && scheduleAccess.policy?.requestsEnabled === true
+    && !isRestricted();
+
+  useEffect(() => {
+    setModalType(current => (current === 'study' && !canEditStudies)
+      || (current === 'request' && !canRequestSchedule) ? null : current);
+  }, [canEditStudies, canRequestSchedule]);
+
   const isTrainer = perfil?.position === 'ENTRENADOR';
+  useEffect(() => {
+    setCompetitionPublished(false);
+    if (!perfil?.storeId) return;
+    let active = true;
+    let request = 0;
+    const refresh = async () => {
+      if (document.hidden) return;
+      const current = ++request;
+      try {
+        const published = await hasPublishedCompetition(perfil.storeId);
+        if (active && current === request) setCompetitionPublished(published);
+      } catch {
+        if (active && current === request) setCompetitionPublished(false);
+      }
+    };
+    void refresh();
+    const timer = setInterval(refresh, 15000);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      active = false;
+      clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [perfil?.storeId]);
   const mayDownloadSchedulePdf = canDownloadSchedulePdf({
     staffPosition: perfil?.position,
   });
@@ -163,7 +208,7 @@ const CollaboratorDashboard = () => {
 
   useEffect(() => {
     if (!isRestricted()) return;
-    setModalType((current) => ['study', 'feriados', 'request'].includes(current) ? null : current);
+    setModalType((current) => ['study', 'request'].includes(current) ? null : current);
   }, [lockSettings.restrictionsEnabled, lockSettings.reenableDate, perfil?.sanitaryCardDate, perfil?.sanitaryCardUnlock]);
 
   useEffect(() => {
@@ -195,7 +240,7 @@ const CollaboratorDashboard = () => {
       const q = query(collection(db, "staff_profiles"), where("uid", "==", currentUser.uid));
       const snapshot = await getDocs(q);
       if (!snapshot.empty) {
-        let perfilData = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
+        let perfilData = { ...snapshot.docs[0].data(), id: snapshot.docs[0].id };
 
         // --- PROCESAR CAMBIO DE MODALIDAD PROGRAMADO ---
         const todayStr = new Date().toISOString().split('T')[0];
@@ -245,7 +290,7 @@ const CollaboratorDashboard = () => {
   useEffect(() => {
     const loadStores = async () => {
       const db = getFirestore();
-      const storeSnap = await getDocs(collection(db, "stores"));
+      const storeSnap = await getDocs(query(collection(db, "stores"), where("active", "==", true)));
       setStores(storeSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     };
     loadStores();
@@ -429,6 +474,7 @@ const CollaboratorDashboard = () => {
               <p className="text-gray-600 mt-1">Panel de colaborador</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              {competitionPublished && <button onClick={() => navigate("/concurso")} className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg font-medium"><Award className="w-4 h-4" />MI CONCURSO</button>}
               {(userRole === 'trainer' || userRole === 'admin' || userRole === 'superadmin') && (
                 <button
                   onClick={() => navigate('/entrenamiento')}
@@ -520,6 +566,7 @@ const CollaboratorDashboard = () => {
             <User className="w-5 h-5 text-blue-600" />
             Información del Perfil
           </h2>
+          <ProfilePhotoEditor key={perfil.id} staffId={perfil.id} name={perfil.name || ''}/>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
               <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
@@ -680,37 +727,12 @@ const CollaboratorDashboard = () => {
         )}
 
         {/* Botones de acción */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-          <button
-            onClick={() => !isRestricted() && setModalType("study")}
-            className={`${isRestricted() ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-blue-500 to-blue-600 text-white transform hover:scale-105'} p-6 rounded-xl shadow-md transition-all duration-200 flex flex-col items-center gap-3`}
-            disabled={isRestricted()}
-          >
-            <BookOpen className="w-8 h-8" />
-            <span className="font-semibold text-lg">Editar Horarios de Estudio</span>
-            <span className="text-sm opacity-90">{isRestricted() ? 'Cambios inhabilitados' : 'Gestiona tus horarios académicos'}</span>
-          </button>
+        <CollaboratorScheduleActions access={scheduleAccess} restricted={isRestricted()}
+          onStudy={() => canEditStudies && setModalType('study')}
+          onRequest={() => canRequestSchedule && setModalType('request')}
+          onHolidays={() => setModalType('feriados')} />
 
-          <button
-            onClick={() => !isRestricted() && setModalType("feriados")}
-            className={`${isRestricted() ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-purple-500 to-purple-600 text-white transform hover:scale-105'} p-6 rounded-xl shadow-md transition-all duration-200 flex flex-col items-center gap-3`}
-            disabled={isRestricted()}
-          >
-            <Calendar className="w-8 h-8" />
-            <span className="font-semibold text-lg">Registrar Feriados</span>
-            <span className="text-sm opacity-90">{isRestricted() ? 'Cambios inhabilitados' : 'Indica días festivos trabajados'}</span>
-          </button>
-
-          <button
-            onClick={() => !isRestricted() && setModalType("request")}
-            className={`${isRestricted() ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-orange-500 to-red-600 text-white transform hover:scale-105'} p-6 rounded-xl shadow-md transition-all duration-200 flex flex-col items-center gap-3 md:col-span-2`}
-            disabled={isRestricted()}
-          >
-            <ClipboardList className="w-8 h-8" />
-            <span className="font-semibold text-lg">Solicitar Horario Específico</span>
-            <span className="text-sm opacity-90">{isRestricted() ? 'Cambios inhabilitados' : 'Solicita un turno o rango horario especial'}</span>
-          </button>
-        </div>
+        <MyScheduleRequests perfil={perfil} refreshKey={requestRefreshKey} />
 
         {/* --- SECCIÓN DE HABILIDADES Y PROGRESO (Para todos) --- */}
         {perfil?.id && (
@@ -771,7 +793,7 @@ const CollaboratorDashboard = () => {
               {perfil.skills && perfil.skills.length > 0 ? (
                 perfil.skills.map(s => (
                   <span key={s} className="px-4 py-2 bg-green-50 text-green-700 rounded-lg text-xs font-bold border border-green-200 flex items-center gap-2 shadow-sm">
-                    <CheckCircle className="w-4 h-4 text-green-500" /> {s}
+                    <CheckCircle className="w-4 h-4 text-green-500" /> {s}{perfil.competitionCertifications?.[s]===100?' · 100% por concurso':''}
                   </span>
                 ))
               ) : (
@@ -837,6 +859,7 @@ const CollaboratorDashboard = () => {
         )}
 
         {/* --- METAS PERSONALES DE VENTA SUGESTIVA --- */}
+        {perfil?.id && <HolidayBalancePanel staffId={perfil.id} previousBalance={perfil.holidayBalance} />}
         {perfil?.id && perfil?.storeId && (
           <CollaboratorSuggestiveGoals staffId={perfil.id} storeId={perfil.storeId} />
         )}
@@ -866,7 +889,7 @@ const CollaboratorDashboard = () => {
                   {modalType === "trainer_skills" && <Award className="w-5 h-5" />}
                   {modalType === "request" && <ClipboardList className="w-5 h-5" />}
                   {modalType === "study" && "Editar horarios de estudio"}
-                  {modalType === "feriados" && "Registrar feriado"}
+                  {modalType === "feriados" && "Mis feriados acumulados"}
                   {modalType === "skills" && "Mis Habilidades"}
                   {modalType === "trainer_skills" && `Gestionar: ${selectedTrainerStaff?.name}`}
                   {modalType === "request" && "Solicitar Horario"}
@@ -880,9 +903,13 @@ const CollaboratorDashboard = () => {
               </div>
 
               <div className="p-6">
-                {modalType === "study" && <StudyScheduleForm onSuccess={closeModal} locked={isRestricted()} />}
-                {modalType === "feriados" && <HolidayForm locked={isRestricted()} />}
-                {modalType === "request" && <ScheduleRequestForm perfil={perfil} onSuccess={closeModal} locked={isRestricted()} />}
+                {modalType === "study" && canEditStudies && <StudyScheduleForm storeId={perfil.storeId} onSuccess={closeModal} locked={!canEditStudies} />}
+                {modalType === "feriados" && <>
+                  <HolidayBalancePanel staffId={perfil.id} previousBalance={perfil.holidayBalance} />
+                  <details><summary className="cursor-pointer font-semibold">Registrar un feriado faltante</summary><HolidayForm locked={isRestricted()} /></details>
+                </>}
+                {modalType === "request" && canRequestSchedule && <ScheduleRequestForm perfil={perfil}
+                  onSuccess={() => { setRequestRefreshKey(value => value + 1); closeModal(); }} locked={!canRequestSchedule} />}
                 {modalType === "skills" && (
                   <ModalSelectorDePosiciones
                     docId={perfil.id}

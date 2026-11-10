@@ -3,8 +3,10 @@ import { Navigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 
 function PrivateRoute({ children, role }) {
-  const { currentUser, userRole } = useAuth();
+  const { currentUser, userRole, accessLoading, needsStaffLink } = useAuth();
+  if (accessLoading) return <p role="status" className="p-6">Comprobando tu acceso…</p>;
   if (!currentUser) return <Navigate to="/login" />;
+  if (needsStaffLink) return <Navigate to="/register" replace />;
 
   const allowed = userRole === role
     || (role === "admin" && userRole === "superadmin")

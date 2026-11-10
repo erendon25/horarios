@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import { trainingRecognition } from '../../services/trainingRecognition.js';
 
 // Ejecutar con node --experimental-vm-modules --test. Se prueba la capa real
 // con un cliente aislado, sin crear solicitudes en la base de producción.
@@ -10,6 +11,9 @@ async function loadCompat(client) {
   const source = await readFile(new URL('./firestoreCompat.js', import.meta.url), 'utf8');
   const module = new vm.SourceTextModule(source, { context });
   await module.link((specifier) => {
+    if (specifier === '../../services/trainingRecognition') {
+      return new vm.SyntheticModule(['trainingRecognition'],function(){this.setExport('trainingRecognition',trainingRecognition)},{context});
+    }
     if (specifier === './client') {
       return new vm.SyntheticModule(['supabase'], function () {
         this.setExport('supabase', client);
@@ -34,6 +38,30 @@ const request = {
   date: '2026-09-19', shiftType: 'apertura',
   startTime: null, endTime: null, reason: 'Prueba aislada', status: 'pending',
 };
+
+test('guardar capacitación no convierte reconocimientos del concurso en habilidades manuales',async()=>{
+  let row={id:'22222222-2222-4222-8222-222222222222',store_id:'33333333-3333-4333-8333-333333333333',first_name:'Ana',position_abilities:['VESTIDO'],training_scores:{LANDING:72,VESTIDO:96},competition_recognition:{certifications:{LANDING:100},championships:[]}};
+  const compat=await loadCompat({
+    auth:{getSession:async()=>({data:{session:null}})},
+    from(table){
+      assert.equal(table,'staff_profiles');
+      const query={select(){return query},eq(){return query},then(resolve){return Promise.resolve({data:[row],error:null}).then(resolve)}};
+      return {...query,upsert(columns){row={...row,...JSON.parse(JSON.stringify(columns))};return {select(){return {single:async()=>({data:{id:row.id},error:null})}}}}};
+    },
+  });
+  const ref=compat.doc(compat.db,'staff_profiles',row.id);
+  await compat.updateDoc(ref,{'trainingScores.SHEETOUT':94,skills:compat.arrayUnion('SHEETOUT')});
+  assert.deepEqual(row.training_scores,{LANDING:72,VESTIDO:96,SHEETOUT:94});
+  assert.deepEqual(row.position_abilities,['VESTIDO','SHEETOUT']);
+  const mapped=(await compat.getDoc(ref)).data();
+  assert.equal(mapped.trainingScores.LANDING,100);
+  assert.ok(mapped.skills.includes('LANDING'));
+  await compat.updateDoc(ref,{lastEvaluationScore:94});
+  assert.deepEqual(row.training_scores,{LANDING:72,VESTIDO:96,SHEETOUT:94});
+  assert.deepEqual(row.position_abilities,['VESTIDO','SHEETOUT']);
+  row.competition_recognition={certifications:{},championships:[]};
+  assert.equal((await compat.getDoc(ref)).data().trainingScores.LANDING,72);
+});
 
 const extraHours = {
   ...request, uid: null, fecha: '2026-09-20',
@@ -300,6 +328,65 @@ test('guarda y vuelve a leer participación por tienda y mes sin reemplazar otra
   await compat.setDoc(config('2026-09'), { participation: 0 });
   assert.equal((await compat.getDoc(config('2026-09'))).data().participation, 0);
   assert.equal(rows.find((row) => row.config_key === 'schedule_lock').value.locked, true);
+});
+
+
+test('guardar permite feriados y libres en distintos días pese a un alias holiday antiguo', async () => {
+  let payload;
+  const compat = await loadCompat({ async rpc(name, args) {
+    assert.equal(name, 'save_weekly_schedules'); payload = args;
+    for (const day of args.p_changes[0].days) {
+      if (day.off && day.holiday) return { error: { message: 'Un día no puede ser libre y feriado compensado' } };
+    }
+    return { error: null };
+  } });
+  const schedule = {
+    monday: { start:'08:00',end:'16:45',off:false,feriado:true,holiday:true },
+    tuesday: { off:true,feriado:false,holiday:true },
+    wednesday: { start:'08:00',end:'16:45',off:false,holiday:true },
+    thursday: { start:'09:00',end:'17:45',off:false,feriado:false,holiday:true },
+  };
+  await compat.setDoc(compat.doc(compat.db, 'schedules', 'staff_2026-10-12_to_2026-10-18'), schedule);
+  const days=payload.p_changes[0].days;
+  assert.equal(days[0].holiday,true);
+  assert.equal(days[1].off,true); assert.equal(days[1].holiday,false);
+  assert.equal(days[2].holiday,true);
+  assert.equal(days[3].holiday,false);
+  assert.equal(schedule.tuesday.holiday,true); // Guardar no altera ni descarta el borrador.
+  await assert.rejects(compat.setDoc(compat.doc(compat.db, 'schedules', 'staff_2026-10-12_to_2026-10-18'), {
+    monday: {off:true,feriado:true,holiday:true},
+  }), /libre y feriado/);
+});
+
+test('desmarcar feriado envía false y no reaparece al volver a cargar el horario', async () => {
+  const staffId = '22222222-2222-4222-8222-222222222222';
+  let savedDay = { date:'2026-10-12',start:'08:00',end:'16:45',off:false,holiday:true,metadata:{} };
+  const compat = await loadCompat({
+    async rpc(name, args) {
+      assert.equal(name, 'save_weekly_schedules');
+      savedDay = args.p_changes[0].days[0];
+      return {error:null};
+    },
+    from(table) {
+      assert.equal(table,'schedule_weeks');
+      const query = { select(){return query;}, eq(){return query;}, async maybeSingle(){
+        return {error:null,data:{staff_id:staffId,week_start:'2026-10-12',schedule_shifts:[{
+          work_date:savedDay.date,start_time:savedDay.start,end_time:savedDay.end,
+          is_day_off:savedDay.off,is_holiday:savedDay.holiday,metadata:savedDay.metadata,
+        }]}};
+      }};
+      return query;
+    },
+  });
+  const ref=compat.doc(compat.db,'schedules',`${staffId}_2026-10-12_to_2026-10-18`);
+  const initial=(await compat.getDoc(ref)).data();
+  assert.equal(initial.monday.feriado,true);
+  await compat.setDoc(ref,{...initial,monday:{...initial.monday,feriado:false}});
+  assert.equal(savedDay.holiday,false);
+  const reloaded=(await compat.getDoc(ref)).data();
+  assert.equal(reloaded.monday.feriado,false);
+  assert.equal(reloaded.monday.holiday,false);
+  assert.equal(reloaded.monday.start,'08:00');
 });
 
 test('exportación filtra en servidor y pagina más de 1000 perfiles incluso con límite menor', async () => {

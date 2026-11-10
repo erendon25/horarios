@@ -1,3 +1,6 @@
+import { getProjectionPositionDemand, resolveVestidoPositionId } from './projectionDemand.js';
+import { isExcludedProjectionStaffRole } from './projectionLabor.js';
+
 const WEEKDAYS = [
   'monday',
   'tuesday',
@@ -34,15 +37,16 @@ export const getScheduledShiftMinutes = (shift) => {
 };
 
 export const calculateHistoricalGeneralVhl = ({ totalSales, schedules = [], staff = [] }) => {
-  const traineeIds = new Set(
+  const excludedStaffIds = new Set(
     staff
-      .filter((member) => member?.isTrainee === true || member?.isTrainee === 'true' || member?.isTrainee === 1)
+      .filter((member) => isExcludedProjectionStaffRole(member)
+        || member?.isTrainee === true || member?.isTrainee === 'true' || member?.isTrainee === 1)
       .map((member) => member.id)
   );
 
   const totalMinutes = schedules.reduce((weekMinutes, schedule) => {
     const staffId = schedule?.staffId ?? schedule?.id?.split('_')[0];
-    if (traineeIds.has(staffId)) return weekMinutes;
+    if (excludedStaffIds.has(staffId)) return weekMinutes;
 
     return weekMinutes + WEEKDAYS.reduce(
       (dayMinutes, weekday) => dayMinutes + getScheduledShiftMinutes(schedule?.[weekday]),
@@ -74,29 +78,54 @@ const clampByBounds = (value, position, { isOperativeHour = true } = {}) => {
 export const calculatePositionStaffByGeneralVhl = ({
   sale,
   generalVhl,
-  positions,
+  positions = [],
+  vestidoPositionId,
   manualByPosition = {},
   getPositionDemand,
   isOperativeHour = true,
 }) => {
-  const normalizedSale = Math.max(0, Number(sale) || 0);
-  const normalizedVhl = Number(generalVhl) || 0;
+  const finiteNonnegative = (value) => {
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? number : 0;
+  };
+  const normalizedSale = finiteNonnegative(sale);
+  const normalizedVhl = finiteNonnegative(generalVhl);
   const generalRequiredStaff = normalizedVhl > 0 && normalizedSale > 0
-    ? normalizedSale / normalizedVhl
+    ? finiteNonnegative(normalizedSale / normalizedVhl)
     : 0;
 
   const requiredByPosition = {};
+  const resolvedVestidoId = resolveVestidoPositionId(positions, vestidoPositionId);
+  const vestido = resolvedVestidoId ? positions.find((position) => position.id === resolvedVestidoId) : undefined;
+  const allocate = (position, demand) => {
+    const manualValue = manualByPosition[position.id];
+    if (manualValue !== undefined) return finiteNonnegative(manualValue);
+    // Legacy production caps treat an explicit zero as zero demand before the
+    // minimum is applied. Other area types keep their existing zero-cap rules.
+    const zeroProductionCap = (position === vestido || position.logic === 'sales')
+      && position.maxStaff !== '' && position.maxStaff !== null && position.maxStaff !== undefined
+      && Number(position.maxStaff) === 0;
+    const safeDemand = zeroProductionCap ? 0 : finiteNonnegative(demand);
+    // Staffing demand is fractional. Keep it through dependent factors, bounds
+    // and hour totals rather than rounding each area up to a whole person.
+    return clampByBounds(safeDemand, position, { isOperativeHour });
+  };
+
+  // Allocate the designated base first, regardless of position order, logic or
+  // factor. All dependent areas receive its bounded/manual final headcount.
+  const vestidoStaff = vestido ? allocate(vestido, generalRequiredStaff) : 0;
+  if (vestido) requiredByPosition[vestido.id] = vestidoStaff;
 
   positions.forEach((position) => {
-    const manualValue = manualByPosition[position.id];
-    if (manualValue !== undefined) {
-      requiredByPosition[position.id] = Math.max(0, Math.round(Number(manualValue) || 0));
+    if (position === vestido) return;
+    if (manualByPosition[position.id] !== undefined) {
+      requiredByPosition[position.id] = allocate(position, 0);
       return;
     }
-
-    const demand = Math.max(0, Number(getPositionDemand(position)) || 0);
-    const rounded = demand > 0 ? Math.ceil(demand) : 0;
-    requiredByPosition[position.id] = clampByBounds(rounded, position, { isOperativeHour });
+    const context = { sale: normalizedSale, vestidoStaff };
+    const demand = typeof getPositionDemand === 'function'
+      ? getPositionDemand(position, context) : getProjectionPositionDemand(position, context);
+    requiredByPosition[position.id] = allocate(position, demand);
   });
 
   const totalStaffAtHour = Object.values(requiredByPosition).reduce(
@@ -106,6 +135,8 @@ export const calculatePositionStaffByGeneralVhl = ({
 
   return {
     generalRequiredStaff,
+    vestidoStaff,
+    vestidoPositionId: resolvedVestidoId,
     requiredByPosition,
     totalStaffAtHour,
   };

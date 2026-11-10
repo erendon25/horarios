@@ -6,6 +6,7 @@
   "hosting": {
     "target": "lc-scheduler",
     "public": "build",
+    "predeploy": ["npm run build"],
     "ignore": [
       "firebase.json",
       "**/.*",

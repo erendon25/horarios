@@ -6,6 +6,7 @@ import { transformSync } from 'esbuild';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import * as scheduleHours from './scheduleHours.js';
+import * as scheduleStaffOrder from './scheduleStaffOrder.js';
 import * as scheduleExportData from './scheduleExportData.js';
 
 // Componentes reales con datos aislados: sin sesión ni escrituras de producción.
@@ -44,6 +45,8 @@ test('el exportador real escribe 14:00, no decimales, y mantiene el domingo cort
     jspdf: { default: Pdf },
     'jspdf-autotable': { default: (_pdf, options) => { table = options; } },
     '../services/scheduleHours': scheduleHours,
+    '../services/scheduleExportData': scheduleExportData,
+    '../services/scheduleStaffOrder.js': scheduleStaffOrder,
   });
   module.exportSchedulePDF([person], { test: schedule }, '2026-09-14_to_2026-09-20');
   const row = table.body.find(row => typeof row[0] === 'string' && row[0].startsWith('PRUEBA'));
@@ -65,6 +68,7 @@ test('el panel real presenta 12:00 base, 2:00 extras, 14:00 total y 0:45 descont
     'lucide-react': Object.fromEntries(['Calendar', 'Clock', 'MapPin', 'Coffee', 'AlertCircle', 'ChevronLeft', 'ChevronRight', 'ClipboardList', 'X', 'Download'].map(key => [key, icon])),
     './PDFExport': { exportGroupedPositionsPDF: () => {} },
     '../services/scheduleExportData': scheduleExportData,
+    '../services/scheduleStaffOrder.js': scheduleStaffOrder,
     '../services/scheduleHours': scheduleHours,
   });
   const markup = renderToStaticMarkup(module.default({ perfilId: person.id, staffProfile: person, storeId: 'test' }));
@@ -78,4 +82,27 @@ test('el panel real presenta 12:00 base, 2:00 extras, 14:00 total y 0:45 descont
   assert.match(markup, /12:00-13:00 · Despacho/);
   assert.match(markup, /13:00-14:30 · Caja/);
   assert.match(markup, /Break: 17:00-17:45/);
+});
+
+
+test('el PDF anterior ordena gerente, asistentes, trainers, full-time y part-time', async () => {
+  let table;
+  class Pdf { setFontSize() {} text() {} save() {} }
+  const module = await loadComponent('PDFExport.jsx', {
+    jspdf: { default: Pdf },
+    'jspdf-autotable': { default: (_pdf, options) => { table = options; } },
+    '../services/scheduleHours': scheduleHours,
+    '../services/scheduleExportData': scheduleExportData,
+    '../services/scheduleStaffOrder.js': scheduleStaffOrder,
+  });
+  const staff = [
+    {name:'A PART',modality:'Part-Time'},
+    {name:'B FULL',modality:'Full-Time'},
+    {name:'C TRAINER',position:'ENTRENADOR',modality:'Part-Time'},
+    {name:'D ASISTENTE',position:'ASISTENTE',modality:'Part-Time'},
+    {name:'Z GERENTE',position:'GERENTE',modality:'Full-Time'},
+  ];
+  module.exportSchedulePDF(staff, {}, '2026-10-12_to_2026-10-18');
+  assert.deepEqual(Array.from(table.body.filter(row => typeof row[0] === 'string'), row => row[0].trim()),
+    ['Z GERENTE', 'D ASISTENTE', 'C TRAINER', 'B FULL', 'A PART']);
 });

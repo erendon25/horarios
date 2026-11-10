@@ -1,3 +1,5 @@
+import './services/competitionNavigationGuard';
+import { lazy, Suspense } from 'react';
 // App.jsx
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -20,9 +22,10 @@ import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import SuperAdminDashboard from './components/SuperAdminDashboard';
 import TrainingApp from './components/Training/TrainingApp';
+import CompetitionLoadBoundary from './components/Competition/CompetitionLoadBoundary';
 
 
-<ToastContainer />
+const CompetitionApp = lazy(() => import('./components/Competition/CompetitionApp'));
 
 function AppRouter() {
   const { userRole } = useAuth();
@@ -37,6 +40,7 @@ function AppRouter() {
               : '/staff'
         } />
       } />
+      <Route path="/concurso" element={<PrivateRoute role="collaborator"><CompetitionLoadBoundary><Suspense fallback={<p className="p-6">Cargando concurso…</p>}><CompetitionApp /></Suspense></CompetitionLoadBoundary></PrivateRoute>} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/unauthorized" element={<h1>Acceso no autorizado</h1>} />
@@ -144,10 +148,10 @@ function App() {
     <Router>
       <AuthProvider>
         <AppRouter />
+        <ToastContainer />
       </AuthProvider>
     </Router>
   );
 }
 
 export default App;
-

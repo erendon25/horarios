@@ -1,3 +1,8 @@
+import { effectiveModality, getPositionTimeline } from './scheduleExportData.js';
+import { SUGGESTIVE_EVALUATION_CHANNELS, normalizeReportChannel, suggestiveChannelForPosition } from './suggestiveChannels.js';
+import { countExactReportedProduct, hasExactReportedProduct, exactReportProductName } from './productMatching.js';
+import { suggestiveProductParticipation } from './suggestiveSalesDefaults.js';
+
 export const DIRECT_SALES_CHANNELS = ['SALÓN', 'DRIVE THRU', 'SERV. FILA'];
 export const SUGGESTIVE_GOAL_CHANNELS = ['SALÓN'];
 export const SUGGESTIVE_TRX_RULES = Object.freeze({ salonShare: 0.60, participation: 0.30 });
@@ -79,8 +84,10 @@ export function channelForPosition(value) {
 
 export function channelDisplayName(channel) {
   if (channel === 'SALÓN') return 'Servicio';
-  if (channel === 'SERV. FILA') return 'Módulo';
-  return 'Drive Thru';
+  if (channel === 'SERV. FILA' || channel === 'MÓDULO') return 'Módulo';
+  if (channel === 'DRIVE THRU') return 'Drive Thru';
+  if (channel === 'SERV. AUTO') return 'Servicio al auto';
+  return channel || 'Sin canal';
 }
 
 function isoDateParts(date) {
@@ -568,9 +575,13 @@ export function buildTransactionSuggestiveSalesPlan({
   history = [], schedules = [], staff = [], monthlyData = {}, month,
   salonShare = SUGGESTIVE_TRX_RULES.salonShare,
   participation = SUGGESTIVE_TRX_RULES.participation,
+  unitTargets = null,
 }) {
   if (![salonShare, participation].every((rate) => Number.isFinite(rate) && rate >= 0 && rate <= 1)) {
     throw new Error('Los porcentajes deben estar entre 0% y 100%.');
+  }
+  if (unitTargets !== null && !SUGGESTIVE_PRODUCTS.every(({ id }) => Number.isSafeInteger(unitTargets[id]) && unitTargets[id] >= 0)) {
+    throw new Error('Las metas deben ser cantidades enteras no negativas para cada producto.');
   }
   const dates = monthDates(month);
   const records = [...new Map(history.filter((day) => /^\d{4}-\d{2}-\d{2}$/.test(day.date || day.sales_date))
@@ -585,10 +596,12 @@ export function buildTransactionSuggestiveSalesPlan({
   const daily = [];
   const hourlyRows = [];
   const untimedRows = [];
+  const channelActuals = Object.fromEntries(SUGGESTIVE_PRODUCTS.map(({ id }) => [id, {}]));
+  let measuredUnits = 0;
   let measuredSalonTrx = 0;
   let skuDays = 0;
 
-  for (const date of dates) {
+  const forecasts = dates.map((date) => {
     const weekday = dateAtNoon(date).getUTCDay();
     const recorded = byDate.get(date);
     const configured = monthlyData[date]?.txs ?? monthlyData[Number(date.slice(-2))]?.txs;
@@ -609,7 +622,16 @@ export function buildTransactionSuggestiveSalesPlan({
       transactionSource = 'estimated';
     }
     const salonTransactions = transactions === null ? null : transactions * salonShare;
-    const totalGoal = salonTransactions === null ? 0 : Math.max(0, Math.ceil(salonTransactions * participation - 1e-9));
+    return { date, weekday, recorded, past, sameWeekday, transactions, transactionSource, salonTransactions };
+  });
+  const manualDaily = unitTargets && Object.fromEntries(SUGGESTIVE_PRODUCTS.map(({ id }) => [id,
+    largestRemainder(unitTargets[id], forecasts.map((day) => ({ weight: day.salonTransactions || 0 }))),
+  ]));
+
+  for (const [dateIndex, forecast] of forecasts.entries()) {
+    const { date, weekday, recorded, past, sameWeekday, transactions, transactionSource, salonTransactions } = forecast;
+    const totalGoal = manualDaily ? SUGGESTIVE_PRODUCTS.reduce((sum, { id }) => sum + manualDaily[id][dateIndex], 0)
+      : salonTransactions === null ? 0 : Math.max(0, Math.ceil(salonTransactions * participation - 1e-9));
 
     // Product mix only selects how the combined goal is split; it never sets
     // the combined volume. Exclude other channels and future observations.
@@ -623,15 +645,26 @@ export function buildTransactionSuggestiveSalesPlan({
     });
     const mixSource = totalOf(productWeights) > 0 ? 'salon-history' : 'equal';
     const productQuotas = largestRemainder(totalGoal, SUGGESTIVE_PRODUCTS.map(({ id }) => ({ weight: productWeights[id] })));
-    const goals = Object.fromEntries(SUGGESTIVE_PRODUCTS.map(({ id }, index) => [id, productQuotas[index]]));
+    const goals = Object.fromEntries(SUGGESTIVE_PRODUCTS.map(({ id }, index) => [id, manualDaily ? manualDaily[id][dateIndex] : productQuotas[index]]));
     SUGGESTIVE_PRODUCTS.forEach(({ id }) => { targets[id] += goals[id]; });
 
     const recordedProducts = object(recorded?.suggestiveProducts || recorded?.suggestive_products);
     const hasSkuData = hasCurrentSuggestiveProducts(recordedProducts);
+    // Sales are observed units, independent of TRX availability or other SKUs.
+    const quantities = salonProducts(recorded);
+    SUGGESTIVE_PRODUCTS.forEach(({ id }) => {
+      actual[id] += quantities[id];
+      for (const channels of Object.values(object(recordedProducts[id]))) {
+        for (const [rawChannel, quantity] of Object.entries(object(channels))) {
+          const label = normalizeLabel(rawChannel);
+          const channel = normalizeDirectSalesChannel(rawChannel) || (label || 'SIN CANAL');
+          channelActuals[id][channel] = (channelActuals[id][channel] || 0) + numericQuantity(quantity);
+        }
+      }
+    });
     if (hasSkuData && transactionSource === 'recorded') {
-      const quantities = salonProducts(recorded);
-      SUGGESTIVE_PRODUCTS.forEach(({ id }) => { actual[id] += quantities[id]; });
       measuredSalonTrx += salonTransactions;
+      measuredUnits += totalOf(quantities);
       skuDays += 1;
     }
 
@@ -691,7 +724,8 @@ export function buildTransactionSuggestiveSalesPlan({
   });
   const totalGoal = totalOf(targets);
   return {
-    month, rows, daily, targets, totals: targets, coveredDays: skuDays,
+    month, rows, daily, targets, totals: targets, coveredDays: skuDays, channelActuals,
+    targetMode: unitTargets ? 'units' : 'transactions',
     channelTargets: Object.fromEntries(SUGGESTIVE_PRODUCTS.map(({ id }) => [id, { 'SALÓN': targets[id] }])),
     unassignedGoals, unassignedRows: rows.filter((row) => row.missingStaff).length,
     summaries: SUGGESTIVE_PRODUCTS.map((product) => ({ ...product, target: targets[product.id],
@@ -702,11 +736,224 @@ export function buildTransactionSuggestiveSalesPlan({
       totalTransactions: daily.reduce((sum, day) => sum + (day.transactions || 0), 0),
       salonTransactions: daily.reduce((sum, day) => sum + (day.salonTransactions || 0), 0),
       actualUnits: totalOf(actual), measuredSalonTrx,
-      actualParticipation: measuredSalonTrx > 0 ? totalOf(actual) / measuredSalonTrx : null,
+      actualParticipation: measuredSalonTrx > 0 ? measuredUnits / measuredSalonTrx : null,
       estimatedDays: daily.filter((day) => day.transactionSource === 'estimated').length,
       missingDays: daily.filter((day) => day.transactionSource === 'missing').length,
       untimedDays: untimedRows.length,
       equalMixDays: daily.filter((day) => day.totalGoal > 0 && day.mixSource === 'equal').length,
     },
   };
+}
+
+// Monetary goals coexist with the former planners so historical consumers keep
+// their original rules. A channel's share always uses ALL reported channels.
+export function normalizeSuggestiveChannel(value) {
+  return normalizeReportChannel(value);
+}
+
+function revenueHours(day) {
+  const result = {};
+  for (const [rawHour, channels] of Object.entries(object(day?.hourlyData || day?.hourly_data))) {
+    const parsed = Number(rawHour);
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 29) continue;
+    const hour = parsed % 24;
+    result[hour] ||= {};
+    for (const [rawChannel, amount] of Object.entries(object(channels))) {
+      const channel = normalizeSuggestiveChannel(rawChannel);
+      if (channel) result[hour][channel] = (result[hour][channel] || 0) + numericQuantity(amount);
+    }
+  }
+  return result;
+}
+
+export function discoverSuggestiveChannels(history = []) {
+  const channels = new Set();
+  for (const day of history) for (const values of Object.values(revenueHours(day))) {
+    for (const channel of Object.keys(values)) channels.add(channel);
+  }
+  return SUGGESTIVE_EVALUATION_CHANNELS.filter(channel => channels.has(channel));
+}
+
+const revenueEmptyGoals = products => Object.fromEntries(products.map(({ id }) => [id, 0]));
+const revenueHourOrder = hour => hour < 6 ? hour + 24 : hour;
+const matchesRevenuePosition = (position, channel) => suggestiveChannelForPosition(position) === channel.id;
+
+function revenueOwners({ date, hour, channel, staff, schedulesByStaffWeek }) {
+  const weekday = WEEKDAYS[dateAtNoon(date).getUTCDay()];
+  const candidates = staff.filter(person => isOperationalStaff(person, date)).flatMap(person => {
+    const shift = schedulesByStaffWeek.get(`${person.id}|${mondayFor(date)}`)?.[weekday];
+    const segments = getPositionTimeline(shift, effectiveModality(person, date))
+      .filter(segment => matchesRevenuePosition(segment.position, channel))
+      .map(segment => segment.start < 360 ? { ...segment, start: segment.start + 1440, end: segment.end + 1440 } : segment);
+    if (!segments.length) return [];
+    return [{ assigneeId: person.id, assignee: staffName(person), schedule: scheduleLabel(shift), segments, missingStaff: false, weight: 0 }];
+  });
+  let missing = 0;
+  const start = revenueHourOrder(hour) * 60;
+  for (let minute = start; minute < start + 60; minute++) {
+    const active = candidates.filter(owner => owner.segments.some(segment => minute >= segment.start && minute < segment.end));
+    if (!active.length) missing++;
+    else for (const owner of active) owner.weight += 1 / active.length;
+  }
+  const owners = candidates.filter(owner => owner.weight > 0).map(({ segments, ...owner }) => owner);
+  if (missing) owners.push({ assigneeId: `unassigned:${date}:${hour}:${channel.id}`, assignee: 'Sin colaborador asignado',
+    schedule: `${String(hour).padStart(2, '0')}:00–${String((hour + 1) % 24).padStart(2, '0')}:00`, missingStaff: true, weight: missing });
+  return owners;
+}
+
+/** Daily sale goal × observed channel share × minimum product share ÷ price. */
+export function buildRevenueSuggestiveSalesPlan({ history = [], schedules = [], staff = [], monthlyData = {}, month,
+  products = [], channels = [], participation = 0.30 }) {
+  if (!Number.isFinite(participation) || participation < 0 || participation > 1) throw new Error('El porcentaje debe estar entre 0% y 100%.');
+  const selectedProducts = products.filter(product => product.enabled !== false).map(product => ({
+    ...product, price: Number(product.price), participation: suggestiveProductParticipation(product, participation),
+    ...(product.reportName !== undefined ? { reportName: exactReportProductName(product.reportName) } : {}),
+  }));
+  if (selectedProducts.some(product => product.participation === null)) throw new Error('El porcentaje de cada producto debe estar entre 0% y 100%.');
+  if (selectedProducts.some(product => !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$/.test(product.id || '')
+    || !product.label?.trim() || product.label.length > 160 || !Number.isFinite(product.price) || product.price <= 0 || product.price > 1000000000)
+    || new Set(selectedProducts.map(product => product.id)).size !== selectedProducts.length) {
+    throw new Error('Indica un producto y un precio mayor que cero para cada producto evaluado.');
+  }
+  const exactProducts = selectedProducts.filter(product => product.reportName !== undefined);
+  if (exactProducts.some(product => !product.reportName || product.reportName.length > 160)
+    || new Set(exactProducts.map(product => product.reportName)).size !== exactProducts.length) {
+    throw new Error('Completa un nombre exacto del reporte distinto para cada producto evaluado.');
+  }
+  const selectedChannels = [...new Map(channels.filter(channel => typeof channel === 'string' || channel.enabled !== false).map(value => {
+    const channel = typeof value === 'string' ? { id: value } : value;
+    const id = normalizeReportChannel(channel.id);
+    const { positions, ...automaticChannel } = channel;
+    return [id, { ...automaticChannel, id }];
+  })).values()].filter(channel => SUGGESTIVE_EVALUATION_CHANNELS.includes(channel.id));
+  const records = [...new Map(history.filter(day => /^\d{4}-\d{2}-\d{2}$/.test(day.date || day.sales_date))
+    .map(day => [day.date || day.sales_date, { ...day, date: day.date || day.sales_date }])).values()].sort((a, b) => a.date.localeCompare(b.date));
+  const byDate = new Map(records.map(day => [day.date, day]));
+  const schedulesByStaffWeek = new Map(schedules.map(schedule => {
+    const staffId = schedule.staffId || schedule.staff_id || String(schedule.id || '').split('_')[0];
+    const weekKey = schedule.weekKey || schedule.week_key || String(schedule.id || '').slice(staffId.length + 1);
+    return [`${staffId}|${weekKey}`, schedule];
+  }));
+  const targets = revenueEmptyGoals(selectedProducts);
+  const channelTargets = Object.fromEntries(selectedProducts.map(product => [product.id, {}]));
+  const unassignedGoals = revenueEmptyGoals(selectedProducts);
+  const daily = [], hourlyRows = [], missingGoalDates = [], missingHistoryDates = [], missingChannelDates = [];
+  const actual = revenueEmptyGoals(selectedProducts);
+  for (const date of monthDates(month)) {
+    const configured = monthlyData[date]?.vta ?? monthlyData[Number(date.slice(-2))]?.vta;
+    const salesGoal = validCount(configured) ? Number(configured) : null;
+    const weekday = dateAtNoon(date).getUTCDay();
+    const recorded = byDate.get(date);
+    const hasRevenue = day => Object.values(revenueHours(day)).some(values => totalOf(values) > 0);
+    const past = records.filter(day => day.date < date && hasRevenue(day)).slice(-56);
+    const sameWeekday = past.filter(day => dateAtNoon(day.date).getUTCDay() === weekday);
+    const samples = recorded && hasRevenue(recorded) ? [recorded] : sameWeekday.length ? sameWeekday : past;
+    const shareSource = samples[0] === recorded ? 'recorded' : sameWeekday.length ? 'same-weekday' : samples.length ? 'historical' : 'missing';
+    const weights = {}, channelAmounts = {};
+    let totalSales = 0;
+    for (const sample of samples) {
+      const hours = revenueHours(sample);
+      let itemized = 0;
+      for (const [hour, values] of Object.entries(hours)) for (const [channel, amount] of Object.entries(values)) {
+        itemized += amount;
+        channelAmounts[channel] = (channelAmounts[channel] || 0) + amount;
+        weights[channel] ||= {};
+        weights[channel][hour] = (weights[channel][hour] || 0) + amount;
+      }
+      const recordedTotal = Number(sample.totalSales ?? sample.sales_amount);
+      totalSales += Number.isFinite(recordedTotal) && recordedTotal > itemized ? recordedTotal : itemized;
+    }
+    if (salesGoal === null) missingGoalDates.push(date);
+    else if (salesGoal > 0 && !samples.length) missingHistoryDates.push(date);
+    const day = { date, salesGoal, shareSource, sampleDates: samples.map(sample => sample.date), channels: [],
+      goals: revenueEmptyGoals(selectedProducts), actual: revenueEmptyGoals(selectedProducts),
+      hasProductHistory: Object.fromEntries(selectedProducts.map(product => [product.id, false])), totalGoal: 0 };
+    for (const channel of selectedChannels) {
+      const hasChannelReport = Object.hasOwn(channelAmounts, channel.id);
+      const share = totalSales > 0 && hasChannelReport ? channelAmounts[channel.id] / totalSales : null;
+      const channelSalesGoal = salesGoal === null || share === null ? null : salesGoal * share;
+      const commonParticipation = selectedProducts.length && selectedProducts.every(product => product.participation === selectedProducts[0].participation)
+        ? selectedProducts[0].participation : null;
+      const suggestiveRevenue = channelSalesGoal === null || commonParticipation === null ? null : channelSalesGoal * commonParticipation;
+      const suggestiveRevenueByProduct = Object.fromEntries(selectedProducts.map(product => [product.id,
+        channelSalesGoal === null ? null : channelSalesGoal * product.participation]));
+      const goals = Object.fromEntries(selectedProducts.map(product => [product.id,
+        suggestiveRevenueByProduct[product.id] === null ? 0 : Math.max(0, Math.ceil(suggestiveRevenueByProduct[product.id] / product.price - 1e-10))]));
+      const channelActual = {}, channelPending = {};
+      day.channels.push({ id: channel.id, share, channelSalesGoal, suggestiveRevenue, suggestiveRevenueByProduct,
+        goals, actual: channelActual, pending: channelPending });
+      if (salesGoal > 0 && !hasChannelReport) missingChannelDates.push({ date, channel: channel.id });
+      for (const product of selectedProducts) {
+        targets[product.id] += goals[product.id];
+        day.goals[product.id] += goals[product.id];
+        channelTargets[product.id][channel.id] = (channelTargets[product.id][channel.id] || 0) + goals[product.id];
+        if (product.reportName !== undefined) {
+          const hasDetail = hasExactReportedProduct(recorded, product.reportName, [channel.id]);
+          channelActual[product.id] = hasDetail ? countExactReportedProduct(recorded, product.reportName, [channel.id]) : null;
+        } else {
+          // Historical snapshots without a report name keep their original SKU quantities.
+          const legacyProducts = object(recorded?.suggestiveProducts || recorded?.suggestive_products);
+          channelActual[product.id] = Object.hasOwn(legacyProducts, product.id) ? 0 : null;
+          for (const values of Object.values(object(legacyProducts[product.id]))) for (const [name, units] of Object.entries(object(values))) {
+            if (normalizeReportChannel(name) === channel.id) channelActual[product.id] += numericQuantity(units);
+          }
+        }
+        const hasProductHistory = channelActual[product.id] !== null;
+        channelPending[product.id] = hasProductHistory ? Math.max(0, goals[product.id] - channelActual[product.id]) : null;
+        day.hasProductHistory[product.id] ||= hasProductHistory;
+        day.actual[product.id] += channelActual[product.id] || 0;
+        actual[product.id] += channelActual[product.id] || 0;
+      }
+      const hours = BUSINESS_HOURS.filter(hour => weights[channel.id]?.[hour] > 0);
+      if (!hours.length && totalOf(goals) > 0) {
+        hourlyRows.push({ date, channel: channel.id, channelLabel: channel.id, hour: 6,
+          assigneeId: `unassigned:${date}:${channel.id}`, assignee: 'Sin colaborador asignado', missingStaff: true,
+          schedule: 'Sin detalle de venta por hora', goals, hourlyGoals: {}, coveredHours: [] });
+        continue;
+      }
+      const perHour = Object.fromEntries(selectedProducts.map(product => [product.id,
+        largestRemainder(goals[product.id], hours.map(hour => ({ weight: weights[channel.id][hour] })))]));
+      for (const [hourIndex, hour] of hours.entries()) {
+        const owners = revenueOwners({ date, hour, channel, staff, schedulesByStaffWeek });
+        const perOwner = Object.fromEntries(selectedProducts.map(product => [product.id, largestRemainder(perHour[product.id][hourIndex], owners)]));
+        owners.forEach((owner, index) => hourlyRows.push({ ...owner, date, hour, channel: channel.id, channelLabel: channel.id,
+          goals: Object.fromEntries(selectedProducts.map(product => [product.id, perOwner[product.id][index]])) }));
+      }
+    }
+    day.totalGoal = totalOf(day.goals);
+    daily.push(day);
+  }
+  const grouped = new Map();
+  for (const row of hourlyRows) {
+    if (!totalOf(row.goals)) continue;
+    const key = `${row.date}|${row.channel}|${row.assigneeId}|${row.schedule}`;
+    if (!grouped.has(key)) grouped.set(key, { ...row, goals: revenueEmptyGoals(selectedProducts), hourlyGoals: {}, coveredHours: [] });
+    const aggregate = grouped.get(key);
+    for (const product of selectedProducts) aggregate.goals[product.id] += row.goals[product.id];
+    aggregate.hourlyGoals[row.hour] = { ...row.goals };
+    aggregate.coveredHours.push(row.hour);
+  }
+  const rows = [...grouped.values()].sort((a, b) => a.date.localeCompare(b.date) || a.channel.localeCompare(b.channel) || a.assignee.localeCompare(b.assignee, 'es'));
+  for (const row of rows) if (row.missingStaff) for (const product of selectedProducts) unassignedGoals[product.id] += row.goals[product.id];
+  return { month, targetMode: 'revenue', products: selectedProducts, channels: selectedChannels, rows, daily, targets, totals: targets, channelTargets, unassignedGoals,
+    summaries: selectedProducts.map(product => ({ ...product, target: targets[product.id], actual: actual[product.id],
+      hasHistory: records.some(day => day.date.startsWith(`${month}-`) && (product.reportName !== undefined
+        ? hasExactReportedProduct(day, product.reportName, selectedChannels.map(channel => channel.id))
+        : Object.hasOwn(object(day.suggestiveProducts || day.suggestive_products), product.id))),
+      gap: Math.max(0, targets[product.id] - actual[product.id]) })),
+    metrics: { participation, productParticipation: Object.fromEntries(selectedProducts.map(product => [product.id, product.participation])),
+      totalGoal: totalOf(targets), unassignedTotal: totalOf(unassignedGoals), missingGoalDates, missingHistoryDates, missingChannelDates,
+      evaluatedDays: daily.filter(day => day.salesGoal !== null).length } };
+}
+
+export function publishedSuggestiveProducts(assignments = []) {
+  const products = new Map();
+  for (const assignment of assignments) {
+    const calculation = assignment.monthly_targets?.calculation;
+    const configured = calculation?.basis === 'channel_sales_revenue' && Array.isArray(calculation.products)
+      ? calculation.products : SUGGESTIVE_PRODUCTS;
+    for (const product of configured) if (typeof product.id === 'string' && typeof product.label === 'string'
+      && Object.hasOwn(object(assignment.goals), product.id)) products.set(product.id, { ...product });
+  }
+  return [...products.values()];
 }

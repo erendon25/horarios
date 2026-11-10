@@ -1,23 +1,34 @@
+import { isBukScheduleExempt, orderScheduleStaff } from '../services/scheduleStaffOrder.js';
 // WeeklyScheduleEditor.jsx – versión con detección de conflictos corregida
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { getFirestore, writeBatch, doc, getDoc, setDoc, collection, query, where, onSnapshot, getDocs } from '../lib/supabase/firestoreCompat';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useScheduleDraft } from '../hooks/useScheduleDraft';
 import ScheduleHeatmapMatrix from './ScheduleHeatmapMatrix';
 import WeeklyScheduleExcelButton from './WeeklyScheduleExcelButton';
-import { getHeatmapAssignments, getProjectionForDay, getExportShiftSegments } from '../services/scheduleExportData';
+import { getHeatmapAssignments, getProjectionForDay, getExportShiftSegments, getPositionSegments, canLimitPositionCoverage } from '../services/scheduleExportData';
+import { summarizeProjectionHours } from '../services/projectionHours';
+import ProjectionHoursSummary from './ProjectionHoursSummary';
+import ScheduleFocusToolbar from './ScheduleFocusToolbar';
+import ScheduleFocusStaffPanel from './ScheduleFocusStaffPanel';
+import ScheduleFocusShiftEditor from './ScheduleFocusShiftEditor';
+import HeatmapCoverageCandidatesDialog from './HeatmapCoverageCandidatesDialog';
+import { getHeatmapCoverageCandidates } from '../services/heatmapCoverageCandidates';
+import { operationalStaffCount } from '../services/projectionStaffCount';
 import SchedulePositionControl from './SchedulePositionControl';
 import { validateHeatmapTransfer, replacePositionInterval } from '../services/heatmapTransfers';
-import { exportSchedulePDF, exportGroupedPositionsPDF, exportExtraHoursReport } from './PDFExport';
-import { exportGeoVictoriaExcel } from "../services/GeoVictoriaExport";
-import { calculateScheduleTotals, formatScheduleMinutes, getScheduleBreak, requiresScheduleBreak } from '../services/scheduleHours';
+import { exportGroupedPositionsPDF, exportExtraHoursReport } from './PDFExport';
+import { calculateScheduleTotals, calculateScheduleDay, formatScheduleMinutes, getScheduleBreak, requiresScheduleBreak } from '../services/scheduleHours';
 import ScheduleBreakControl from './ScheduleBreakControl';
+import BukScheduleTools from './BukScheduleTools';
+import BukApprovedShiftControl from './BukApprovedShiftControl';
+import { getAvailableApprovedBukOptions, makeApprovedBukPatch, getBukRestDays, applyBukSchedulePatch } from '../services/bukSchedule';
+import { getShiftAvailability, filterShiftsByAvailability } from '../services/shiftAvailability';
 import { FaInfoCircle, FaExclamationTriangle, FaExclamationCircle } from 'react-icons/fa';
 import {
     Calendar,
     Save,
-    FileText,
     Download,
     Calculator,
     Filter,
@@ -116,18 +127,30 @@ const isOperationallyActiveStaff = (person, referenceDate = new Date()) => {
 };
 
 export default function WeeklyScheduleEditor() {
+    const { currentUser, userRole } = useAuth();
+    const [focusMode, setFocusMode] = useState(() => typeof window === 'undefined' || new URLSearchParams(window.location.search).get('vista') !== 'clasica');
+    const [focusPanelOpen, setFocusPanelOpen] = useState(false);
+    const [focusSelectedId, setFocusSelectedId] = useState(null);
+    const [focusSearch, setFocusSearch] = useState('');
+    const [focusListFilter, setFocusListFilter] = useState('all');
+    const focusListScroll = useRef(null);
+    const focusStaffButton = useRef(null);
+    const [coverageSelection, setCoverageSelection] = useState(null);
+    const [coverageResetKey, setCoverageResetKey] = useState(0);
+    const coverageControls = useRef(null);
+    const coverageScopeRef = useRef('');
     const [staff, setStaff] = useState([]);
     const [positions, setPositions] = useState([]);
     const [projectionPositions, setProjectionPositions] = useState([]);
     const [requirements, setRequirements] = useState({});
+    const [projectionLoadState, setProjectionLoadState] = useState({ storeId: '', status: 'loading' });
     const [selectedDay, setSelectedDay] = useState('monday');
     const [weekStartDate, setWeekStartDate] = useState('');
     const [modalityFilter, setModalityFilter] = useState('Todos');
     const [positionFilter, setPositionFilter] = useState('Todas');
     const [excludeTraineesFilter, setExcludeTraineesFilter] = useState(false);
-    const [turnoMap, setTurnoMap] = useState({});
-    const [turnoMapLoading, setTurnoMapLoading] = useState(false);
     const [prevWeekSchedules, setPrevWeekSchedules] = useState({});
+    const [previousWeekRead, setPreviousWeekRead] = useState({ scope: '', status: 'idle' });
     const [tooltipOpen, setTooltipOpen] = useState(null);
     const [tooltipPosition, setTooltipPosition] = useState({ top: 0, left: 0 });
     const [showTurnoModal, setShowTurnoModal] = useState(false);
@@ -135,7 +158,15 @@ export default function WeeklyScheduleEditor() {
     const [conflictAlerts, setConflictAlerts] = useState({});
     const [scheduleAttempt, setScheduleAttempt] = useState(0);
     const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'success' | 'error'
+    const [saveErrorMessage, setSaveErrorMessage] = useState('');
+    const [availabilityReload, setAvailabilityReload] = useState(0);
+    const [availabilityLoadError, setAvailabilityLoadError] = useState('');
     const [storeId, setStoreId] = useState('');
+    useEffect(() => {
+        setFocusSelectedId(null);
+        setFocusSearch('');
+        setFocusListFilter('all');
+    }, [storeId]);
     const [approvedRequests, setApprovedRequests] = useState([]);
     const [approvedRequestsError, setApprovedRequestsError] = useState('');
     const [showApprovedRequestsModal, setShowApprovedRequestsModal] = useState(false);
@@ -143,11 +174,6 @@ export default function WeeklyScheduleEditor() {
     const [searchTerm, setSearchTerm] = useState('');
     const [scheduleReload, setScheduleReload] = useState(0);
     const [aptitudeFilter, setAptitudeFilter] = useState('Todos'); // 'Todos', 'Certificados', 'En Proceso', 'No Capacitados'
-    const [showExportModal, setShowExportModal] = useState(false);
-    const [exportOptions, setExportOptions] = useState({
-        excludeTrainees: false,
-        showPositions: false
-    });
     const [showReplicateModal, setShowReplicateModal] = useState(false);
     const [replicateTargetStaff, setReplicateTargetStaff] = useState([]);
     const [replicateTargetDays, setReplicateTargetDays] = useState([]);
@@ -156,7 +182,14 @@ export default function WeeklyScheduleEditor() {
     const [highlightedStaffId, setHighlightedStaffId] = useState(null);
 
     const wk = getWeekKey(weekStartDate);
-    const { currentUser, userRole } = useAuth();
+    const previousWeekScope = JSON.stringify([storeId, wk, staff.map(person => person.id).sort()]);
+    const coverageScope = `${storeId}|${wk}|${selectedDay}`;
+    coverageScopeRef.current = coverageScope;
+    useEffect(() => {
+        setCoverageSelection(null);
+        coverageControls.current = null;
+        setCoverageResetKey(value => value + 1);
+    }, [coverageScope]);
     const draft = useScheduleDraft(currentUser?.uid || '', storeId, wk);
     const { schedules, dirtyStaff, controller: draftController } = draft;
     const hasUnsavedChanges = dirtyStaff.size > 0;
@@ -217,25 +250,6 @@ export default function WeeklyScheduleEditor() {
     }, [currentUser, db]);
     // === SETEAR SEMANA ACTUAL AUTOMÁTICAMENTE ===
     useEffect(() => {
-        if (!storeId) return;
-
-        const fetchGeoVictoriaTurnos = async () => {
-            setTurnoMapLoading(true);
-            try {
-                const snap = await getDoc(doc(db, 'stores', storeId, 'config', 'geovictoria_turnos'));
-                setTurnoMap(snap.exists() ? (snap.data().turnoMap || {}) : {});
-            } catch (error) {
-                console.error('Error cargando turnos GeoVictoria:', error);
-                setTurnoMap({});
-            } finally {
-                setTurnoMapLoading(false);
-            }
-        };
-
-        fetchGeoVictoriaTurnos();
-    }, [storeId, db]);
-
-    useEffect(() => {
         const today = new Date();
         const dayOfWeek = today.getDay(); // 0=Domingo, 1=Lunes
         const diff = (dayOfWeek === 0 ? -6 : 1 - dayOfWeek); // Calcula lunes
@@ -272,23 +286,37 @@ export default function WeeklyScheduleEditor() {
     useEffect(() => {
         if (!storeId) return;
 
+        let active = true;
+        setProjectionLoadState({ storeId, status: 'loading' });
+        setProjectionPositions([]);
+        setRequirements({});
         const ref = doc(db, 'stores', storeId, 'config', 'schedule_projection');
         const unsubscribe = onSnapshot(
             ref,
             (snapshot) => {
+                if (!active) return;
                 const data = snapshot.exists() ? snapshot.data() : {};
                 setProjectionPositions(Array.isArray(data.positions) ? data.positions : []);
                 setRequirements(data.requirements || {});
+                setProjectionLoadState({ storeId, status: 'ready' });
             },
             (error) => {
+                if (!active) return;
                 console.error('Error loading projection positions:', error);
                 setProjectionPositions([]);
                 setRequirements({});
+                setProjectionLoadState({ storeId, status: 'error' });
             }
         );
 
-        return () => unsubscribe();
+        return () => { active = false; unsubscribe(); };
     }, [storeId, db]);
+
+    const projectionHours = useMemo(() => {
+        const status = projectionLoadState.storeId === storeId ? projectionLoadState.status : 'loading';
+        if (status !== 'ready') return { dayHours: null, weekHours: null, availableDays: 0, completeWeek: false, status };
+        return { ...summarizeProjectionHours(requirements, projectionPositions, selectedDay), status };
+    }, [requirements, projectionPositions, selectedDay, storeId, projectionLoadState]);
 
     // Los requerimientos del editor semanal salen solo de Proyeccion.
 
@@ -335,6 +363,7 @@ export default function WeeklyScheduleEditor() {
         }
 
         setSaveStatus('saving');
+        setSaveErrorMessage('');
         const savedDraft = draftController.beginSave();
         try {
             const batch = writeBatch(db);
@@ -365,83 +394,40 @@ export default function WeeklyScheduleEditor() {
             setSaveStatus('success');
         } catch (err) {
             console.error("Error al guardar:", err);
+            setSaveErrorMessage(err?.message || 'No se pudo completar el guardado.');
             setSaveStatus('error');
         }
     };
 
-    const detectScheduleConflict = (staff, day, shift) => {
-        // Si no hay turno asignado (sin entrada, salida o posición), NO mostrar conflicto
-        if (!shift || !shift.start || !shift.end || !shift.position) {
-            return null;
-        }
-        // 🛑 No validar conflictos en feriados
-        const isFeriado = schedules[staff.id]?.[day]?.feriado;
-        if (isFeriado) return null;
-
-        const studyBlocks = staff.study_schedule?.[day]?.blocks || [];
+    const detectScheduleConflict = (person, day, shift) => {
+        if (!shift || shift.off || shift.feriado || shift.holiday || !shift.start || !shift.end) return null;
         const conflicts = [];
-
-        // ✅ Si el día está marcado como libre en estudio, no asignar
-        if (staff.study_schedule?.[day]?.free === true) {
-            conflicts.push('estudia'); // día libre → no asignable
+        if (person.studyAvailabilityStatus !== 'ready') {
+            conflicts.push('disponibilidad');
+        } else {
+            const availability = getShiftAvailability({ date: getDateStrForDay(day), shift, studySchedule: person.study_schedule });
+            if (!availability.available) conflicts.push(availability.reasons.some(reason => reason.code === 'requested_day_off') ? 'estudia' : 'conflicto');
         }
+        if (shift.position && !person.skills?.includes(shift.position)) conflicts.push('incompatible');
+        return conflicts.length ? conflicts : null;
+    };
 
-        const requiredSkill = shift.position;
-        const hasSkill = staff.skills?.includes(requiredSkill);
-        if (!hasSkill) {
-            conflicts.push('incompatible'); // sin habilidad → no apto
+    const getCompatibleBukOptions = (person, date, personSchedule, day, currentShift) => {
+        if (person?.studyAvailabilityStatus !== 'ready') return [];
+        const modality = getEffectiveModality(person, date);
+        const rests = getBukRestDays(modality, personSchedule);
+        const candidates = getAvailableApprovedBukOptions(modality, rests, personSchedule, day);
+        return filterShiftsByAvailability(candidates, { date, studySchedule: person.study_schedule, shiftPatch: currentShift });
+    };
+
+    const applyApprovedShift = (person, patch) => {
+        const current = schedules[person.id]?.[selectedDay] || {};
+        if (patch.start && patch.end) {
+            if (person.studyAvailabilityStatus !== 'ready') return alert('Espera a que se pueda consultar la disponibilidad del colaborador.');
+            const availability = getShiftAvailability({ date: getSelectedDateStr(), shift: { ...current, ...patch }, studySchedule: person.study_schedule });
+            if (!availability.available) return alert(availability.reasons[0]?.message || 'El turno ya no es compatible con su disponibilidad.');
         }
-
-        // Detectar conflictos de horario
-        const shiftStart = timeToMinutes(shift.start);
-        let shiftEndRaw = timeToMinutes(shift.end);
-        
-        // Manejar cruce de medianoche
-        const isOvernight = shiftEndRaw <= shiftStart;
-        const shiftEnd = isOvernight ? shiftEndRaw + (24 * 60) : shiftEndRaw;
-
-        for (const block of studyBlocks) {
-            const blockStart = timeToMinutes(block.start);
-            const blockEnd = timeToMinutes(block.end);
-
-            // Caso 1: Traslape en el día actual
-            const overlapCurrent = shiftStart < blockEnd && Math.min(shiftEnd, 1440) > blockStart;
-            
-            // Caso 2: Traslape después de medianoche (si el turno es overnight)
-            let overlapNext = false;
-            if (isOvernight) {
-                // Aquí deberíamos idealmente revisar el horario de estudio del DÍA SIGUIENTE,
-                // pero por simplicidad y según el requerimiento, validamos contra el bloque si choca con la parte post-medianoche
-                // (Nota: la mayoría de los estudios son diurnos, el riesgo mayor es el inicio del turno)
-                overlapNext = (shiftEnd > 1440) && (shiftEnd - 1440 > blockStart);
-            }
-
-            if (overlapCurrent || overlapNext) {
-                conflicts.push('conflicto');
-                break;
-            }
-        }
-
-        if (shift.splitShift && shift.start2 && shift.end2 && !conflicts.includes('conflicto')) {
-            const shiftStart = timeToMinutes(shift.start2);
-            let shiftEndRaw = timeToMinutes(shift.end2);
-            const isOvernight = shiftEndRaw <= shiftStart;
-            const shiftEnd = isOvernight ? shiftEndRaw + (24 * 60) : shiftEndRaw;
-
-            for (const block of studyBlocks) {
-                const blockStart = timeToMinutes(block.start);
-                const blockEnd = timeToMinutes(block.end);
-                const overlapCurrent = shiftStart < blockEnd && Math.min(shiftEnd, 1440) > blockStart;
-                const overlapNext = isOvernight && (shiftEnd > 1440) && (shiftEnd - 1440 > blockStart);
-
-                if (overlapCurrent || overlapNext) {
-                    conflicts.push('conflicto');
-                    break;
-                }
-            }
-        }
-
-        return conflicts.length > 0 ? conflicts : null;
+        draftController.edit(previous => ({ ...previous, [person.id]: applyBukSchedulePatch(previous[person.id], selectedDay, patch) }));
     };
 
 
@@ -452,6 +438,8 @@ export default function WeeklyScheduleEditor() {
         const current = schedules[staffId]?.[selectedDay] || {};
         const person = staff.find(p => p.id === staffId);
         const dateStr = getSelectedDateStr();
+        if (['start', 'end', 'start2', 'end2', 'extraHours', 'extraHoursPre', 'extraHoursPost'].includes(field)
+            && person?.studyAvailabilityStatus !== 'ready') return;
 
         // Convertir a número si es horas extras
         let finalValue = value;
@@ -460,65 +448,47 @@ export default function WeeklyScheduleEditor() {
         }
 
         let updates = { [field]: finalValue };
+        if (isBukScheduleExempt(person) && ['start', 'end'].includes(field)) {
+            updates = { ...updates, bukApprovedShiftId: '', bukBreakMinutes: 0 };
+        }
+        if (!isBukScheduleExempt(person) && field === 'start') {
+            // Historical split shifts remain intact until an approved BUK shift is chosen.
+            const matching = !current.splitShift ? getCompatibleBukOptions(person, dateStr, schedules[staffId], selectedDay, current).filter(option => option.start === value) : [];
+            const approved = matching.length && new Set(matching.map(option => option.end)).size === 1 ? matching[0] : null;
+            updates = approved
+                ? makeApprovedBukPatch(approved.id, current, selectedDay)
+                : { start: finalValue, bukApprovedShiftId: '', bukBreakMinutes: 0 };
+        }
+
 
         // 🔒 Si se marca "off", borrar datos relacionados
         if (field === 'off' && value === true) {
             updates = { off: true, start: '', end: '', position: '', feriado: false, extraHours: '', extraHoursPre: '', extraHoursPost: '', splitShift: false, start2: '', end2: '' };
         }
 
-        // 🔒 Si se marca "feriado", setear horarios fijos según modalidad
-        if (field === 'feriado' && value === true) {
-            const holiday = isHoliday(dateStr);
-
-            if (holiday) {
-                alert(`Nota legal activa:\n\nEl ${dateStr} es "${holiday.name}".\n\nPor ley, no se puede usar un feriado oficial para pagar otro feriado. El sistema marcará automáticamente este día como "Día Libre (Descanso Legal)" para preservar el balance del colaborador.`);
-                updates = {
-                    off: true,
-                    feriado: false,
-                    start: '',
-                    end: '',
-                    position: '',
-                    extraHours: '',
-                    extraHoursPre: '',
-                    extraHoursPost: '',
-                    splitShift: false,
-                    start2: '',
-                    end2: ''
-                };
-            } else {
-                const effModality = getEffectiveModality(person, dateStr);
-                const isFull = (effModality || '').toLowerCase() === 'full-time';
-                updates = {
-                    feriado: true,
-                    off: false,
-                    start: '08:00',
-                    end: isFull ? '16:45' : '12:00',
-                    position: '',
-                    extraHours: '',
-                    extraHoursPre: '',
-                    extraHoursPost: '',
-                    splitShift: false,
-                    start2: '',
-                    end2: ''
-                };
-            }
+        if (isBukScheduleExempt(person) && field === 'feriado' && value === true) {
+            updates = { feriado: true, off: false };
         }
-
-        if (field === 'splitShift') {
-            updates = value
-                ? { splitShift: true, off: false, feriado: false }
-                : { splitShift: false, start2: '', end2: '' };
+        if (!isBukScheduleExempt(person) && field === 'feriado' && value === true) {
+            const modality = getEffectiveModality(person, dateStr);
+            const restDays = getBukRestDays(modality, schedules[staffId]);
+            const first = getAvailableApprovedBukOptions(modality, restDays, schedules[staffId], selectedDay)[0];
+            if (!first) return;
+            updates = { ...makeApprovedBukPatch(first.id, current, selectedDay), feriado: true, off: false };
         }
 
         // Si se desmarca feriado → limpiar solo feriado
         if (field === 'feriado' && value === false) {
-            updates = { ...current, feriado: false };
+            updates = { feriado: false };
         }
 
         // Si se desmarca off → limpiar solo off
         if (field === 'off' && value === false) {
-            updates = { ...current, off: false };
+            updates = { off: false };
         }
+
+        // Keep the legacy alias synchronized with the checkbox's canonical state.
+        if (Object.prototype.hasOwnProperty.call(updates, 'feriado')) updates.holiday = Boolean(updates.feriado);
 
         const nextShift = { ...current, ...updates };
         if (!getScheduleBreak(nextShift, getEffectiveModality(person, dateStr))) updates.breakStart = '';
@@ -530,10 +500,7 @@ export default function WeeklyScheduleEditor() {
 
         draftController.edit(prev => ({
             ...prev,
-            [staffId]: {
-                ...prev[staffId],
-                [selectedDay]: { ...prev[staffId]?.[selectedDay], ...updates }
-            }
+            [staffId]: applyBukSchedulePatch(prev[staffId], selectedDay, updates)
         }));
     };
 
@@ -586,6 +553,7 @@ export default function WeeklyScheduleEditor() {
     };
 
     const getShiftBaseMinutes = (shift) => {
+        if (shift?.bukApprovedShiftId) return calculateScheduleDay(shift, '').baseMinutes;
         return getShiftSegments(shift).reduce((total, segment) => {
             const startMinutes = timeToMinutes(segment.start);
             let endMinutes = timeToMinutes(segment.end);
@@ -698,6 +666,7 @@ export default function WeeklyScheduleEditor() {
         if (conflicts === 'estudia') return 'Solicito el dia Libre';
         if (conflicts === 'incompatible') return 'No tiene las habilidades requeridas';
         if (conflicts === 'conflicto') return 'Conflicto con horario de estudio';
+        if (conflicts === 'disponibilidad') return 'Disponibilidad pendiente de consultar';
         return 'Conflicto detectado';
     };
 
@@ -732,7 +701,7 @@ export default function WeeklyScheduleEditor() {
             hour,
             slots: positions.map((pos, pi) => ({
                 position: pos,
-                required: matrix[pi]?.[i] || 0,
+                required: operationalStaffCount(matrix[pi]?.[i]),
                 assigned: 0,
             })),
         }));
@@ -761,8 +730,10 @@ export default function WeeklyScheduleEditor() {
 
         for (const person of shuffledStaff) {
             const day = selectedDay;
+            const existing = schedules[person.id]?.[day];
+            if (person.studyAvailabilityStatus !== 'ready'
+                || existing?.start || existing?.end || existing?.off || existing?.feriado || existing?.holiday) continue;
             const study = person.study_schedule?.[day] || {};
-            const studyBlocks = study?.blocks || [];
 
             if (study?.free) {
                 newSchedules[person.id] = {
@@ -786,30 +757,14 @@ export default function WeeklyScheduleEditor() {
             let assigned = false;
 
             for (const blocks of shiftOptions) {
-                for (let i = 0; i <= HOURS.length - blocks; i++) {
+                for (let i = 0; i < HOURS.length - blocks; i++) {
                     const start = i;
                     const end = i + blocks;
                     const shiftMin = (end - start) * 15;
-                    const startMin = 360 + start * 15;
-                    const endMin = 360 + end * 15;
-
                     if (currentWeekMin + shiftMin > weeklyLimit) continue;
-
-                    const clash = studyBlocks.some(block => {
-                        const rawStart = block.start ?? block.startTime;
-                        const rawEnd = block.end ?? block.endTime;
-
-                        if (!rawStart || !rawEnd) {
-                            return false; // ignorar bloques mal definidos
-                        }
-
-                        const s = timeToMinutes(rawStart);
-                        const e = timeToMinutes(rawEnd);
-
-                        return !(endMin <= s - 60 || startMin >= e + 60);
-                    });
-
-                    if (clash) continue;
+                    if (!getShiftAvailability({ date: currentDayDateStr,
+                        shift: { start: HOURS[start], end: HOURS[end] },
+                        studySchedule: person.study_schedule }).available) continue;
 
                     for (let posIndex = 0; posIndex < positions.length; posIndex++) {
                         const pos = positions[posIndex];
@@ -895,18 +850,34 @@ export default function WeeklyScheduleEditor() {
             return nextSchedule;
         };
 
+        const eligibleCopies = new Map();
+        let skipped = 0;
+        for (const staffId of replicateTargetStaff) {
+            const person = staff.find(item => item.id === staffId);
+            for (const day of replicateTargetDays) {
+                const source = prevWeekSchedules[staffId]?.[day];
+                if (!source || hasScheduleContent(schedules[staffId]?.[day])) continue;
+                const noWork = source.off || source.feriado || source.holiday || (!source.start && !source.end);
+                if (!person || (!noWork && (person.studyAvailabilityStatus !== 'ready'
+                    || !getShiftAvailability({ date: getDateStrForDay(day), shift: source,
+                        studySchedule: person.study_schedule }).available))) {
+                    skipped += 1;
+                    continue;
+                }
+                eligibleCopies.set(`${staffId}:${day}`, sanitizeReplicatedSchedule(source, day));
+            }
+        }
         draftController.edit(prev => {
             const currentWeekSchedules = { ...prev };
 
             replicateTargetStaff.forEach(staffId => {
-                const prevPersonSchedule = prevWeekSchedules[staffId] || {};
                 currentWeekSchedules[staffId] = { ...currentWeekSchedules[staffId] };
 
                 replicateTargetDays.forEach(day => {
-                    const sourceDaySchedule = prevPersonSchedule[day];
+                    const sourceDaySchedule = eligibleCopies.get(`${staffId}:${day}`);
                     const currentDaySchedule = currentWeekSchedules[staffId][day];
                     if (sourceDaySchedule && !hasScheduleContent(currentDaySchedule)) {
-                        currentWeekSchedules[staffId][day] = sanitizeReplicatedSchedule(sourceDaySchedule, day);
+                        currentWeekSchedules[staffId][day] = sourceDaySchedule;
                     } else {
                         // Si no hay horario la semana pasada para ese día, podemos optar por no hacer nada o limpiar
                         // Según la petición, "replica el mismo horario", si no hay, no se replica.
@@ -918,110 +889,68 @@ export default function WeeklyScheduleEditor() {
         setShowReplicateModal(false);
         setReplicateTargetStaff([]);
         setReplicateTargetDays([]);
-        alert("Horarios de la semana pasada replicados correctamente. No olvides guardar los cambios.");
+        alert(`Horarios compatibles de la semana pasada replicados. ${skipped ? `Se omitieron ${skipped} turnos por disponibilidad no verificada o conflicto de estudios. ` : ''}No olvides guardar los cambios.`);
     };
-    // Reemplaza SOLO la parte que carga study_schedules dentro del useEffect que carga staff
-    // En el useEffect que carga staff, modifica esta parte:
+    // Keep availability live and separate a failed read from an empty schedule.
     useEffect(() => {
         if (!storeId) return;
+        let cancelled = false;
+        let loadedStaff = [];
+        let studies = new Map();
+        let studyStatus = 'loading';
+        let staffError = '';
+        const normalizeStudy = raw => Object.fromEntries(weekdays.map(day => {
+            const value = raw?.[day] ?? raw?.[day[0].toUpperCase() + day.slice(1)];
+            return [day, { free: value?.free === true || value?.free === 1 || value?.free === 'true',
+                blocks: Array.isArray(value) ? value : Array.isArray(value?.blocks) ? value.blocks : [] }];
+        }));
+        const publish = () => {
+            if (cancelled) return;
+            const todayMidnight = new Date();
+            todayMidnight.setHours(0, 0, 0, 0);
+            setStaff(loadedStaff.filter(person => {
+                if (!isOperationallyActiveStaff(person)) return false;
+                return !person.cessationDate || new Date(person.cessationDate + 'T00:00:00') >= todayMidnight;
+            }).map(person => ({ ...person,
+                study_schedule: studies.get(person.id) || studies.get(person.uid) || normalizeStudy({}),
+                studyAvailabilityStatus: studyStatus,
+            })));
+            setAvailabilityLoadError(staffError || (studyStatus === 'error'
+                ? 'No se pudo consultar la disponibilidad de estudios. Reintenta antes de asignar turnos.' : ''));
+        };
         const loadStaff = async () => {
             setLoading(true);
+            setAvailabilityLoadError('');
             try {
-                const q = query(collection(db, 'staff_profiles'), where('storeId', '==', storeId));
-                const snap = await getDocs(q);
-                const staffList = await Promise.all(
-                    snap.docs.map(async (docSnap) => {
-                        // Supabase conserva el campo `id` antiguo dentro de legacy_data para
-                        // trazabilidad. Debe prevalecer el id canónico del documento (UUID),
-                        // porque schedule_weeks.staff_id está relacionado con ese UUID.
-                        const staffData = { ...docSnap.data(), id: docSnap.id };
-
-                        // 🔥 Cargar study_schedule usando el UID del staff
-                        try {
-                            // Si el staff_profile tiene un campo 'uid', usarlo para study_schedules
-                            const studyScheduleId = staffData.uid || docSnap.id;
-                            const studyRef = doc(db, 'study_schedules', studyScheduleId);
-                            const studySnap = await getDoc(studyRef);
-
-                            if (studySnap.exists()) {
-                                const studyData = studySnap.data();
-
-                                // Normalizar estructura
-                                staffData.study_schedule = {};
-                                const dayMappings = {
-                                    'monday': 'monday', 'tuesday': 'tuesday', 'wednesday': 'wednesday',
-                                    'thursday': 'thursday', 'friday': 'friday', 'saturday': 'saturday', 'sunday': 'sunday',
-                                    'Monday': 'monday', 'Tuesday': 'tuesday', 'Wednesday': 'wednesday',
-                                    'Thursday': 'thursday', 'Friday': 'friday', 'Saturday': 'saturday', 'Sunday': 'sunday',
-                                };
-
-                                Object.keys(studyData).forEach(fieldName => {
-                                    const normalizedDay = dayMappings[fieldName];
-                                    if (normalizedDay && studyData[fieldName]) {
-                                        const dayData = studyData[fieldName];
-                                        staffData.study_schedule[normalizedDay] = {
-                                            free: dayData.free || false,
-                                            blocks: Array.isArray(dayData.blocks) ? dayData.blocks : []
-                                        };
-                                    }
-                                });
-
-                                // Asegurar que todos los días existan
-                                const allDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-                                allDays.forEach(day => {
-                                    if (!staffData.study_schedule[day]) {
-                                        staffData.study_schedule[day] = { free: false, blocks: [] };
-                                    }
-                                });
-
-                            } else {
-
-                                // Estructura vacía
-                                staffData.study_schedule = {
-                                    monday: { free: false, blocks: [] },
-                                    tuesday: { free: false, blocks: [] },
-                                    wednesday: { free: false, blocks: [] },
-                                    thursday: { free: false, blocks: [] },
-                                    friday: { free: false, blocks: [] },
-                                    saturday: { free: false, blocks: [] },
-                                    sunday: { free: false, blocks: [] }
-                                };
-                            }
-                        } catch (err) {
-                            staffData.study_schedule = {
-                                monday: { free: false, blocks: [] },
-                                tuesday: { free: false, blocks: [] },
-                                wednesday: { free: false, blocks: [] },
-                                thursday: { free: false, blocks: [] },
-                                friday: { free: false, blocks: [] },
-                                saturday: { free: false, blocks: [] },
-                                sunday: { free: false, blocks: [] }
-                            };
-                        }
-
-                        return staffData;
-                    })
-                );
-
-                // Filtrar colaboradores cesados: excluir si cessationDate < hoy
-                const todayMidnight = new Date();
-                todayMidnight.setHours(0, 0, 0, 0);
-
-                const activeStaff = staffList.filter(s => {
-                    if (!s.cessationDate) return true; // sin fecha de cese → activo
-                    const cessation = new Date(s.cessationDate + 'T00:00:00');
-                    return cessation >= todayMidnight; // cese hoy o futuro → aún activo
-                });
-
-                setStaff(activeStaff.filter(person => isOperationallyActiveStaff(person)));
-
-            } catch (err) {
+                const snapshot = await getDocs(query(collection(db, 'staff_profiles'), where('storeId', '==', storeId)));
+                if (cancelled) return;
+                loadedStaff = snapshot.docs.map(item => ({ ...item.data(), id: item.id }));
+            } catch (error) {
+                if (cancelled) return;
+                staffError = 'No se pudo cargar el personal de esta tienda.';
             } finally {
-                setLoading(false);
+                if (!cancelled) { publish(); setLoading(false); }
             }
         };
+        const unsubscribe = onSnapshot(collection(db, 'study_schedules'), snapshot => {
+            if (cancelled) return;
+            const next = new Map();
+            snapshot.docs.forEach(item => {
+                const data = item.data();
+                next.set(data.staffId || item.id, normalizeStudy(data));
+                if (data.uid) next.set(data.uid, normalizeStudy(data));
+            });
+            studies = next;
+            studyStatus = 'ready';
+            publish();
+        }, error => {
+            if (cancelled) return;
+            studyStatus = 'error';
+            publish();
+        });
         loadStaff();
-    }, [storeId, db]);
+        return () => { cancelled = true; unsubscribe(); };
+    }, [storeId, db, availabilityReload]);
 
 
     // Cargar horarios por ID de documento directo (100% confiable, sin índice).
@@ -1030,6 +959,7 @@ export default function WeeklyScheduleEditor() {
         if (!wk || !storeId || staff.length === 0) return;
         let cancelled = false;
         setPrevWeekSchedules({});
+        setPreviousWeekRead({ scope: previousWeekScope, status: 'loading' });
 
         const loadAllSchedules = async () => {
             console.log('[Horarios] Iniciando carga → wk:', wk, '| storeId:', storeId, '| staff:', staff.length);
@@ -1093,16 +1023,20 @@ export default function WeeklyScheduleEditor() {
                         const dSnap = await getDoc(doc(db, 'schedules', `${sId}_${prevWk}`));
                         if (dSnap.exists()) prevMerged[sId] = dSnap.data();
                     }));
-                    if (!cancelled) setPrevWeekSchedules(prevMerged);
+                    if (!cancelled) {
+                        setPrevWeekSchedules(prevMerged);
+                        setPreviousWeekRead({ scope: previousWeekScope, status: 'ready' });
+                    }
                 } catch (err) {
                     console.error('[Horarios] Error cargando semana anterior:', err);
+                    if (!cancelled) setPreviousWeekRead({ scope: previousWeekScope, status: 'error' });
                 }
             }
         };
 
         loadAllSchedules();
         return () => { cancelled = true; };
-    }, [wk, staff, storeId, db, weekStartDate, draftController, scheduleReload]);
+    }, [wk, staff, storeId, db, weekStartDate, draftController, scheduleReload, previousWeekScope]);
 
 
 
@@ -1118,7 +1052,7 @@ export default function WeeklyScheduleEditor() {
                 const weekStart = new Date(y, m - 1, d);
 
                 const endDateStr = person.isTrainee ? person.trainingEndDate : (person.cessationDate || person.terminationDate);
-                
+
                 if (endDateStr) {
                     const [tY, tM, tD] = endDateStr.split('-').map(Number);
                     const endDate = new Date(tY, tM - 1, tD);
@@ -1160,12 +1094,12 @@ export default function WeeklyScheduleEditor() {
 
         if (positionFilter !== 'Todas') {
             const posKey = positionFilter.toUpperCase();
-            const assignedPos = (schedules[person.id]?.[selectedDay]?.position || '').toUpperCase();
+            const assignedPositions = getPositionSegments(schedules[person.id]?.[selectedDay]).map(segment => (segment.position || '').toUpperCase());
 
             // Si el filtro de aptitud es 'Todos', mantenemos el comportamiento original: filtrar por ASIGNACIÓN
             // PERO si el filtro de aptitud está activo, queremos ver quién TIENE la habilidad para esa posición
             if (aptitudeFilter === 'Todos') {
-                if (assignedPos !== posKey) return false;
+                if (!assignedPositions.includes(posKey)) return false;
             } else {
                 const isCertified = person.skills?.some(s => s.toUpperCase() === posKey);
                 const score = person.trainingScores?.[posKey] || 0;
@@ -1265,11 +1199,11 @@ export default function WeeklyScheduleEditor() {
         activeStaff.forEach(person => {
             weekdays.forEach(day => {
                 const shift = schedules[person.id]?.[day];
-                if (!shift || shift.off || shift.feriado || !shift.start || !shift.end || !shift.position) return;
+                if (!shift || shift.off || shift.feriado || !shift.start || !shift.end) return;
 
                 const detected = detectScheduleConflict(person, day, shift);
                 const conflictTypes = Array.isArray(detected) ? detected : (detected ? [detected] : []);
-                const studyConflictTypes = conflictTypes.filter(type => type === 'estudia' || type === 'conflicto');
+                const studyConflictTypes = conflictTypes.filter(type => type === 'estudia' || type === 'conflicto' || type === 'disponibilidad');
                 if (studyConflictTypes.length === 0) return;
 
                 conflicts.push({
@@ -1303,6 +1237,10 @@ export default function WeeklyScheduleEditor() {
         setSearchTerm('');
         setShowStudyConflictsModal(false);
         setHighlightedStaffId(conflict.staffId);
+        if (focusMode) {
+            setFocusSelectedId(conflict.staffId);
+            setFocusPanelOpen(true);
+        }
 
         window.setTimeout(() => {
             staffRowRefs.current[conflict.staffId]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1336,10 +1274,118 @@ export default function WeeklyScheduleEditor() {
     })();
 
 
+    const changeEditorView = enabled => {
+        setFocusMode(enabled);
+        const url = new URL(window.location.href);
+        url.searchParams.set('vista', enabled ? 'cobertura' : 'clasica');
+        window.history.replaceState(window.history.state, '', url);
+    };
+    const changeFocusWeek = value => {
+        if (!value) return setWeekStartDate('');
+        const [year, month, day] = value.split('-').map(Number);
+        const date = new Date(year, month - 1, day);
+        date.setDate(date.getDate() - (date.getDay() + 6) % 7);
+        const monday = [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+        setWeekStartDate(monday);
+        try { localStorage.setItem(`schedule_editor_week:${currentUser.uid}:${storeId}`, monday); } catch { /* Selection still works without storage. */ }
+    };
+    const focusDate = getSelectedDateStr();
+    const makeFocusItem = person => {
+        const shift = schedules[person.id]?.[selectedDay] || {};
+        const endDate = person.isTrainee ? person.trainingEndDate : person.cessationDate || person.terminationDate;
+        const ceased = Boolean(endDate && focusDate && focusDate > endDate);
+        const weekly = calculateWeeklyHours(person.id);
+        const conflicts = detectScheduleConflict(person, selectedDay, shift);
+        const modality = getEffectiveModality(person, focusDate);
+        const expected = modality?.toLowerCase() === 'full-time' ? 48 * 60 : weekdays.some(day => schedules[person.id]?.[day]?.bukApprovedShiftId) ? 23 * 60 + 45 : 24 * 60;
+        const missingBreak = requiresScheduleBreak(shift, modality) && !getScheduleBreak(shift, modality);
+        return {
+            id: person.id, person, name: `${person.name || ''} ${person.lastName || ''}`.trim(), role: person.position,
+            modality, shiftLabel: ceased ? 'Cesado' : shift.off ? 'Libre' : shift.feriado || shift.holiday ? 'Feriado compensado'
+                : shift.start && shift.end ? `${shift.start} → ${shift.end}${shift.splitShift ? ` / ${shift.start2 || '—'} → ${shift.end2 || '—'}` : ''}` : 'Sin turno',
+            position: shift.off || shift.feriado || shift.holiday || ceased ? '' : shift.position || '',
+            dailyHours: ceased ? '—' : shift.off ? '0:00' : calculateDailyHours(shift), weeklyHours: weekly.formatted,
+            hasAlert: !ceased && (Boolean(conflicts) || missingBreak || weekly.total !== expected || !weekdays.some(day => schedules[person.id]?.[day]?.off)),
+            unassigned: !ceased && !shift.off && !shift.feriado && !shift.holiday && (!shift.start || !shift.end),
+            off: Boolean(shift.off), holiday: Boolean(shift.feriado || shift.holiday), ceased,
+            alertLabel: missingBreak ? 'Break pendiente' : conflicts ? 'Revisar disponibilidad o posición' : weekly.total !== expected ? 'Revisar horas semanales' : 'Revisar descansos',
+        };
+    };
+    const focusItems = focusMode ? orderScheduleStaff(filteredStaff, focusDate).map(makeFocusItem) : [];
+    const focusQuery = focusSearch.trim().toLocaleLowerCase('es');
+    const visibleFocusItems = focusItems.filter(item => (!focusQuery || item.name.toLocaleLowerCase('es').includes(focusQuery))
+        && (focusListFilter === 'all' || (focusListFilter === 'unassigned' ? item.unassigned : item.hasAlert)));
+    const focusedPerson = activeStaff.find(person => person.id === focusSelectedId);
+    const focusedItem = focusedPerson ? makeFocusItem(focusedPerson) : null;
+    const focusedShift = schedules[focusSelectedId]?.[selectedDay] || {};
+    const globalFiltersActive = modalityFilter !== 'Todos' || positionFilter !== 'Todas' || Boolean(searchTerm) || excludeTraineesFilter;
+    const currentCoverageSelection = coverageSelection?.scope === coverageScope ? coverageSelection : null;
+    const previousWeekReady = previousWeekRead.scope === previousWeekScope && previousWeekRead.status === 'ready';
+    const coverageCandidates = currentCoverageSelection ? (selectedDay === 'monday' && !previousWeekReady ? {
+        valid: false, pending: previousWeekRead.scope !== previousWeekScope || previousWeekRead.status !== 'error',
+        reason: previousWeekRead.scope === previousWeekScope && previousWeekRead.status === 'error'
+            ? 'No se pudo verificar la semana anterior. Actualiza la página para volver a comprobar los turnos que pueden continuar en este lunes.'
+            : 'Comprobando los horarios de la semana anterior antes de proponer colaboradores para este lunes…',
+        available: [], blocked: [], limitations: [],
+    } : getHeatmapCoverageCandidates({
+        selection: currentCoverageSelection, staff: activeStaff, schedules, day: selectedDay,
+        date: focusDate, weekStart: weekStartDate, requirements: safeRequirements,
+        previousWeekSchedules: previousWeekReady ? prevWeekSchedules : undefined,
+    })) : null;
+    const closeCoverageSearch = () => {
+        setCoverageSelection(null);
+        coverageControls.current = null;
+        setCoverageResetKey(value => value + 1);
+    };
+    const viewCoverageCandidate = candidate => {
+        if (!coverageCandidates?.valid || !coverageCandidates.available.some(person => person.id === candidate.id)) return;
+        const exitFullscreen = coverageControls.current?.exitFullscreen;
+        const scope = coverageScope;
+        closeCoverageSearch();
+        // Close the candidate dialog before releasing its fullscreen parent.
+        // Both dialogs restore scroll state before the editor panel takes focus.
+        window.requestAnimationFrame(() => {
+            if (coverageScopeRef.current !== scope) return;
+            exitFullscreen?.();
+            if (!focusMode) changeEditorView(true);
+            setFocusSelectedId(candidate.id);
+            setFocusPanelOpen(true);
+        });
+    };
+
     return (
-        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+        <div data-testid={focusMode ? 'schedule-focus-workspace' : undefined} className={focusMode ? 'flex h-[calc(100dvh-var(--schedule-preview-banner-height,0px))] min-h-[420px] flex-col overflow-hidden bg-gray-50' : 'min-h-screen bg-gradient-to-br from-gray-50 to-gray-100'}>
+            {focusMode && <ScheduleFocusToolbar
+                week={weekStartDate} onWeekChange={changeFocusWeek} day={selectedDay} days={weekdays} dayLabels={weekdayLabels} onDayChange={setSelectedDay}
+                ready={draft.ready} saving={saveStatus === 'saving'} saved={saveStatus === 'success' && !hasUnsavedChanges}
+                dirtyCount={dirtyStaff.size} hasUnsavedChanges={hasUnsavedChanges} onSave={saveSchedules}
+                onOpenStaff={() => setFocusPanelOpen(value => !value)} staffCount={focusItems.length} staffButtonRef={focusStaffButton} panelOpen={focusPanelOpen}
+                onOpenRequests={() => setShowApprovedRequestsModal(true)} requestCount={approvedRequests.length}
+                onOpenConflicts={handleOpenStudyConflictsModal} conflictCount={getWeeklyStudyConflicts().length} filterActive={globalFiltersActive}
+                filters={<>
+                    <p className="text-xs text-gray-500">Estos filtros cambian la cobertura visible. Las HH conservan el total de la tienda.</p>
+                    <label className="block">Buscar en la cobertura<input aria-label="Buscar en la cobertura" value={searchTerm} onChange={event => setSearchTerm(event.target.value)} className="mt-1 w-full rounded border p-2" /></label>
+                    <label className="block">Modalidad<select aria-label="Filtro de modalidad" value={modalityFilter} onChange={event => setModalityFilter(event.target.value)} className="mt-1 w-full rounded border p-2"><option value="Todos">Todas</option><option value="Full-Time">Full-Time</option><option value="Part-Time">Part-Time</option></select></label>
+                    <label className="block">Posición<select aria-label="Filtro de posición" value={positionFilter} onChange={event => setPositionFilter(event.target.value)} className="mt-1 w-full rounded border p-2"><option value="Todas">Todas</option>{positions.map(position => <option key={position}>{position}</option>)}</select></label>
+                    {positionFilter !== 'Todas' && <label className="block">Aptitud<select aria-label="Filtro de aptitud" value={aptitudeFilter} onChange={event => setAptitudeFilter(event.target.value)} className="mt-1 w-full rounded border p-2"><option value="Todos">Todos</option><option value="Certificados">Certificados</option><option value="En Proceso">En formación</option><option value="No Capacitados">Sin capacitación</option></select></label>}
+                    <label className="flex items-center gap-2"><input type="checkbox" checked={excludeTraineesFilter} onChange={event => setExcludeTraineesFilter(event.target.checked)} />Solo personal de tienda</label>
+                </>}
+                exportControls={<>
+                    <WeeklyScheduleExcelButton canExport={userRole === 'admin' || userRole === 'superadmin'} staff={activeStaff} schedules={schedules} weekStart={weekStartDate} requirements={requirements} projectionPositions={projectionPositions} hasUnsavedChanges={hasUnsavedChanges} />
+                    <BukScheduleTools storeId={storeId} staff={staff} schedules={schedules} weekStart={weekStartDate} />
+                    <button type="button" className="rounded-lg border p-2 text-sm" onClick={() => setShowTurnoModal(true)}>PDF Posiciones</button>
+                </>}
+                extraControls={<>
+                    <button type="button" disabled={!draft.ready} onClick={generateIdealSchedule} className="rounded-lg border p-2 text-sm">Generar Horario</button>
+                    <button type="button" disabled={!draft.ready} onClick={() => setShowReplicateModal(true)} className="rounded-lg border p-2 text-sm">Replicar Horario</button>
+                    <button type="button" onClick={() => exportExtraHoursReport(activeStaff, schedules, wk)} className="rounded-lg border p-2 text-sm">Reporte Horas Extras</button>
+                    <Link className="rounded-lg border p-2 text-sm" to="/admin/proyeccion">Proyección</Link><Link className="rounded-lg border p-2 text-sm" to="/admin">Inicio</Link><Link className="rounded-lg border p-2 text-sm" to="/horarios">Horarios</Link>
+                    <button type="button" onClick={() => changeEditorView(false)} className="rounded-lg border border-blue-200 p-2 text-sm text-blue-700">Vista clásica</button>
+                    <details className="rounded-lg border p-2 text-xs text-gray-600"><summary className="cursor-pointer font-semibold">Sobre el borrador</summary><p className="mt-2">Tus cambios se protegen en este navegador. Guardar sincroniza el horario para los colaboradores.</p></details>
+                </>}
+            />}
             {/* Header Moderno */}
-            <div className="bg-white shadow-md border-b border-gray-200 sticky top-0 z-40">
+            {!focusMode && <div className="bg-white shadow-md border-b border-gray-200 sticky top-0 z-40">
                 <div className="max-w-full mx-auto px-4 sm:px-6 lg:px-8 py-4">
                     <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
                         <div>
@@ -1357,6 +1403,7 @@ export default function WeeklyScheduleEditor() {
                             )}
                         </div>
                         <div className="flex flex-wrap gap-2">
+                            <button type="button" onClick={() => changeEditorView(true)} className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700">Vista cobertura</button>
                             <Link
                                 to="/admin"
                                 className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium text-sm"
@@ -1381,22 +1428,28 @@ export default function WeeklyScheduleEditor() {
                         </div>
                     </div>
                 </div>
-            </div>
+            </div>}
 
-            <div className="max-w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            <div className={focusMode ? 'flex min-h-0 max-w-full flex-1 flex-col overflow-y-auto px-2 py-2 sm:px-4 sm:py-3' : 'max-w-full mx-auto px-4 sm:px-6 lg:px-8 py-6'}>
 
-                {wk && (
-                    <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-950" role="status">
+                {availabilityLoadError && <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                    <p>{availabilityLoadError}</p>
+                    <button type="button" onClick={() => setAvailabilityReload(value => value + 1)} className="rounded-lg border border-red-300 bg-white px-3 py-2 font-semibold">Reintentar disponibilidad</button>
+                </div>}
+
+                {wk && (!focusMode || draft.persistenceError || saveStatus === 'error' || draft.loadError || !draft.ready || Object.keys(draft.legacyChanges).length > 0) && (
+                    <div className={focusMode ? 'mb-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-950' : 'mb-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-950'} role="status">
                         <p className="font-semibold">
                             {hasUnsavedChanges
                                 ? draft.persistenceError ? 'Borrador pendiente de proteger' : draft.recovered ? 'Borrador recuperado en este navegador' : 'Borrador protegido en este navegador'
                                 : 'Sin cambios pendientes de sincronizar'}
                         </p>
-                        <p>Los borradores se conservan por usuario, tienda y semana en este navegador. Pulsa Guardar para sincronizarlos y que los colaboradores vean los horarios.</p>
+                        {focusMode ? <details className="mt-1"><summary className="cursor-pointer text-blue-800">Detalles del borrador</summary><p className="mt-1">Los cambios se conservan en este navegador. Guardar sincroniza el horario para los colaboradores.</p></details> : <p>Los borradores se conservan por usuario, tienda y semana en este navegador. Pulsa Guardar para sincronizarlos y que los colaboradores vean los horarios.</p>}
                         {hasUnsavedChanges && <p>{dirtyStaff.size} colaborador(es) con cambios pendientes.{draft.updatedAt && !draft.persistenceError ? ` Respaldo local: ${new Date(draft.updatedAt).toLocaleTimeString('es-PE')}.` : ''}</p>}
                         {!draft.ready && !draft.loadError && <p>Cargando la versión del servidor…</p>}
                         {draft.persistenceError && <p role="alert" className="mt-2 font-semibold text-red-700">{draft.persistenceError}</p>}
                         {saveStatus === 'error' && <p role="alert" className="mt-2 font-semibold text-red-700">Error al guardar en el servidor. Tus cambios siguen en borrador; vuelve a pulsar Guardar para reintentar.</p>}
+                        {saveStatus === 'error' && saveErrorMessage && <p className="mt-1 text-red-700">{saveErrorMessage}</p>}
                         {draft.loadError && (
                             <p role="alert" className="mt-2 text-red-700">
                                 {draft.loadError}
@@ -1421,7 +1474,7 @@ export default function WeeklyScheduleEditor() {
                 )}
 
                 {/* Controles Principales */}
-                <div className="bg-white rounded-xl shadow-md p-6 mb-6">
+                {!focusMode && <div className="bg-white rounded-xl shadow-md p-6 mb-6">
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                         {/* Filtros y Selección */}
                         <div className="space-y-4">
@@ -1589,14 +1642,6 @@ export default function WeeklyScheduleEditor() {
                             </button>
 
                             <button
-                                onClick={() => setShowExportModal(true)}
-                                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
-                            >
-                                <FileText className="w-5 h-5" />
-                                PDF
-                            </button>
-
-                            <button
                                 onClick={() => setShowTurnoModal(true)}
                                 className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
@@ -1604,20 +1649,9 @@ export default function WeeklyScheduleEditor() {
                                 PDF Posiciones
                             </button>
 
-                            <button
-                                onClick={() => {
-                                    if (!wk || Object.keys(turnoMap).length === 0) {
-                                        alert('Primero sube el Excel de turnos GeoVictoria desde Admin > RRHH.');
-                                        return;
-                                    }
-                                    exportGeoVictoriaExcel(activeStaff, schedules, wk, turnoMap);
-                                }}
-                                disabled={turnoMapLoading}
-                                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-teal-500 to-teal-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium disabled:opacity-60 disabled:cursor-not-allowed"
-                            >
-                                <Download className="w-5 h-5" />
-                                {turnoMapLoading ? 'Cargando GeoVictoria...' : 'Excel GeoVictoria'}
-                            </button>
+
+
+                            <BukScheduleTools storeId={storeId} staff={staff} schedules={schedules} weekStart={weekStartDate} />
 
                             <button
                                 onClick={async () => {
@@ -1657,20 +1691,20 @@ export default function WeeklyScheduleEditor() {
                             </button>
                         </div>
                     </div>
-                </div>
+                </div>}
 
-                <div className="flex flex-col lg:flex-row gap-6">
-                    <div className="w-full min-w-0 lg:w-3/5">
+                <div className={`flex flex-col lg:flex-row ${focusMode ? 'min-h-0 flex-1 gap-3' : 'gap-6'}`}>
+                    {!focusMode && <div className="w-full min-w-0 lg:w-3/5">
                         <div className="bg-white rounded-xl shadow-md">
                             <fieldset disabled={!draft.ready} className="min-w-0 overflow-x-auto">
                                 <table className="w-full text-sm">
                                     <thead className="bg-gradient-to-r from-gray-700 to-gray-800 text-white">
                                         <tr>
                                             <th className="px-4 py-4 text-left text-xs font-semibold uppercase tracking-wider md:sticky md:left-0 z-10 bg-gradient-to-r from-gray-700 to-gray-800 min-w-[150px] max-w-[150px] md:min-w-[240px] md:max-w-[240px]">Nombre</th>
-                                            <th className="px-2 py-4 text-center text-[10px] font-semibold uppercase tracking-normal md:sticky md:left-[240px] z-10 bg-gradient-to-r from-gray-700 to-gray-800 min-w-[82px] max-w-[82px] md:min-w-[92px] md:max-w-[92px]">Modalidad</th>
+                                            <th className="px-2 py-4 text-center text-[10px] font-semibold uppercase tracking-normal md:sticky md:left-[240px] z-10 bg-gradient-to-r from-gray-700 to-gray-800 min-w-[170px] max-w-[200px]">Modalidad</th>
                                             <th className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center text-xs font-semibold uppercase tracking-wider">Entrada</th>
                                             <th className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-4 text-center text-xs font-semibold uppercase tracking-wider">Salida</th>
-                                            <th className="w-[72px] min-w-[72px] max-w-[72px] px-2 py-4 text-center text-[11px] font-semibold uppercase tracking-normal">Partido</th>
+
                                             <th className="w-[72px] min-w-[72px] max-w-[72px] px-1 py-4 text-center text-[11px] font-semibold uppercase tracking-normal" title="Horas Extras Antes">HE Ant</th>
                                             <th className="w-[72px] min-w-[72px] max-w-[72px] px-1 py-4 text-center text-[11px] font-semibold uppercase tracking-normal" title="Horas Extras Después">HE Desp</th>
                                             <th className="w-[72px] min-w-[72px] max-w-[72px] px-1 py-4 text-center text-[11px] font-semibold uppercase leading-tight tracking-normal">Horas<br />Día</th>
@@ -1715,8 +1749,9 @@ export default function WeeklyScheduleEditor() {
                                             );
                                             // Cálculo de rango correcto de horas según modalidad
                                             const esFullTime = effModality?.toLowerCase() === 'full-time';
-                                            const horasMin = esFullTime ? 48 * 60 : 24 * 60;  // 45h FT, 24h PT
-                                            const horasMax = esFullTime ? 48 * 60 : 24 * 60;  // Máximo razonable (evita abusos)
+                                            const isBukWeek = weekdays.some(day => schedules[p.id]?.[day]?.bukApprovedShiftId);
+                                            const horasMin = esFullTime ? 48 * 60 : (isBukWeek ? 23 * 60 + 45 : 24 * 60);
+                                            const horasMax = horasMin;
                                             const horasEnRango = horas.total >= horasMin && horas.total <= horasMax;
                                             const { preCierres, cierres } = calcularCierres(schedules[p.id] || {});
 
@@ -1979,7 +2014,7 @@ export default function WeeklyScheduleEditor() {
                                                             );
                                                         })()}
                                                     </td>
-                                                    <td className="px-1.5 py-4 text-center md:sticky md:left-[240px] z-10 bg-white group-hover:bg-blue-50 min-w-[82px] max-w-[82px] md:min-w-[92px] md:max-w-[92px]">
+                                                    <td className="px-1.5 py-4 text-center md:sticky md:left-[240px] z-10 bg-white group-hover:bg-blue-50 min-w-[170px] max-w-[200px]">
                                                         {(() => {
                                                             const dateStr = getSelectedDateStr();
                                                             const effModality = getEffectiveModality(p, dateStr);
@@ -1992,6 +2027,11 @@ export default function WeeklyScheduleEditor() {
                                                                         }`}>
                                                                         {effModality}
                                                                     </span>
+                                                                    <BukApprovedShiftControl
+                                                                        person={{ ...p, modality: getEffectiveModality(p, getSelectedDateStr()) }}
+                                                                        shift={d} schedule={schedules[p.id]} day={selectedDay} date={getSelectedDateStr()}
+                                                                        onRetryAvailability={() => setAvailabilityReload(value => value + 1)}
+                                                                        onApply={patch => applyApprovedShift(p, patch)} />
                                                                     {isChangeDay && (
                                                                         <span className="text-[9px] font-bold text-blue-600 animate-pulse mt-1">
                                                                             🔄 CAMBIO HOY
@@ -2001,78 +2041,22 @@ export default function WeeklyScheduleEditor() {
                                                             );
                                                         })()}
                                                     </td>
-                                                    <td className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-6 text-center">
-                                                        {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
-                                                            <div className="relative flex flex-col gap-1.5">
-                                                                <input
-                                                                    type="time"
-                                                                    value={d.start || ''}
-                                                                    onChange={e => handleChange(p.id, 'start', e.target.value)}
-                                                                    disabled={d.feriado || d.off}
-                                                                    className={`w-full px-2 py-2 border-2 rounded-lg text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${hasConflict
-                                                                        ? 'border-red-500 bg-red-100 text-red-900 animate-pulse ring-2 ring-red-200'
-                                                                        : 'border-gray-300'
-                                                                        } disabled:bg-gray-100 disabled:cursor-not-allowed`}
-                                                                    title="Entrada 1"
-                                                                />
-                                                                {requiresScheduleBreak(d, getEffectiveModality(p, getSelectedDateStr())) && (
-                                                                    <div className="absolute inset-x-0 top-full mt-0.5 flex justify-center">
-                                                                        <ScheduleBreakControl shift={d} modality={getEffectiveModality(p, getSelectedDateStr())}
-                                                                            name={`${p.name} ${p.lastName || ''}`.trim()}
-                                                                            onChange={value => handleChange(p.id, 'breakStart', value)} />
-                                                                    </div>
-                                                                )}
-                                                                {d.splitShift && (
-                                                                    <input
-                                                                        type="time"
-                                                                        value={d.start2 || ''}
-                                                                        onChange={e => handleChange(p.id, 'start2', e.target.value)}
-                                                                        disabled={d.feriado || d.off}
-                                                                        className="w-full px-2 py-2 border border-blue-200 bg-blue-50 rounded-lg text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
-                                                                        title="Entrada 2"
-                                                                    />
-                                                                )}
-                                                            </div>
-                                                        )}
+                                                    <td className="w-[120px] px-2 py-4 text-center align-top">
+                                                        {isCeased ? '--' : <div className="flex flex-col gap-2">
+                                                            <input type="time" value={d.start || ''} onChange={e => handleChange(p.id, 'start', e.target.value)} disabled={d.feriado || d.off || p.studyAvailabilityStatus !== 'ready'} title="Entrada" className="w-full border-2 rounded-lg px-2 py-2 text-center font-bold" />
+                                                            {d.splitShift && <label className="text-[10px] text-amber-800">Segundo tramo conservado
+                                                                <input type="time" value={d.start2 || ''} onChange={e => handleChange(p.id, 'start2', e.target.value)} disabled={d.feriado || d.off || p.studyAvailabilityStatus !== 'ready'} title="Entrada del segundo tramo" className="w-full border-2 border-amber-200 rounded-lg px-2 py-2 text-center font-bold" />
+                                                            </label>}
+                                                            {requiresScheduleBreak(d, effModality) && <ScheduleBreakControl shift={d} modality={effModality} name={`${p.name} ${p.lastName || ''}`.trim()} onChange={value => handleChange(p.id, 'breakStart', value)} />}
+                                                        </div>}
                                                     </td>
-                                                    <td className="w-[120px] min-w-[120px] max-w-[120px] px-2 py-6 text-center">
-                                                        {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
-                                                            <div className="flex flex-col gap-1.5">
-                                                                <input
-                                                                    type="time"
-                                                                    value={d.end || ''}
-                                                                    onChange={e => handleChange(p.id, 'end', e.target.value)}
-                                                                    disabled={d.feriado || d.off}
-                                                                    className={`w-full px-2 py-2 border-2 rounded-lg text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${hasConflict
-                                                                        ? 'border-red-500 bg-red-100 text-red-900 animate-pulse ring-2 ring-red-200'
-                                                                        : 'border-gray-300'
-                                                                        } disabled:bg-gray-100 disabled:cursor-not-allowed`}
-                                                                    title="Salida 1"
-                                                                />
-                                                                {d.splitShift && (
-                                                                    <input
-                                                                        type="time"
-                                                                        value={d.end2 || ''}
-                                                                        onChange={e => handleChange(p.id, 'end2', e.target.value)}
-                                                                        disabled={d.feriado || d.off}
-                                                                        className="w-full px-2 py-2 border border-blue-200 bg-blue-50 rounded-lg text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
-                                                                        title="Salida 2"
-                                                                    />
-                                                                )}
-                                                            </div>
-                                                        )}
-                                                    </td>
-                                                    <td className="w-[72px] min-w-[72px] max-w-[72px] px-2 py-4 text-center">
-                                                        {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
-                                                            <input
-                                                                type="checkbox"
-                                                                checked={!!d.splitShift}
-                                                                onChange={e => handleChange(p.id, 'splitShift', e.target.checked)}
-                                                                disabled={!esFullTime || d.feriado || d.off}
-                                                                className="w-5 h-5 text-blue-600 rounded border-gray-300 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
-                                                                title={esFullTime ? 'Horario partido' : 'Solo disponible para Full-Time'}
-                                                            />
-                                                        )}
+                                                    <td className="w-[120px] px-2 py-4 text-center align-top">
+                                                        {isCeased ? '--' : <div className="flex flex-col gap-2">
+                                                            <input type="time" value={d.end || ''} onChange={e => handleChange(p.id, 'end', e.target.value)} disabled={d.feriado || d.off || p.studyAvailabilityStatus !== 'ready'} title="Salida" className="w-full border-2 rounded-lg px-2 py-2 text-center font-bold" />
+                                                            {d.splitShift && <label className="text-[10px] text-amber-800">Segundo tramo conservado
+                                                                <input type="time" value={d.end2 || ''} onChange={e => handleChange(p.id, 'end2', e.target.value)} disabled={d.feriado || d.off || p.studyAvailabilityStatus !== 'ready'} title="Salida del segundo tramo" className="w-full border-2 border-amber-200 rounded-lg px-2 py-2 text-center font-bold" />
+                                                            </label>}
+                                                        </div>}
                                                     </td>
                                                     <td className="w-[72px] min-w-[72px] max-w-[72px] px-1 py-4 text-center">
                                                         {isCeased ? <span className="text-gray-400 text-xs italic">--</span> : (
@@ -2083,7 +2067,7 @@ export default function WeeklyScheduleEditor() {
                                                                 step="0.5"
                                                                 value={d.extraHoursPre ?? ''}
                                                                 onChange={e => handleChange(p.id, 'extraHoursPre', e.target.value)}
-                                                                disabled={d.feriado || d.off}
+                                                                disabled={d.feriado || d.off || p.studyAvailabilityStatus !== 'ready'}
                                                                 placeholder="0"
                                                                 className="w-16 px-2 py-2 border border-blue-200 bg-blue-50 rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
                                                             />
@@ -2098,7 +2082,7 @@ export default function WeeklyScheduleEditor() {
                                                                 step="0.5"
                                                                 value={d.extraHoursPost ?? d.extraHours ?? ''}
                                                                 onChange={e => handleChange(p.id, 'extraHoursPost', e.target.value)}
-                                                                disabled={d.feriado || d.off}
+                                                                disabled={d.feriado || d.off || p.studyAvailabilityStatus !== 'ready'}
                                                                 placeholder="0"
                                                                 className="w-16 px-2 py-2 border border-gray-300 rounded-lg text-center text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
                                                             />
@@ -2132,9 +2116,11 @@ export default function WeeklyScheduleEditor() {
                                                                 ))}
                                                             </select>
                                                         )}
-                                                        {!isCeased && d.positionAssignments?.length > 0 && (
+                                                        {!isCeased && !d.off && !d.feriado && d.start && d.end && (canLimitPositionCoverage(p) || d.positionAssignments?.length > 0) && (
                                                             <SchedulePositionControl shift={d} modality={getEffectiveModality(p, getSelectedDateStr())}
                                                                 name={`${p.name} ${p.lastName || ''}`.trim()}
+                                                                positions={positions} allowRangesOnly={canLimitPositionCoverage(p)}
+                                                                onModeChange={value => handleChange(p.id, 'positionRangesOnly', value)}
                                                                 onChange={value => handleChange(p.id, 'positionAssignments', value)} />
                                                         )}
                                                     </td>
@@ -2169,72 +2155,94 @@ export default function WeeklyScheduleEditor() {
                                 </table>
                             </fieldset>
                         </div>
-                    </div>
+                    </div>}
 
                     {/* Heatmap */}
-                    <div className="w-full min-w-0 lg:w-2/5">
-                        <div className="bg-white rounded-xl shadow-md p-3 sticky top-24">
+                    <div className={focusMode ? 'flex min-h-0 w-full min-w-0 flex-1 flex-col' : 'w-full min-w-0 lg:w-2/5'}>
+                        <div className={focusMode ? 'flex min-h-0 flex-1 flex-col rounded-xl border border-gray-200 bg-white p-2 sm:p-3 shadow-sm' : 'bg-white rounded-xl shadow-md p-3 sticky top-24'}>
                             <div className="mb-3">
-                                <h3 className="text-base font-bold text-gray-800 flex items-center gap-2">
+                                <h3 className={focusMode ? 'sr-only' : 'text-base font-bold text-gray-800 flex items-center gap-2'}>
                                     <Clock className="w-4 h-4" />
                                     Mapa de Calor - {weekdayLabels[selectedDay]}
+                                    {focusMode && globalFiltersActive && <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">Vista filtrada</span>}
                                 </h3>
                                 {(() => {
                                     // Calcular métricas reales (VHL/THL)
                                     let totalMinutes = 0;
                                     let totalMinutesWithExtras = 0;
-                                    
+
                                     activeStaff.forEach(p => {
                                         const daySchedule = schedules[p.id]?.[selectedDay];
                                         if (daySchedule && !daySchedule.off && !daySchedule.feriado && daySchedule.start && daySchedule.end) {
                                             const baseMin = getShiftBaseMinutes(daySchedule);
                                             totalMinutes += baseMin;
-                                            
+
                                             const pre = parseFloat(String(daySchedule.extraHoursPre || 0).replace(',', '.')) || 0;
                                             const post = parseFloat(String((daySchedule.extraHoursPost ?? daySchedule.extraHours) || 0).replace(',', '.')) || 0;
-                                            
+
                                             totalMinutesWithExtras += baseMin + (pre * 60) + (post * 60);
                                         }
                                     });
-                                    
+
                                     const totalHours = totalMinutes / 60;
                                     const totalHoursWithExtras = totalMinutesWithExtras / 60;
-                                    
+
                                     const vta = Number(salesConfig.vta) || 0;
                                     const txs = Number(salesConfig.txs) || 0;
-                                    
+
                                     const vhl = totalHours > 0 ? (vta / totalHours).toFixed(1) : "0.0";
                                     const thl = totalHours > 0 ? (txs / totalHours).toFixed(1) : "0.0";
-                                    
+
                                     const vhlExt = totalHoursWithExtras > 0 ? (vta / totalHoursWithExtras).toFixed(1) : "0.0";
                                     const thlExt = totalHoursWithExtras > 0 ? (txs / totalHoursWithExtras).toFixed(1) : "0.0";
 
+                                    if (focusMode) return <div className="mt-2 flex flex-wrap items-center gap-3 rounded-lg border border-gray-200 bg-gray-50 p-2">
+                                        {globalFiltersActive && <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">Vista filtrada</span>}
+                                        <div data-testid="heatmap-hours-comparison" className="grid min-w-[180px] flex-1 grid-cols-2 gap-3 sm:max-w-md">
+                                            <div data-testid="heatmap-total-hours" className="min-w-0 border-r border-gray-200 pr-3">
+                                                <span className="block text-[10px] font-bold uppercase text-gray-500">Total HH <span className="normal-case text-orange-600">(c/extras)</span></span>
+                                                <span className="text-sm font-bold text-indigo-600">{Math.round(totalHours * 10) / 10}h{totalHoursWithExtras > totalHours && <span className="ml-1 text-orange-600">({Math.round(totalHoursWithExtras * 10) / 10}h)</span>}</span>
+                                            </div>
+                                            <ProjectionHoursSummary summary={projectionHours} dayLabel={weekdayLabels[selectedDay]} compact />
+                                        </div>
+                                        <details className="relative text-xs"><summary className="cursor-pointer rounded-lg border border-gray-200 bg-white px-3 py-2 font-semibold text-gray-700">Más métricas</summary>
+                                            <dl className="absolute right-0 z-30 mt-1 grid w-56 grid-cols-2 gap-3 rounded-xl border bg-white p-3 shadow-lg">
+                                                <div><dt>Ventas / TRX</dt><dd className="font-bold text-green-700">S/ {Math.round(vta)} / {Math.round(txs)}</dd></div>
+                                                <div><dt>VHL (c/extras)</dt><dd className="font-bold text-blue-700">S/ {vhl}{totalHoursWithExtras > totalHours && ` (S/ ${vhlExt})`}</dd></div>
+                                                <div><dt>THL (c/extras)</dt><dd className="font-bold text-purple-700">{thl}{totalHoursWithExtras > totalHours && ` (${thlExt})`}</dd></div>
+                                            </dl>
+                                        </details>
+                                    </div>;
+
                                     return (
                                         <div className="flex items-center justify-between gap-2 mt-2 bg-gray-50 p-2.5 rounded-lg border border-gray-200 shadow-sm flex-wrap">
-                                            <div className="flex flex-col gap-0.5 border-r border-gray-200 pr-3 w-1/4">
+                                            <div className="flex min-w-[80px] flex-1 flex-col gap-0.5 border-r border-gray-200 pr-3">
                                                 <span className="text-gray-500 text-[9px] uppercase font-bold tracking-wider">Ventas / TRX</span>
                                                 <span className="font-bold text-green-600 text-xs">
                                                     S/ {Math.round(vta)} / {Math.round(txs)}
                                                 </span>
                                             </div>
-                                            <div className="flex flex-col gap-0.5 border-r border-gray-200 pr-3 flex-1">
+                                            <div data-testid="heatmap-hours-comparison" className="grid min-w-[180px] flex-[2_1_180px] grid-cols-2 gap-3 border-r border-gray-200 pr-3">
+                                            <div data-testid="heatmap-total-hours" className="flex min-w-0 flex-col gap-0.5 border-r border-gray-200 pr-3">
                                                 <span className="text-gray-500 text-[9px] uppercase font-bold tracking-wider">Total HH <span className="text-orange-500 lowercase opacity-80">(c/extras)</span></span>
                                                 <span className="font-bold text-indigo-600 text-xs">
-                                                    {Math.round(totalHours * 10) / 10}h 
+                                                    {Math.round(totalHours * 10) / 10}h
                                                     {totalHoursWithExtras > totalHours && <span className="text-orange-500 ml-1">({Math.round(totalHoursWithExtras * 10) / 10}h)</span>}
                                                 </span>
                                             </div>
-                                            <div className="flex flex-col gap-0.5 border-r border-gray-200 pr-3 flex-1">
+                                            <ProjectionHoursSummary summary={projectionHours} dayLabel={weekdayLabels[selectedDay]} compact />
+                                            </div>
+                                            <div className="flex min-w-[60px] flex-1 flex-col gap-0.5 border-r border-gray-200 pr-3">
                                                 <span className="text-gray-500 text-[9px] uppercase font-bold tracking-wider">VHL <span className="text-orange-500 lowercase opacity-80">(c/extras)</span></span>
                                                 <span className="font-bold text-blue-600 text-xs">
-                                                    S/ {vhl} 
+                                                    S/ {vhl}
                                                     {totalHoursWithExtras > totalHours && <span className="text-orange-500 ml-1">(S/ {vhlExt})</span>}
                                                 </span>
                                             </div>
-                                            <div className="flex flex-col gap-0.5 flex-1">
+                                            <div className="flex min-w-[60px] flex-1 flex-col gap-0.5">
                                                 <span className="text-gray-500 text-[9px] uppercase font-bold tracking-wider">THL <span className="text-orange-500 lowercase opacity-80">(c/extras)</span></span>
                                                 <span className="font-bold text-purple-600 text-xs">
-                                                    {thl} 
+                                                    {thl}
                                                     {totalHoursWithExtras > totalHours && <span className="text-orange-500 ml-1">({thlExt})</span>}
                                                 </span>
                                             </div>
@@ -2242,20 +2250,51 @@ export default function WeeklyScheduleEditor() {
                                     );
                                 })()}
                             </div>
-                            <div className="h-[calc(100vh-280px)] overflow-auto">
+                            <div className={focusMode ? 'min-h-0 flex-1 overflow-auto' : 'h-[calc(100vh-280px)] min-h-[400px] overflow-auto'}>
                                 <ScheduleHeatmapMatrix
                                     key={`${wk}-${selectedDay}`}
                                     assigned={assignedArray}
                                     requirements={safeRequirements}
+                                    projectionHours={projectionHours}
+                                    showProjectionSummary={false}
                                     date={getSelectedDateStr() || ''}
                                     dayLabel={weekdayLabels[selectedDay]}
                                     canExport={userRole === 'admin' || userRole === 'superadmin'}
                                     onTransfer={draft.ready ? handleHeatmapTransfer : undefined}
+                                    onGapSelect={draft.ready && (userRole === 'admin' || userRole === 'superadmin') ? (selection, controls) => {
+                                        if (selection.date !== focusDate) return;
+                                        coverageControls.current = controls;
+                                        setCoverageSelection({ ...selection, scope: coverageScope });
+                                    } : undefined}
+                                    onGapReset={() => { setCoverageSelection(null); coverageControls.current = null; }}
+                                    gapResetKey={coverageResetKey}
                                 />
                             </div>
                         </div>
                     </div>
+                    {focusMode && <ScheduleFocusStaffPanel
+                        open={focusPanelOpen} onClose={() => setFocusPanelOpen(false)} items={visibleFocusItems}
+                        selectedId={focusSelectedId} selectedPerson={focusedPerson} selectedModality={focusedPerson ? getEffectiveModality(focusedPerson, focusDate) : undefined} onSelect={setFocusSelectedId} onBack={() => setFocusSelectedId(null)}
+                        search={focusSearch} onSearchChange={setFocusSearch} filter={focusListFilter} onFilterChange={setFocusListFilter}
+                        scrollRef={focusListScroll} returnFocusRef={focusStaffButton} dayLabel={`${weekdayLabels[selectedDay]} · ${focusDate?.split('-').reverse().join('/') || ''}`} draftReady={draft.ready}
+                        renderEditor={person => <>
+                            {focusedItem?.hasAlert && <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">{focusedItem.alertLabel}. Revisa los detalles antes de guardar.</p>}
+                            {getApprovedRequestsForStaffDay(person.id, selectedDay).length > 0 && <div className="mb-3 rounded-lg border border-green-200 bg-green-50 p-3 text-xs text-green-900"><strong>Solicitudes revisadas de este día</strong>{getApprovedRequestsForStaffDay(person.id, selectedDay).map(request => <p key={request.id} className="mt-1">{formatApprovedRequestShift(request)}</p>)}</div>}
+                            <ScheduleFocusShiftEditor
+                                person={{ ...person, modality: getEffectiveModality(person, focusDate) }} shift={focusedShift} schedule={schedules[person.id] || {}}
+                                day={selectedDay} date={focusDate} positions={positions} draftReady={draft.ready} ceased={focusedItem?.ceased}
+                                dailyHours={focusedItem?.dailyHours} weeklyHours={focusedItem?.weeklyHours} closingCounts={calcularCierres(schedules[person.id] || {})}
+                                onChange={(field, value) => handleChange(person.id, field, value)} onApply={patch => applyApprovedShift(person, patch)}
+                                onRetryAvailability={() => setAvailabilityReload(value => value + 1)}
+                            />
+                        </>}
+                    />}
                 </div>
+
+                {currentCoverageSelection && <HeatmapCoverageCandidatesDialog
+                    key={`${coverageScope}-${currentCoverageSelection.positionKey}-${currentCoverageSelection.start}-${currentCoverageSelection.end}`}
+                    selection={currentCoverageSelection} result={coverageCandidates} onClose={closeCoverageSearch} onViewCandidate={viewCoverageCandidate}
+                />}
 
                 {/* Tooltip global para horarios de estudio */}
                 {tooltipOpen && (
@@ -2547,68 +2586,6 @@ export default function WeeklyScheduleEditor() {
                     </div>
                 )}
 
-                {showExportModal && (
-                    <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
-                        <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 animate-in fade-in zoom-in duration-300">
-                            <div className="flex items-center gap-3 mb-6">
-                                <div className="p-3 bg-blue-100 rounded-xl">
-                                    <FileText className="w-6 h-6 text-blue-600" />
-                                </div>
-                                <h3 className="text-2xl font-bold text-gray-800">Opciones de Impresión</h3>
-                            </div>
-
-                            <p className="text-gray-600 mb-6 font-medium">
-                                Selecciona las opciones para la exportación del horario semanal.
-                            </p>
-
-                            <div className="space-y-5 mb-8">
-                                <label className={`flex items-start gap-4 p-5 border-2 rounded-2xl cursor-pointer transition-all ${exportOptions.excludeTrainees ? 'border-blue-500 bg-blue-50' : 'border-gray-100 hover:border-gray-200 bg-gray-50'}`}>
-                                    <input
-                                        type="checkbox"
-                                        className="w-6 h-6 mt-1 text-blue-600 rounded-lg border-gray-300 focus:ring-blue-500 cursor-pointer"
-                                        checked={exportOptions.excludeTrainees}
-                                        onChange={e => setExportOptions({ ...exportOptions, excludeTrainees: e.target.checked })}
-                                    />
-                                    <div className="select-none">
-                                        <p className="font-extrabold text-gray-900 text-lg">Solo Personal de Tienda</p>
-                                        <p className="text-sm text-gray-600 leading-relaxed font-medium">Excluye automáticamente a colaboradores en entrenamiento (Trainees).</p>
-                                    </div>
-                                </label>
-
-                                <label className={`flex items-start gap-4 p-5 border-2 rounded-2xl cursor-pointer transition-all ${exportOptions.showPositions ? 'border-purple-500 bg-purple-50' : 'border-gray-100 hover:border-gray-200 bg-gray-50'}`}>
-                                    <input
-                                        type="checkbox"
-                                        className="w-6 h-6 mt-1 text-purple-600 rounded-lg border-gray-300 focus:ring-purple-500 cursor-pointer"
-                                        checked={exportOptions.showPositions}
-                                        onChange={e => setExportOptions({ ...exportOptions, showPositions: e.target.checked })}
-                                    />
-                                    <div className="select-none">
-                                        <p className="font-extrabold text-gray-900 text-lg">Incluir Posiciones</p>
-                                        <p className="text-sm text-gray-600 leading-relaxed font-medium">Muestra el cargo/posición asignado debajo de cada turno.</p>
-                                    </div>
-                                </label>
-                            </div>
-
-                            <div className="flex gap-4">
-                                <button
-                                    onClick={() => setShowExportModal(false)}
-                                    className="flex-1 px-4 py-3.5 border border-gray-300 rounded-xl text-gray-700 font-bold hover:bg-gray-50 transition-colors"
-                                >
-                                    Cancelar
-                                </button>
-                                <button
-                                    onClick={() => {
-                                        exportSchedulePDF(activeStaff, schedules, wk, exportOptions.excludeTrainees, exportOptions.showPositions);
-                                        setShowExportModal(false);
-                                    }}
-                                    className="flex-1 px-4 py-3.5 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl font-bold shadow-lg hover:shadow-xl transform hover:scale-[1.02] active:scale-[0.98] transition-all"
-                                >
-                                    Generar PDF
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
                 {/* Modal de Solicitudes Aprobadas */}
                 {showApprovedRequestsModal && (
                     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">

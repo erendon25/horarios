@@ -11,8 +11,9 @@ const json = (status: number, body: unknown) => new Response(JSON.stringify(body
   status,
   headers: { ...corsHeaders, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
 });
-
 const normalizeEmail = (value: unknown) => typeof value === "string" ? value.trim().toLowerCase() : "";
+const isUuid = (value: unknown): value is string => typeof value === "string"
+  && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 const roleForPosition = (position: unknown) =>
   typeof position === "string" && position.trim().toUpperCase() === "ENTRENADOR" ? "trainer" : "collaborator";
 const limaToday = () => new Intl.DateTimeFormat("en-CA", {
@@ -21,6 +22,13 @@ const limaToday = () => new Intl.DateTimeFormat("en-CA", {
   month: "2-digit",
   day: "2-digit",
 }).format(new Date());
+const staffEpisodeEnded = (staff: { cessation_date?: string | null; is_trainee?: boolean | null; training_end_date?: string | null }) => {
+  const today = limaToday();
+  return Boolean(
+    (staff.cessation_date && staff.cessation_date < today)
+    || (staff.is_trainee && staff.training_end_date && staff.training_end_date < today)
+  );
+};
 
 type ServiceClient = ReturnType<typeof createClient>;
 type StaffAccount = {
@@ -33,6 +41,8 @@ type StaffAccount = {
   position: string;
   status: string;
   cessation_date: string | null;
+  is_trainee: boolean;
+  training_end_date: string | null;
 };
 
 async function consumeRateLimit(
@@ -67,7 +77,7 @@ async function consumeRateLimit(
 async function registrationAccess(service: ServiceClient, userId: string) {
   const { data: profile, error } = await service
     .from("user_profiles")
-    .select("role,status,staff_profile_id")
+    .select("role,status,store_id,staff_profile_id,registration_pending")
     .eq("id", userId)
     .maybeSingle();
   if (error) return { allowed: false, error: "registration_access_failed" as const };
@@ -75,32 +85,95 @@ async function registrationAccess(service: ServiceClient, userId: string) {
   if (["admin", "superadmin"].includes(profile.role)) {
     return { allowed: false, error: "administrative_account" as const };
   }
-  if (profile.status !== "active" || !profile.staff_profile_id) {
+  if (profile.status !== "active" || profile.registration_pending || !profile.staff_profile_id || !profile.store_id) {
     return { allowed: true, error: null };
   }
 
   const { data: staff, error: staffError } = await service
     .from("staff_profiles")
-    .select("cessation_date")
+    .select("user_id,store_id,cessation_date,is_trainee,training_end_date")
     .eq("id", profile.staff_profile_id)
     .maybeSingle();
-  if (staffError || !staff) return { allowed: false, error: "registration_access_failed" as const };
-  const cessationEffective = Boolean(staff.cessation_date && staff.cessation_date < limaToday());
-  return { allowed: cessationEffective, error: cessationEffective ? null : "account_already_linked" as const };
+  if (staffError) return { allowed: false, error: "registration_access_failed" as const };
+  if (!staff || staff.user_id !== userId || staff.store_id !== profile.store_id) {
+    return { allowed: true, error: null };
+  }
+  const { data: store, error: storeError } = await service
+    .from("stores")
+    .select("is_active")
+    .eq("id", staff.store_id)
+    .maybeSingle();
+  if (storeError) return { allowed: false, error: "registration_access_failed" as const };
+  if (!store?.is_active) return { allowed: true, error: null };
+  const episodeEnded = staffEpisodeEnded(staff);
+  return { allowed: episodeEnded, error: episodeEnded ? null : "account_already_linked" as const };
 }
+
+async function recoverExistingStaffLink(service: ServiceClient, userId: string, userEmail: string | undefined) {
+  const { data: profile, error: profileError } = await service
+    .from("user_profiles")
+    .select("id,role,status,store_id,staff_profile_id,registration_pending")
+    .eq("id", userId)
+    .maybeSingle();
+  if (profileError) return { error: "registration_access_failed" as const, linked: false };
+  if (!profile || !["collaborator", "trainer"].includes(profile.role) || !profile.staff_profile_id) {
+    return { error: null, linked: false };
+  }
+
+  const { data: staff, error: staffError } = await service
+    .from("staff_profiles")
+    .select("id,user_id,store_id,email,status,cessation_date,is_trainee,training_end_date")
+    .eq("id", profile.staff_profile_id)
+    .maybeSingle();
+  if (staffError) return { error: "registration_access_failed" as const, linked: false };
+  if (!staff || staff.user_id !== userId || staff.store_id !== profile.store_id) {
+    return { error: null, linked: false };
+  }
+  if (!['active', 'pending'].includes(profile.status)) return { error: "inactive_account" as const, linked: true };
+  if (!['active', 'pending'].includes(staff.status)) return { error: "inactive_staff" as const, linked: true };
+  if (!normalizeEmail(userEmail) || normalizeEmail(staff.email) !== normalizeEmail(userEmail)) {
+    return { error: "identity_mismatch" as const, linked: true };
+  }
+  if (staff.cessation_date && staff.cessation_date < limaToday()) {
+    return { error: "employment_ended" as const, linked: true };
+  }
+  if (staff.is_trainee && staff.training_end_date && staff.training_end_date < limaToday()) {
+    return { error: "training_ended" as const, linked: true };
+  }
+
+  const { data: store, error: storeError } = await service
+    .from("stores")
+    .select("is_active")
+    .eq("id", staff.store_id)
+    .maybeSingle();
+  if (storeError) return { error: "registration_access_failed" as const, linked: true };
+  if (!store?.is_active) return { error: "inactive_store" as const, linked: true };
+
+  if (profile.registration_pending || profile.status === "pending" || staff.status === "pending") {
+    // Revalida bajo bloqueo y sincroniza ambos estados en una transacción.
+    const { data: repaired, error: repairError } = await service.rpc("recover_current_staff_access", {
+      p_user_id: userId,
+      p_email: normalizeEmail(userEmail),
+    });
+    if (repairError || repaired !== true) return { error: "link_repair_failed" as const, linked: true };
+  }
+  return { error: null, linked: true };
+}
+
+const administrativePosition = (position: unknown) => ['GERENTE', 'ADMINISTRADOR', 'ADMINISTRADORA', 'ADMIN', 'SUPERADMIN'].includes(String(position ?? '').trim().toUpperCase());
 
 const eligibleStaffQuery = (service: ServiceClient) => service
   .from("staff_profiles")
-  .select("id,store_id,email,first_name,last_name,position,status,cessation_date")
+  .select("id,store_id,email,first_name,last_name,position,status,cessation_date,is_trainee,training_end_date")
   .eq("status", "pending")
   .is("user_id", null)
   .or(`cessation_date.is.null,cessation_date.gte.${limaToday()}`);
 
-async function listRegistrationStores(service: ServiceClient, email: string) {
+async function listRegistrationStores(service: ServiceClient) {
   const { data: staff, error } = await eligibleStaffQuery(service);
   if (error) return { error: "staff_lookup_failed" as const, stores: [] };
   const storeIds = [...new Set((staff ?? [])
-    .filter((row) => !normalizeEmail(row.email) || normalizeEmail(row.email) === email)
+    .filter((row) => !staffEpisodeEnded(row) && !administrativePosition(row.position))
     .map((row) => row.store_id))];
   if (storeIds.length === 0) return { error: null, stores: [] };
 
@@ -114,7 +187,16 @@ async function listRegistrationStores(service: ServiceClient, email: string) {
   return { error: null, stores: stores ?? [] };
 }
 
-async function listRegistrationStaff(service: ServiceClient, email: string, storeId: string) {
+async function listRegistrationStaff(service: ServiceClient, storeId: string) {
+  const { data: store, error: storeError } = await service
+    .from("stores")
+    .select("id")
+    .eq("id", storeId)
+    .eq("is_active", true)
+    .maybeSingle();
+  if (storeError) return { error: "store_lookup_failed" as const, staff: [] };
+  if (!store) return { error: null, staff: [] };
+
   const { data, error } = await eligibleStaffQuery(service)
     .eq("store_id", storeId)
     .order("first_name")
@@ -123,7 +205,7 @@ async function listRegistrationStaff(service: ServiceClient, email: string, stor
   return {
     error: null,
     staff: (data ?? [])
-      .filter((row) => !normalizeEmail(row.email) || normalizeEmail(row.email) === email)
+      .filter((row) => !staffEpisodeEnded(row) && !administrativePosition(row.position))
       .map(({ id, first_name, last_name, position }) => ({ id, first_name, last_name, position })),
   };
 }
@@ -196,9 +278,21 @@ Deno.serve(async (request) => {
   const body = await request.json().catch(() => null);
   if (!body || typeof body.operation !== "string") return json(400, { error: "invalid_payload" });
 
+  if (body.operation === "recover_existing_staff_link") {
+    const limit = await consumeRateLimit(service, authData.user.id, "registration-recovery", 30);
+    if (limit.error) return limit.error;
+    const recovery = await recoverExistingStaffLink(service, authData.user.id, authData.user.email);
+    if (recovery.error) {
+      const denied = ["inactive_account", "inactive_staff", "identity_mismatch", "employment_ended", "training_ended", "inactive_store"].includes(recovery.error);
+      return json(denied ? 409 : 500, { error: recovery.error, linked: recovery.linked });
+    }
+    return json(200, { linked: recovery.linked, recovered: recovery.linked });
+  }
+
   if (["list_registration_stores", "list_registration_staff", "claim_staff_account"].includes(body.operation)) {
     const email = normalizeEmail(authData.user.email);
     if (!email) return json(400, { error: "account_email_required" });
+    if (!authData.user.email_confirmed_at) return json(403, { error: "email_not_confirmed" });
 
     const access = await registrationAccess(service, authData.user.id);
     if (!access.allowed) {
@@ -210,13 +304,13 @@ Deno.serve(async (request) => {
     if (limit.error) return limit.error;
 
     if (body.operation === "list_registration_stores") {
-      const result = await listRegistrationStores(service, email);
+      const result = await listRegistrationStores(service);
       return result.error ? json(500, { error: result.error }) : json(200, { stores: result.stores });
     }
 
     if (body.operation === "list_registration_staff") {
       if (typeof body.storeId !== "string") return json(400, { error: "store_required" });
-      const result = await listRegistrationStaff(service, email, body.storeId);
+      const result = await listRegistrationStaff(service, body.storeId);
       return result.error ? json(500, { error: result.error }) : json(200, { staff: result.staff });
     }
 
@@ -231,7 +325,7 @@ Deno.serve(async (request) => {
     const { data: staff, error: staffError } = await eligibleStaffQuery(service)
       .eq("id", body.staffId)
       .maybeSingle();
-    if (staffError || !staff || (normalizeEmail(staff.email) && normalizeEmail(staff.email) !== email)) {
+    if (staffError || !staff || staffEpisodeEnded(staff) || administrativePosition(staff.position)) {
       return json(409, { error: "staff_not_available" });
     }
 
@@ -260,6 +354,158 @@ Deno.serve(async (request) => {
     });
   }
 
+  if (["list_admins", "update_admin", "delete_admin", "delete_staff", "unlink_staff"].includes(body.operation)) {
+    const { data: caller, error: callerError } = await service.from("user_profiles")
+      .select("role,status,store_id").eq("id", authData.user.id).maybeSingle();
+    const scopedStaffDelete = caller?.role === "admin" && body.operation === "delete_staff";
+    if (callerError || caller?.status !== "active" || (caller.role !== "superadmin" && !scopedStaffDelete)) {
+      return json(403, { error: "forbidden" });
+    }
+    if (scopedStaffDelete) {
+      if (!caller.store_id) return json(403, { error: "forbidden" });
+      const { data: store, error: storeError } = await service.from("stores")
+        .select("is_active").eq("id", caller.store_id).maybeSingle();
+      if (storeError || !store?.is_active) return json(403, { error: "inactive_store" });
+    }
+
+    if (body.operation === "list_admins") {
+      const admins = [];
+      for (let offset = 0; ; offset += 500) {
+        const { data, error } = await service.from("user_profiles")
+          .select("id,email,first_name,last_name,store_id,status,created_at,stores(name,is_active)")
+          .eq("role", "admin").order("created_at", { ascending: false }).order("id")
+          .range(offset, offset + 499);
+        if (error) return json(500, { error: "admin_list_failed" });
+        admins.push(...(data ?? []));
+        if (!data || data.length < 500) break;
+      }
+      return json(200, { admins });
+    }
+
+    if (body.operation === "update_admin") {
+      const email = normalizeEmail(body.email);
+      const password = body.password;
+      if (!isUuid(body.userId) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+        || (password !== undefined && (typeof password !== "string" || password.length < 6))) {
+        return json(400, { error: "invalid_admin_details" });
+      }
+      const { data: target, error } = await service.from("user_profiles")
+        .select("id,role").eq("id", body.userId).maybeSingle();
+      if (error) return json(500, { error: "account_lookup_failed" });
+      if (!target || target.role !== "admin") return json(404, { error: "admin_not_found" });
+      const limit = await consumeRateLimit(service, authData.user.id, "update-admin", 20);
+      if (limit.error) return limit.error;
+      // The Auth email trigger synchronizes application profiles in the same transaction.
+      const { error: updateError } = await service.auth.admin.updateUserById(target.id, {
+        email, email_confirm: true, ...(password === undefined ? {} : { password }),
+      });
+      if (updateError) {
+        const duplicate = ["email_exists", "user_already_exists"].includes(updateError.code ?? "");
+        return json(duplicate ? 409 : 400, { error: duplicate ? "email_already_registered" : "admin_update_failed" });
+      }
+      return json(200, { updated: true, userId: target.id, email });
+    }
+
+    const deletingAdmin = body.operation === "delete_admin";
+    if (deletingAdmin ? !isUuid(body.userId)
+      : typeof body.staffId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(body.staffId)) {
+      return json(400, { error: deletingAdmin ? "invalid_admin_id" : "invalid_staff_id" });
+    }
+    const rpcName = deletingAdmin ? "superadmin_manage_admin_account" : "superadmin_manage_staff_account";
+    const limit = await consumeRateLimit(service, authData.user.id, deletingAdmin ? "delete-admin" : "manage-staff", 20);
+    if (limit.error) return limit.error;
+    let staffId = body.staffId;
+    if (!deletingAdmin && !isUuid(staffId)) {
+      // Older browser builds may send the imported Firestore document id.
+      // Resolve it once after authorization, then use the same UUID for both RPCs.
+      let lookup = service.from("staff_profiles").select("id").eq("firestore_id", staffId);
+      if (scopedStaffDelete) lookup = lookup.eq("store_id", caller.store_id);
+      const { data: staff, error } = await lookup.maybeSingle();
+      if (error) return json(500, { error: "staff_lookup_failed" });
+      if (!staff) return json(404, { error: "staff_not_found" });
+      staffId = staff.id;
+    }
+    const targetArgs = deletingAdmin ? { p_user_id: body.userId } : { p_staff_id: staffId };
+    // Forward the verified caller JWT so the transaction independently checks auth.uid().
+    const callerClient = createClient(supabaseUrl, serviceRoleKey, {
+      global: { headers: { Authorization: `Bearer ${accessToken}` } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const transactionError = (error: { message: string; code?: string }, removedFiles = false) => {
+      const known = ["forbidden", "inactive_store", "staff_not_found", "admin_not_found", "protected_account", "account_link_conflict", "account_has_storage_objects", "account_has_shared_files"];
+      const code = known.find((value) => error.message === value);
+      if (removedFiles) return json(409, { error: "staff_operation_after_files_failed" });
+      if (code) return json(["forbidden", "inactive_store"].includes(code) ? 403 : ["staff_not_found", "admin_not_found"].includes(code) ? 404 : 409, { error: code });
+      console.error("staff account transaction failed", { code: error.code, message: error.message });
+      return json(500, { error: "staff_operation_failed" });
+    };
+    const { data: plan, error: planError } = await callerClient.rpc(rpcName, {
+      ...targetArgs, p_operation: `inspect_${body.operation}`,
+    });
+    if (planError) return transactionError(planError);
+    if (!plan || !Array.isArray(plan.files)) return json(500, { error: "staff_operation_failed" });
+    // Storage is outside the SQL transaction. Remove only the verified account's
+    // objects through the Storage API; retries also handle partially removed files.
+    const buckets = new Map<string, string[]>();
+    for (const file of plan.files) {
+      const paths = buckets.get(file.bucket) ?? [];
+      paths.push(file.path);
+      buckets.set(file.bucket, paths);
+    }
+    for (const [bucket, paths] of buckets) {
+      for (let offset = 0; offset < paths.length; offset += 100) {
+        const { error } = await service.storage.from(bucket).remove(paths.slice(offset, offset + 100));
+        if (error) return json(500, { error: "staff_files_removal_failed" });
+      }
+    }
+    const { data, error } = await callerClient.rpc(rpcName, {
+      ...targetArgs, p_operation: body.operation, ...(deletingAdmin ? {} : { p_expected_user_id: plan.userId }),
+    });
+    if (error) return transactionError(error, plan.files.length > 0);
+    return json(200, data);
+  }
+
+  if (body.operation === "create_admin") {
+    const { data: caller, error: callerError } = await service.from("user_profiles")
+      .select("role,status").eq("id", authData.user.id).maybeSingle();
+    if (callerError || caller?.role !== "superadmin" || caller.status !== "active") {
+      return json(403, { error: "forbidden" });
+    }
+    const email = normalizeEmail(body.email);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+      || typeof body.password !== "string" || body.password.length < 6
+      || typeof body.storeId !== "string"
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.storeId)) {
+      return json(400, { error: "invalid_admin_details" });
+    }
+    const { data: store, error: storeError } = await service.from("stores")
+      .select("id,is_active").eq("id", body.storeId).maybeSingle();
+    if (storeError) return json(500, { error: "store_lookup_failed" });
+    if (!store?.is_active) return json(409, { error: "inactive_store" });
+    const limit = await consumeRateLimit(service, authData.user.id, "create-admin", 10);
+    if (limit.error) return limit.error;
+    // Create a new identity only; never elevate an existing collaborator account.
+    const { data: created, error: createError } = await service.auth.admin.createUser({
+      email, password: body.password, email_confirm: true,
+      app_metadata: { role: "admin", store_id: store.id },
+    });
+    if (createError || !created.user) {
+      const duplicate = ["email_exists", "user_already_exists"].includes(createError?.code ?? "")
+        || /already.*(registered|exists)/i.test(createError?.message ?? "");
+      return json(duplicate ? 409 : 400, { error: duplicate ? "email_already_registered" : "admin_creation_failed" });
+    }
+    const { error: profileError } = await service.from("user_profiles").insert({
+      id: created.user.id, email, role: "admin", status: "active",
+      store_id: store.id, staff_profile_id: null, registration_pending: false,
+    });
+    if (profileError) {
+      const rollback = await service.auth.admin.deleteUser(created.user.id);
+      if (rollback.error) console.error("create_admin rollback failed", created.user.id);
+      return json(500, { error: "admin_profile_creation_failed" });
+    }
+    return json(201, { created: true, userId: created.user.id, storeId: store.id });
+  }
+
   if (body.operation !== "invite_staff" || typeof body.staffId !== "string") {
     return json(400, { error: "invalid_payload" });
   }
@@ -272,13 +518,22 @@ Deno.serve(async (request) => {
   if (callerError || !caller || caller.status !== "active" || !["admin", "superadmin"].includes(caller.role)) {
     return json(403, { error: "forbidden" });
   }
+  if (caller.role === "admin") {
+    if (!caller.store_id) return json(403, { error: "inactive_store" });
+    const { data: callerStore, error: callerStoreError } = await service
+      .from("stores")
+      .select("is_active")
+      .eq("id", caller.store_id)
+      .maybeSingle();
+    if (callerStoreError || !callerStore?.is_active) return json(403, { error: "inactive_store" });
+  }
 
   const limit = await consumeRateLimit(service, authData.user.id, "admin-invite", 5);
   if (limit.error) return limit.error;
 
   const { data: staff, error: staffError } = await service
     .from("staff_profiles")
-    .select("id,user_id,store_id,email,first_name,last_name,position,status,cessation_date")
+    .select("id,user_id,store_id,email,first_name,last_name,position,status,cessation_date,is_trainee,training_end_date")
     .eq("id", body.staffId)
     .single();
   if (staffError || !staff) return json(404, { error: "staff_not_found" });
@@ -286,7 +541,7 @@ Deno.serve(async (request) => {
     return json(403, { error: "different_store" });
   }
   if (staff.user_id) return json(409, { error: "already_linked" });
-  if (staff.status === "inactive" || (staff.cessation_date && staff.cessation_date < limaToday())) {
+  if (staff.status === "inactive" || staffEpisodeEnded(staff)) {
     return json(409, { error: "inactive_staff" });
   }
 

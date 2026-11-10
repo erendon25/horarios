@@ -58,6 +58,7 @@ const TrainingDashboard = ({ onStartEvaluation, activeArea, onAreaChange, onSele
                         progress,
                         lastEvaluation: data.lastEvaluationDate || 'Nunca',
                         skills: normalizedSkills, // Use normalized for consistency
+                        competitionCertifications: Object.keys(data.competitionCertifications || {}).filter(key=>areaStations[key]),
                         area: activeArea
                     };
                 }).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name, 'es'));
@@ -275,6 +276,9 @@ const TrainingDashboard = ({ onStartEvaluation, activeArea, onAreaChange, onSele
                                         </div>
                                     </div>
 
+                                    {collab.competitionCertifications.length>0&&<div className="mb-4 text-sm text-green-700" aria-label={`Certificaciones del concurso de ${collab.name}`}>
+                                      {collab.competitionCertifications.map(key=><p key={key}>{key}: certificado al 100% por avance en el concurso</p>)}
+                                    </div>}
                                     <div className="pt-5 sm:pt-6 border-t border-gray-50 flex justify-between items-center bg-gradient-to-b from-transparent to-gray-50/30 -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 -mb-4 sm:-mb-6 lg:-mb-8 mt-2 pb-4 sm:pb-6 lg:pb-8">
                                         <div className="flex flex-col">
                                             <span className="text-[9px] font-black text-gray-300 uppercase tracking-widest mb-1">Última Sesión</span>

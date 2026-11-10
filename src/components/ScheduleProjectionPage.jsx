@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, AlertCircle, RefreshCw } from "lucide-react";
 import { collection, getDocs, query, where } from "../lib/supabase/firestoreCompat";
@@ -11,12 +11,17 @@ export default function ScheduleProjectionPage() {
   const { userData } = useAuth();
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadedStaffStoreId, setLoadedStaffStoreId] = useState(null);
   const [error, setError] = useState("");
   const [refreshToken, setRefreshToken] = useState(0);
+  const staffRequestRef = useRef(0);
 
   const fetchStaff = async () => {
-    if (!userData?.storeId) {
+    const request = ++staffRequestRef.current;
+    const storeId = userData?.storeId;
+    if (!storeId) {
       setStaff([]);
+      setLoadedStaffStoreId(null);
       setLoading(false);
       return;
     }
@@ -27,20 +32,27 @@ export default function ScheduleProjectionPage() {
     try {
       const staffQuery = query(
         collection(db, "staff_profiles"),
-        where("storeId", "==", userData.storeId)
+        where("storeId", "==", storeId)
       );
       const snapshot = await getDocs(staffQuery);
+      if (request !== staffRequestRef.current) return;
       setStaff(snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() })));
     } catch (err) {
+      if (request !== staffRequestRef.current) return;
       console.error("Error al cargar colaboradores para proyeccion:", err);
+      setStaff([]);
       setError("No se pudo cargar la plantilla para calcular el VHL general.");
     } finally {
-      setLoading(false);
+      if (request === staffRequestRef.current) {
+        setLoadedStaffStoreId(storeId);
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
     fetchStaff();
+    return () => { staffRequestRef.current += 1; };
   }, [userData?.storeId]);
 
   const refreshAllData = () => {
@@ -82,12 +94,13 @@ export default function ScheduleProjectionPage() {
         </div>
       )}
 
-      {loading ? (
+      {loadedStaffStoreId !== userData?.storeId && userData?.storeId ? (
         <div className="min-h-[60vh] flex items-center justify-center text-slate-500 font-semibold">
           Cargando ventas, horarios y VHL general...
         </div>
       ) : (
         <ScheduleProjectionDashboard
+          key={userData?.storeId}
           staffList={staff}
           storeId={userData?.storeId}
           refreshToken={refreshToken}

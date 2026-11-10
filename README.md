@@ -87,6 +87,11 @@ firebase deploy --only hosting:lc-scheduler
 ```
 
 Firebase publica el contenido de `build/` según `firebase.json`.
+El hook `predeploy` compila antes de publicar para evitar reutilizar una carpeta
+`build/` de otra rama. Cada compilación incluye `/release.json` con el commit,
+la rama, la fecha de compilación y si había cambios de código sin guardar en Git.
+Antes de publicar, integra todos los cambios aprobados en `main`: compilar una
+rama atrasada también publica una aplicación atrasada.
 
 ## Flujo recomendado para futuras actualizaciones
 

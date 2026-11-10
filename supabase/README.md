@@ -12,8 +12,13 @@ El proyecto activo de Supabase ya fue creado y el esquema, la importación y el 
 - `staff_management.sql`: alta y edición transaccional de colaboradores y vínculo interno con Auth.
 - `study_schedule_management.sql`: reemplazo atómico de disponibilidad con bloqueos de carnet y tienda.
 - `migrations/*_training_signatures_storage.sql`: bucket privado y políticas RLS para firmas de evaluaciones.
+- `migrations/20261011031701_scope_cessation_account_name_cleanup.sql`: corrige el borrado temporal de nombres al retirar cuentas por cese. Usa las cuentas eliminadas por la misma sentencia y mantiene la protección `safeupdate` activa.
 
 Las futuras modificaciones deben aplicarse como migraciones y mantener estos archivos declarativos alineados con producción.
+
+Instalada el 11/10/2026 en `nwwnnnjppycdrbeuzhnf`: `migrations/20261011130351_staff_profile_photos.sql`, para foto propia y bucket privado del fixture. La versión local coincide con el historial remoto; no volver a aplicarla al mismo proyecto. Implementación, pruebas y verificación del despliegue en [Fotos de perfil](../docs/CONCURSO.md#fotos-de-perfil).
+
+Después instalar `migrations/20261011063222_competition_profile_recognition.sql`: laureles por campeonato y certificación al 100% por avance oficial, con recálculo ante correcciones y conservación de la capacitación independiente. Ver [Laureles y certificación automática](../docs/CONCURSO.md#laureles-y-certificación-automática). Ambas migraciones están probadas localmente; el acceso CLI disponible no incluye el proyecto de producción configurado.
 
 El procedimiento de rate limiting, alertas, backup y recuperación se mantiene en `operations/PRODUCTION_RUNBOOK.md`; la verificación posterior a una restauración está en `operations/recovery/verify_restore.sql`.
 
@@ -74,3 +79,7 @@ La Edge Function `staff-account-admin` requiere el secreto `APP_URL` con la URL 
 8. auditoría y validación final
 
 Referencia oficial: Supabase permite exportar colecciones de Firestore a JSON y transformarlas mediante hooks antes de importarlas en tablas PostgreSQL. Para este proyecto se necesitarán hooks porque varias colecciones contienen estructuras anidadas.
+
+## Concurso de velocidad y calidad
+
+Las migraciones `20260927053023_speed_quality_competition.sql` y `20260927053329_competition_foreign_key_indexes.sql` añaden el dominio de concursos, funciones transaccionales, RLS y vistas de ranking. Reutilizan `staff_profiles`, `stores`, la autorización privada existente y `audit_log`. Consulte `docs/CONCURSO.md` para configuración, pruebas, decisiones de cronometraje y despliegue.

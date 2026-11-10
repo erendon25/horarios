@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   collection,
+  query,
+  where,
   onSnapshot,
   addDoc,
   getFirestore,
@@ -8,11 +10,13 @@ import {
   setDoc,
   deleteDoc,
   updateDoc,
-  getDocs,
-  writeBatch,
-  updateDoc as updateFirestoreDoc
+  getDocs
 } from '../lib/supabase/firestoreCompat';
 import { supabase } from '../lib/supabase/client';
+import { invokeAuthenticatedFunction } from '../lib/supabase/invokeAuthenticatedFunction';
+import { invokeStaffAccountAdmin } from '../services/staffAccountAdmin';
+import AdminAccountsPanel from './AdminAccountsPanel';
+import StaffModal from './StaffModal';
 import { toast } from 'react-toastify';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -39,34 +43,59 @@ function SuperAdminDashboard() {
   const [newStore, setNewStore] = useState({ name: '', ciudad: '', direccion: '' });
   const [adminEmail, setAdminEmail] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
+  const [creatingAdmin, setCreatingAdmin] = useState(false);
+  const [adminRefreshKey, setAdminRefreshKey] = useState(0);
+  const [busyStaffId, setBusyStaffId] = useState(null);
   const [selectedStoreId, setSelectedStoreId] = useState('');
   const [editingStoreId, setEditingStoreId] = useState(null);
   const [staffProfiles, setStaffProfiles] = useState([]);
+  const [editingStaff, setEditingStaff] = useState(null);
+  const [staffLoadError, setStaffLoadError] = useState('');
+  const [staffRefreshing, setStaffRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [storeFilter, setStoreFilter] = useState('');
   const [modalityFilter, setModalityFilter] = useState('');
   const weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-  const { logout, currentUser } = useAuth();
+  const { logout, currentUser, userData } = useAuth();
   const navigate = useNavigate();
 
   const db = getFirestore();
 
   useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, 'stores'), (snapshot) => {
+    const unsubscribe = onSnapshot(query(collection(db, 'stores'), where('active', '==', true)), (snapshot) => {
       const storeList = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
       setStores(storeList);
     });
     return () => unsubscribe();
   }, [db]);
 
-  useEffect(() => {
-    const fetchStaff = async () => {
+  const fetchStaff = useCallback(async () => {
+    setStaffLoadError('');
+    setStaffRefreshing(true);
+    try {
       const snapshot = await getDocs(collection(db, 'staff_profiles'));
       const result = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setStaffProfiles(result);
-    };
-    fetchStaff();
+      return true;
+    } catch (error) {
+      console.error('Error al actualizar colaboradores:', error);
+      setStaffLoadError('No se pudo actualizar el listado de colaboradores. Los datos visibles pueden estar desactualizados.');
+      return false;
+    } finally {
+      setStaffRefreshing(false);
+    }
   }, [db]);
+
+  useEffect(() => {
+    fetchStaff();
+  }, [fetchStaff]);
+
+  const handleStaffSaved = async () => {
+    setEditingStaff(null);
+    const refreshed = await fetchStaff();
+    if (refreshed) toast.success('Información del colaborador actualizada.');
+    else toast.info('La información se guardó. Actualiza el listado para ver los cambios.');
+  };
 
   const handleCreateStore = async () => {
     try {
@@ -122,80 +151,85 @@ function SuperAdminDashboard() {
   };
 
   const handleCreateAdmin = async () => {
+    if (creatingAdmin) return;
     try {
       if (!adminEmail.includes('@') || adminPassword.length < 6 || !selectedStoreId) {
         toast.error('Email inválido, contraseña muy corta (mín. 6) o tienda no seleccionada');
         return;
       }
 
-      const { error } = await supabase.functions.invoke('staff-account-admin', {
+      setCreatingAdmin(true);
+      const { error } = await invokeAuthenticatedFunction(supabase, 'staff-account-admin', {
         body: {
           operation: 'create_admin',
-          email: adminEmail,
+          email: adminEmail.trim().toLowerCase(),
           password: adminPassword,
           storeId: selectedStoreId,
         },
       });
-      if (error) throw error;
+      if (error) {
+        const payload = await error.context?.json?.().catch(() => null);
+        const messages = {
+          forbidden: 'Solo un superadmin activo puede crear administradores.',
+          invalid_admin_details: 'Revisa el correo, la contraseña y la tienda seleccionada.',
+          inactive_store: 'La tienda seleccionada no está activa.',
+          email_already_registered: 'Este correo ya tiene una cuenta. Utiliza otro correo.',
+          admin_creation_failed: 'No se pudo crear la cuenta. Revisa la contraseña e inténtalo nuevamente.',
+          admin_profile_creation_failed: 'No se pudo guardar el acceso del administrador. Inténtalo nuevamente.',
+          rate_limited: 'Has realizado demasiados intentos. Espera unos minutos.',
+        };
+        throw new Error(messages[payload?.error] || 'No se pudo crear el administrador. Inténtalo nuevamente.');
+      }
 
       toast.success('Administrador creado exitosamente');
+      setAdminRefreshKey((key) => key + 1);
       setAdminEmail('');
       setAdminPassword('');
       setSelectedStoreId('');
     } catch (err) {
       console.error(err);
       toast.error('Error al crear administrador: ' + err.message);
+    } finally {
+      setCreatingAdmin(false);
     }
   };
 
   const handleUnlinkEmail = async (id) => {
-    const confirm = window.confirm('¿Estás seguro de desvincular el correo del colaborador?');
+    if (busyStaffId) return;
+    const confirm = window.confirm('¿Desvincular el correo del colaborador? Se eliminarán su cuenta de acceso y sus archivos personales. Su perfil, horarios y evaluaciones se conservarán.');
     if (!confirm) return;
 
     try {
-      const { error } = await supabase.functions.invoke('staff-account-admin', {
-        body: { operation: 'unlink_staff', staffId: id },
-      });
-      if (error) throw error;
+      setBusyStaffId(id);
+      await invokeStaffAccountAdmin(supabase, { operation: 'unlink_staff', staffId: id });
       toast.success('Correo y acceso desvinculados');
       setStaffProfiles(prev => prev.map(p => p.id === id ? { ...p, email: '', uid: '' } : p));
     } catch (error) {
-      toast.error('No se pudo desvincular el correo');
+      toast.error(error.message);
+    } finally {
+      setBusyStaffId(null);
     }
-  };
-
-  const deleteRefsInBatches = async (refs) => {
-    const uniqueRefs = Array.from(
-      new Map(refs.filter(Boolean).map(ref => [ref.path, ref])).values()
-    );
-
-    for (let i = 0; i < uniqueRefs.length; i += 450) {
-      const batch = writeBatch(db);
-      uniqueRefs.slice(i, i + 450).forEach(ref => batch.delete(ref));
-      await batch.commit();
-    }
-
-    return uniqueRefs.length;
   };
 
   const handleDeleteStaffCompletely = async (profile) => {
+    if (busyStaffId) return;
     const fullName = `${profile.name || ''} ${profile.lastName || ''}`.trim() || 'este colaborador';
     const confirm = window.confirm(
-      `Eliminar definitivamente a ${fullName}?\n\nSe borrarán de Supabase su perfil, cuenta, horarios, solicitudes, feriados, ceses, horas extra y evaluaciones relacionadas.`
+      `¿Eliminar definitivamente a ${fullName}?\n\nSe eliminarán su perfil, cuenta de acceso, archivos personales y registros relacionados. Los horarios históricos se conservarán como texto, sin usuario vinculado. Esta acción no se puede deshacer.`
     );
     if (!confirm) return;
 
     try {
+      setBusyStaffId(profile.id);
       const staffId = profile.id;
-      const { data, error } = await supabase.functions.invoke('staff-account-admin', {
-        body: { operation: 'delete_staff', staffId },
-      });
-      if (error) throw error;
+      await invokeStaffAccountAdmin(supabase, { operation: 'delete_staff', staffId });
       setStaffProfiles(prev => prev.filter(p => p.id !== staffId));
-      toast.success(`Colaborador y cuenta eliminados de Supabase (${data?.deletedRecords ?? 1} perfil).`);
+      toast.success('Colaborador, cuenta y registros relacionados eliminados definitivamente.');
     } catch (error) {
       console.error('Error eliminando usuario completamente:', error);
       toast.error('No se pudo eliminar el usuario por completo: ' + error.message);
+    } finally {
+      setBusyStaffId(null);
     }
   };
 
@@ -271,7 +305,7 @@ function SuperAdminDashboard() {
             </div>
             
             <div className="flex gap-3 items-center">
-              {currentUser?.email === 'erickrendon18@gmail.com' && (
+              {userData?.storeId && (
                   <button 
                     onClick={() => navigate('/admin')}
                     className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg shadow hover:shadow-lg transform hover:-translate-y-0.5 transition-all text-sm font-medium"
@@ -425,7 +459,8 @@ function SuperAdminDashboard() {
                 <div>
                   <label className="text-xs font-bold text-gray-700 mb-1 block">Contraseña Temporal</label>
                   <input 
-                    type="text" 
+                    type="password"
+                    autoComplete="new-password"
                     className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-fuchsia-500 outline-none font-mono" 
                     placeholder="Min. 6 caracteres" 
                     value={adminPassword} 
@@ -434,14 +469,19 @@ function SuperAdminDashboard() {
                 </div>
 
                 <div className="pt-4">
-                  <button onClick={handleCreateAdmin} className="w-full bg-gradient-to-r from-fuchsia-600 to-purple-600 hover:from-fuchsia-700 hover:to-purple-700 text-white py-3 rounded-xl font-bold shadow-md transition-all flex justify-center items-center gap-2 transform hover:-translate-y-0.5">
+                  <button onClick={handleCreateAdmin} disabled={creatingAdmin} className="w-full bg-gradient-to-r from-fuchsia-600 to-purple-600 hover:from-fuchsia-700 hover:to-purple-700 text-white py-3 rounded-xl font-bold shadow-md transition-all flex justify-center items-center gap-2 transform hover:-translate-y-0.5 disabled:opacity-50">
                     <ShieldAlert className="w-5 h-5"/>
-                    Confirmar Creación de Administrador
+                    {creatingAdmin ? 'Creando administrador…' : 'Confirmar Creación de Administrador'}
                   </button>
                 </div>
              </div>
           </div>
         </div>
+
+        <AdminAccountsPanel refreshKey={adminRefreshKey} onDeleted={(userId) => {
+          setStaffProfiles((previous) => previous.map((profile) => profile.uid === userId
+            ? { ...profile, uid: '', email: '' } : profile));
+        }} />
 
         {/* DIRECTORIO DE COLABORADORES */}
         <div className="bg-white rounded-2xl shadow border border-gray-100 p-6">
@@ -488,6 +528,16 @@ function SuperAdminDashboard() {
              </div>
            </div>
 
+           {staffLoadError && (
+             <div role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+               <p>{staffLoadError}</p>
+               <button type="button" onClick={fetchStaff} disabled={staffRefreshing}
+                 className="mt-2 rounded-lg border border-red-300 px-3 py-2 font-bold disabled:opacity-50">
+                 Actualizar colaboradores
+               </button>
+             </div>
+           )}
+
            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
              {filteredStaff.map((profile) => (
                <div key={profile.id} className="p-4 border rounded-xl hover:shadow-lg transition-all bg-white relative group flex flex-col h-full border-gray-200">
@@ -514,9 +564,19 @@ function SuperAdminDashboard() {
                  </div>
 
                  <div className="mt-4 pt-3 border-t border-gray-100 space-y-2">
+                   <button
+                     type="button"
+                     onClick={() => setEditingStaff(profile)}
+                     disabled={Boolean(busyStaffId) || staffRefreshing}
+                     className="flex items-center justify-center gap-1 w-full text-xs font-bold text-blue-700 border border-blue-200 hover:bg-blue-50 py-1.5 rounded transition-colors disabled:opacity-50"
+                   >
+                     <Edit className="w-3 h-3" />
+                     Editar información
+                   </button>
                    {profile.email && (
                      <button 
                        onClick={() => handleUnlinkEmail(profile.id)} 
+                       disabled={Boolean(busyStaffId)}
                        className="flex items-center justify-center gap-1 w-full text-xs font-bold text-red-600 hover:text-white border border-red-200 hover:bg-red-500 py-1.5 rounded transition-colors"
                      >
                        <Link2Off className="w-3 h-3" />
@@ -525,6 +585,7 @@ function SuperAdminDashboard() {
                    )}
                    <button
                      onClick={() => handleDeleteStaffCompletely(profile)}
+                     disabled={Boolean(busyStaffId)}
                      className="flex items-center justify-center gap-1 w-full text-xs font-black text-white bg-red-600 hover:bg-red-700 border border-red-700 py-1.5 rounded transition-colors"
                      title="Eliminar todos los registros de Supabase vinculados a este colaborador"
                    >
@@ -546,6 +607,15 @@ function SuperAdminDashboard() {
         </div>
 
       </main>
+      {editingStaff && (
+        <StaffModal
+          key={editingStaff.id}
+          staff={editingStaff}
+          userData={userData}
+          onClose={() => setEditingStaff(null)}
+          onSaved={handleStaffSaved}
+        />
+      )}
     </div>
   );
 }

@@ -92,6 +92,8 @@ migration/transformed/
 migration/reports/private/
 output/
 tmp/
+/.tmp/
+/.worktrees/
 *firebase-service*.json
 *service-account*.json
 *scrypt*.txt

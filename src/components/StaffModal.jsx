@@ -71,10 +71,10 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
           <button onClick={onClose} className="text-white hover:text-blue-200 text-2xl font-bold leading-none">&times;</button>
         </div>
 
-        <form onSubmit={handleSave} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+        <form onSubmit={handleSave} className="p-6 space-y-4 max-h-[70dvh] overflow-y-auto">
 
           {/* Nombre + Apellido */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className={labelCls}>Nombre *</label>
               <input type="text" name="name" value={form.name} onChange={handleChange} className={inputCls} placeholder="Ej: Aydan" />
@@ -101,7 +101,7 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
           </div>
 
           {/* DNI + Sexo */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className={labelCls}>DNI</label>
               <input type="text" name="dni" value={form.dni} onChange={handleChange} className={inputCls} placeholder="Ej: 73221235" maxLength={15} />
@@ -117,7 +117,7 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
           </div>
 
           {/* Modalidad + Fecha de ingreso */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className={labelCls}>Modalidad Actual</label>
               <select name="modality" value={form.modality} onChange={handleChange} className={inputCls}>
@@ -137,7 +137,7 @@ function StaffModal({ staff = null, userData, onClose, onSaved }) {
             <p className="text-xs font-bold text-blue-800 uppercase tracking-wider flex items-center gap-1">
               <span className="text-lg">⚡</span> Programar cambio de modalidad
             </p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-[10px] font-bold text-blue-600 uppercase mb-1">Nueva Modalidad</label>
                 <select name="nextModality" value={form.nextModality} onChange={handleChange} className={inputCls}>

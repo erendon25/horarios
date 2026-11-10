@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTransactionSuggestiveSalesPlan } from './suggestiveSalesGoals.js';
+import { buildTransactionSuggestiveSalesPlan, SUGGESTIVE_PRODUCTS } from './suggestiveSalesGoals.js';
 
 const date = '2026-09-07';
 const goalsSum = (goals) => Object.values(goals).reduce((sum, value) => sum + value, 0);
@@ -132,4 +132,39 @@ test('el indicador medido usa las mismas fechas con TRX y los tres SKU, sin mezc
   assert.equal(plan.coveredDays, 1);
   assert.equal(plan.metrics.measuredSalonTrx, 600);
   assert.equal(plan.metrics.actualUnits, 100);
+});
+
+test('cuenta ventas de SKU presentes aunque falten otros productos o TRX', () => {
+  const plan = calculate({ history: [{ date, totalTxs: null, suggestiveProducts: {
+    cheeseBorder: { 9: { SALON: 7, 'DRIVE THRU': 30, 'SERV. FILA': 2, DELIVERY: 4 } },
+  } }] });
+  assert.equal(plan.summaries.find((p) => p.id === 'cheeseBorder').actual, 7);
+  assert.equal(plan.channelActuals.cheeseBorder['DRIVE THRU'], 30);
+  assert.equal(plan.channelActuals.cheeseBorder.DELIVERY, 4);
+  assert.equal(plan.metrics.actualUnits, 7);
+  assert.equal(plan.metrics.actualParticipation, null);
+});
+
+test('las cantidades mensuales manuales se conservan por SKU al distribuir fechas, turnos y horas', () => {
+  const unitTargets = { cheeseBorder: 137, hazloCanelitasV3: 51, hazloCrazyV3: 9 };
+  const plan = calculate({ unitTargets, staff: [{ id: 'a', name: 'A' }], schedules: [schedule('a', '09:00', '09:15')] });
+  assert.equal(plan.targetMode, 'units');
+  assert.deepEqual(plan.targets, unitTargets);
+  for (const { id } of SUGGESTIVE_PRODUCTS) {
+    assert.equal(plan.daily.reduce((sum, d) => sum + d.goals[id], 0), unitTargets[id]);
+    assert.equal(plan.rows.reduce((sum, r) => sum + r.goals[id], 0), unitTargets[id]);
+  }
+  assert.ok(plan.rows.every((r) => r.channel === 'SALÓN'));
+});
+
+test('las metas manuales admiten cero y rechazan cantidades negativas, incompletas o fraccionarias', () => {
+  assert.equal(calculate({ unitTargets: { cheeseBorder: 0, hazloCanelitasV3: 0, hazloCrazyV3: 0 } }).metrics.totalGoal, 0);
+  for (const unitTargets of [{cheeseBorder: 1}, {cheeseBorder: -1, hazloCanelitasV3: 0, hazloCrazyV3: 0}, {cheeseBorder: 1.2, hazloCanelitasV3: 0, hazloCrazyV3: 0}]) {
+    assert.throws(() => calculate({unitTargets}), /enteras/);
+  }
+});
+
+test('ventas de otro mes no se incluyen en el avance', () => {
+  const plan = calculate({ month: '2026-10' });
+  assert.equal(plan.metrics.actualUnits, 0);
 });

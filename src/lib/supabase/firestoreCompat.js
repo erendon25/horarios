@@ -1,5 +1,6 @@
 import { supabase } from "./client";
 import { mapSalesHistoryRow, salesHistoryDayPayload } from "./salesHistoryCompat";
+import { trainingRecognition } from '../../services/trainingRecognition';
 
 export const db = Object.freeze({ kind: "supabase-database" });
 export const getFirestore = () => db;
@@ -46,6 +47,8 @@ const unwrapSpecialValues = (next, previous = {}) => Object.fromEntries(
 
 const mapStaff = (row) => ({
   ...legacy(row),
+  // Imported data can contain a Firestore id; actions must use the native row id.
+  id: row.id,
   uid: row.user_id,
   storeId: row.store_id,
   name: row.first_name,
@@ -71,8 +74,7 @@ const mapStaff = (row) => ({
   lastEvaluationDate: row.last_evaluation_date,
   lastEvaluationScore: row.last_evaluation_score,
   lastStationEvaluated: row.last_station_evaluated,
-  trainingScores: row.training_scores ?? {},
-  skills: row.position_abilities ?? [],
+  ...trainingRecognition(row),
   positionAbilities: row.position_abilities ?? [],
   pendingHolidays: row.pending_holidays ?? [],
   linkedAt: row.linked_at,
@@ -152,7 +154,7 @@ const mappers = {
   extra_hours: (row) => ({ ...legacy(row), uid: row.user_id, staffId: row.staff_id, storeId: row.store_id, fecha: row.work_date, inicio: clock(row.start_time), fin: clock(row.end_time), duracion: row.duration_minutes, durationMinutes: row.duration_minutes, extraMinutesPre: row.pre_shift_minutes, extraMinutesPost: row.post_shift_minutes, actividad: row.activity, source: row.source, sourceFile: row.source_file, importedAt: row.imported_at, segments: row.segments ?? [], dailyDetails: row.daily_details ?? [] }),
   ceses: (row) => ({ ...legacy(row), staffId: row.staff_id, storeId: row.store_id, joinDate: row.join_date, cessationDate: row.cessation_date, modality: row.previous_modality, nextModality: row.next_modality, isModalityChange: row.is_modality_change, desempenio: row.performance, motivoCese: row.cessation_reason, motivoReal: row.real_reason, comentario: row.store_comment, diasDescansoMedico: row.medical_leave_days, inasistencias: row.absences, tardanzas: row.tardiness, horasNocturnas: row.night_hours, horasExtras: row.extra_hours, feriados: row.holidays, descuentos: row.discounts, registeredAt: row.registered_at, lastUpdated: row.updated_at }),
   schedule_requests: (row) => ({ ...legacy(row), uid: row.user_id, staffId: row.staff_id, storeId: row.store_id, date: row.requested_date, shiftType: row.shift_type, startTime: clock(row.start_time), endTime: clock(row.end_time), reason: row.reason, status: row.status, adminComment: row.admin_comment, reviewedBy: row.reviewed_by, reviewedAt: row.reviewed_at, createdAt: row.created_at }),
-  training_evaluations: (row) => ({ ...legacy(row), collaboratorId: row.staff_id, trainerId: row.trainer_id, storeId: row.store_id, date: row.evaluation_date, area: row.area, station: row.station_code, stationName: row.station_name, score: row.score, responses: row.responses ?? {}, feedback: row.feedback ?? {}, generalFindings: row.general_findings, status: row.status, step: row.current_step, collabSignature: row.collaborator_signature_url ?? row.collaborator_signature_path, trainerSignature: row.trainer_signature_url ?? row.trainer_signature_path, isEdited: row.is_edited, timestamp: row.created_at, lastUpdated: row.updated_at }),
+  training_evaluations: (row) => ({ ...legacy(row), collaboratorId: row.staff_id, trainerId: row.trainer_id, trainerName: row.trainer_name_snapshot, storeId: row.store_id, date: row.evaluation_date, area: row.area, station: row.station_code, stationName: row.station_name, score: row.score, responses: row.responses ?? {}, feedback: row.feedback ?? {}, generalFindings: row.general_findings, status: row.status, step: row.current_step, collabSignature: row.collaborator_signature_url ?? row.collaborator_signature_path, trainerSignature: row.trainer_signature_url ?? row.trainer_signature_path, isEdited: row.is_edited, timestamp: row.created_at, lastUpdated: row.updated_at }),
 };
 
 const pathOf = (parts) => parts.filter((part) => part !== db && part != null).flatMap((part) => part?.path ?? String(part)).join("/");
@@ -468,8 +470,8 @@ async function saveSchedule(ref, data) {
   if (!staffId || !start) throw new Error("Horario sin colaborador o semana válida.");
   const days = WEEKDAYS.map((day, index) => {
     const shift = data[day] ?? {};
-    const { start: shiftStart = "", end = "", position = "", off = false, feriado = false, holiday = false, notes = "", ...metadata } = shift;
-    return { date: addDays(start, index), start: shiftStart, end, position, off: Boolean(off), holiday: Boolean(feriado || holiday), notes, metadata: sanitizeScheduleMetadata(metadata) };
+    const { start: shiftStart = "", end = "", position = "", off = false, feriado, holiday = false, notes = "", ...metadata } = shift;
+    return { date: addDays(start, index), start: shiftStart, end, position, off: Boolean(off), holiday: Boolean(feriado ?? holiday), notes, metadata: sanitizeScheduleMetadata(metadata) };
   });
   const result = await supabase.rpc("save_weekly_schedules", { p_week_start: start, p_changes: [{ staffId, days }] });
   throwIfError(result.error);
@@ -538,6 +540,13 @@ async function persist(ref, data, merge) {
     }
   }
   let prepared = merge ? { ...previous, ...data } : { ...data };
+  if (root === 'staff_profiles' && merge) {
+    // A profile edit must not copy derived competition skills into manual training.
+    if (!Object.hasOwn(data, 'skills')) prepared.skills = previous.baseSkills ?? previous.skills;
+    if (!Object.hasOwn(data, 'trainingScores')) prepared.trainingScores = previous.baseTrainingScores ?? previous.trainingScores;
+    if (!Object.hasOwn(data, 'positionAbilities')) prepared.positionAbilities = prepared.skills;
+    for (const key of ['baseSkills','baseTrainingScores','competitionCertifications','championships']) delete prepared[key];
+  }
   if (["extra_hours", "feriados_trabajados", "schedule_requests"].includes(root)) {
     // staff_id y user_id son columnas uuid con FK. El identificador entrante
     // (staffId o uid) puede ser: el uuid del perfil, un user_id de auth, o un
@@ -576,7 +585,9 @@ async function persist(ref, data, merge) {
   }
   const isUuid = (value) => typeof value === "string"
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-  const columns = columnsFor(root, prepared, legacy(previous));
+  const columns = columnsFor(root, prepared, root === 'staff_profiles'
+    ? { ...legacy(previous), trainingScores: previous.baseTrainingScores ?? previous.trainingScores }
+    : legacy(previous));
   const entityWithUuid = ["staff_profiles", "stores", "users"].includes(root);
   let result;
   if (root === "users") {
@@ -666,7 +677,11 @@ export async function saveGeoVictoriaExtraHours(data) {
 export async function updateDoc(ref, data) {
   const current = await getDoc(ref);
   if (!current.exists()) throw new Error(`Documento no encontrado: ${ref.path}`);
-  return persist(ref, unwrapSpecialValues(data, current.data()), true);
+  const previous = current.data();
+  const base = ref.path.split('/')[0] === 'staff_profiles'
+    ? { ...previous, skills: previous.baseSkills ?? previous.skills, trainingScores: previous.baseTrainingScores ?? previous.trainingScores }
+    : previous;
+  return persist(ref, unwrapSpecialValues(data, base), true);
 }
 export async function addDoc(ref, data) {
   if (ref.path === "schedule_requests") {

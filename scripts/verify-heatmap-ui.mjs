@@ -8,6 +8,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import { HOURS } from '../src/services/heatmapModel.js';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const output = await mkdtemp(path.join(tmpdir(), 'heatmap-qa-'));
 const root = process.cwd();
@@ -56,12 +57,35 @@ const server = createServer((request, response) => {
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let browser;
 try {
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true, ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}) });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   const url = `http://127.0.0.1:${server.address().port}`;
+  const assertSquareCells = async (scope) => {
+    const headers = scope.locator('thead th[scope="col"]');
+    assert.deepEqual(await headers.allTextContents(), HOURS, 'Cada columna debe mostrar su intervalo de 15 minutos');
+    const labelBounds = await headers.evaluateAll(elements => elements.map(element => {
+      const cell = element.getBoundingClientRect();
+      const label = element.querySelector('span').getBoundingClientRect();
+      return label.left >= cell.left && label.right <= cell.right && label.top >= cell.top && label.bottom <= cell.bottom;
+    }));
+    assert.ok(labelBounds.every(Boolean), 'Los horarios deben caber dentro de sus columnas sin solaparse');
+    const cells = await scope.locator('tbody td:not([rowspan])').evaluateAll(elements =>
+      elements.map(element => {
+        const { width, height } = element.getBoundingClientRect();
+        return { width, height };
+      })
+    );
+    assert.ok(cells.length > 0);
+    for (const { width, height } of cells) {
+      assert.ok(Math.abs(width - 20) < 1, `Ancho compacto: ${width}px`);
+      assert.ok(Math.abs(width - height) < 1, `Celda cuadrada: ${width} × ${height}px`);
+    }
+  };
   await page.goto(url);
+  await page.getByRole('region').waitFor();
+  await assertSquareCells(page.getByRole('region'));
   const weeklyDownload = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Excel horario + mapas', exact: true }).click();
   const weekly = await weeklyDownload;
@@ -73,6 +97,7 @@ try {
   await page.getByRole('button', { name: 'Maximizar mapa de cobertura', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.waitFor();
+  await assertSquareCells(dialog);
   assert.equal(await dialog.evaluate(el => el.matches(':modal')), true);
   assert.equal(await page.evaluate(() => document.elementFromPoint(100, 250).closest('dialog') !== null), true, 'La columna externa no debe cubrir la matriz');
   assert.equal(await page.evaluate(() => document.body.style.overflow), 'hidden');
@@ -121,6 +146,7 @@ try {
   await mobile.getByRole('button', { name: 'Maximizar mapa de cobertura', exact: true }).evaluate(el => el.click());
   const mobileDialog = mobile.getByRole('dialog');
   await mobileDialog.waitFor();
+  await assertSquareCells(mobileDialog);
   const bounds = await mobileDialog.boundingBox();
   assert.ok(bounds.width <= 390 && bounds.height <= 844);
   const mobileRegion = mobileDialog.getByRole('region');

@@ -2,6 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CalendarRange, Calculator, CheckCircle, RefreshCw, Settings, Users } from 'lucide-react';
 import { collection, doc, getDoc, getDocs, orderBy, query, setDoc, where } from '../lib/supabase/firestoreCompat';
 import { db } from '../supabase';
+import ProjectionPositionFields from './ProjectionPositionFields';
+import { getProjectionStaffColor } from '../services/projectionStaffColor';
+import { summarizeProjectionAvailableHours } from '../services/projectionLabor';
+import { getProjectionDepartment, PROJECTION_DEPARTMENTS, summarizeProjectionStaffGroups } from '../services/projectionStaffGroups';
+import { resolveVestidoPositionId } from '../services/projectionDemand';
 import {
   buildProjectionSalesByDay,
   selectLatestCompleteSalesWeek,
@@ -14,8 +19,7 @@ import {
 const DEFAULT_TOTAL_CAPACITY = 780;
 const DEFAULT_TICKET_AVERAGE = 35;
 const DEFAULT_TRANSACTIONS_PER_COLLABORATOR = 23;
-const DEFAULT_DRIVER_PRODUCTS_PER_TRIP = 9;
-const DEFAULT_DRIVER_ROUND_TRIP_MINUTES = 12;
+const displayWhole = value => Number(value).toFixed(0);
 
 const DAYS = [
   { key: 'lunes', label: 'Lunes' },
@@ -116,7 +120,7 @@ const detectOperativeHours = (salesByDay) => {
 };
 
 const LOGIC_LABELS = {
-  sales: 'VHL × factor',
+  sales: 'Personas de Vestido × factor',
   service: 'Servicio / punto de venta',
   driver: 'Driver modulo',
   fixed: 'Fijo / no venta',
@@ -128,14 +132,9 @@ const createEmptyHourlySales = (hourKeys = MAX_ALLOWED_HOURS) =>
 const createEmptySalesByDay = (hourKeys = MAX_ALLOWED_HOURS) =>
   DAYS.reduce((acc, day) => ({ ...acc, [day.key]: createEmptyHourlySales(hourKeys) }), {});
 
-const getNumber = (value) => {
-  if (value === '' || value === null || value === undefined) return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
-};
-
 const makeStoredPosition = (position) => ({
   ...position,
+  department: getProjectionDepartment(position.department) || '',
   capacity: position.capacity ?? '',
   ticketAverage: position.ticketAverage ?? '',
   transactionsPerCollaborator: position.transactionsPerCollaborator ?? '',
@@ -144,31 +143,6 @@ const makeStoredPosition = (position) => ({
   maxStaff: position.maxStaff ?? '',
   minStaff: position.minStaff ?? '',
 });
-
-const normalizeName = (value) =>
-  String(value || '')
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .trim()
-    .toLowerCase();
-
-const mergeDefaultFixedPositions = (storedPositions = []) => {
-  const stored = storedPositions.map(makeStoredPosition);
-  const existingIds = new Set(stored.map((position) => position.id));
-  const existingNames = new Set(stored.map((position) => normalizeName(position.name)));
-  const missingDefaults = DEFAULT_POSITIONS
-    .filter((position) => {
-      const isFixed = position.logic === 'fixed';
-      const isServiceDefault = ['salon', 'drivethru', 'punto_venta'].includes(position.id);
-      if (!isFixed && !isServiceDefault) return false;
-      if (existingIds.has(position.id)) return false;
-      if (existingNames.has(normalizeName(position.name))) return false;
-      return true;
-    })
-    .map(makeStoredPosition);
-
-  return [...stored, ...missingDefaults];
-};
 
 const compressRows = (rows) =>
   Object.fromEntries(
@@ -191,11 +165,20 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
   );
   const [selectedDay, setSelectedDay] = useState('lunes');
   const [positions, setPositions] = useState(DEFAULT_POSITIONS);
+  const [vestidoPositionId, setVestidoPositionId] = useState('cocina');
   const [manualStaffByDay, setManualStaffByDay] = useState({});
   const [isPositionsModalOpen, setIsPositionsModalOpen] = useState(false);
+  const [isAddingPosition, setIsAddingPosition] = useState(false);
+  const positionsScrollRef = useRef(null);
+  const newPositionFormRef = useRef(null);
+  const newPositionNameRef = useRef(null);
   const [isHoursBreakdownOpen, setIsHoursBreakdownOpen] = useState(false);
-  const [configLoaded, setConfigLoaded] = useState(false);
-  const [saveState, setSaveState] = useState('idle');
+  const [loadedConfigStoreId, setLoadedConfigStoreId] = useState(null);
+  const configLoaded = Boolean(storeId) && loadedConfigStoreId === storeId;
+  const [configError, setConfigError] = useState('');
+  const [configLoadAttempt, setConfigLoadAttempt] = useState(0);
+  const [saveAttempt, setSaveAttempt] = useState(0);
+  const [saveState, setSaveState] = useState('loading');
   const [salesHistoryLoaded, setSalesHistoryLoaded] = useState(false);
   const [salesHistoryLoading, setSalesHistoryLoading] = useState(false);
   const [salesHistoryError, setSalesHistoryError] = useState('');
@@ -210,8 +193,12 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
   const [vhlError, setVhlError] = useState('');
   const [dataRefreshVersion, setDataRefreshVersion] = useState(0);
   const saveTimerRef = useRef(null);
+  const storedConfigRef = useRef({ storeId: null, value: {} });
+  const saveQueueRef = useRef(Promise.resolve());
+  const saveVersionRef = useRef(0);
   const [newPosition, setNewPosition] = useState({
     name: '',
+    department: '',
     logic: 'sales',
     capacity: DEFAULT_TOTAL_CAPACITY,
     ticketAverage: DEFAULT_TICKET_AVERAGE,
@@ -227,17 +214,29 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
 
     let cancelled = false;
     const loadProjectionConfig = async () => {
-      setConfigLoaded(false);
+      setLoadedConfigStoreId(null);
+      setConfigError('');
+      setSaveState('loading');
+      setPositions(DEFAULT_POSITIONS.map(makeStoredPosition));
+      setVestidoPositionId('');
+      setManualStaffByDay({});
+      setGeneralVhl(null);
+      setHistoricalGeneralVhl(null);
+      setHistoricalLaborHours(0);
+      setIsGeneralVhlManual(false);
+      setVhlLoaded(false);
+      storedConfigRef.current = { storeId, value: {} };
       try {
         const ref = doc(db, 'stores', storeId, 'config', 'schedule_projection');
         const snap = await getDoc(ref);
         if (cancelled) return;
 
+        const data = snap.exists() ? snap.data() : {};
+        storedConfigRef.current = { storeId, value: data };
+        const loadedPositions = Array.isArray(data.positions) ? data.positions.map(makeStoredPosition) : DEFAULT_POSITIONS.map(makeStoredPosition);
+        setPositions(loadedPositions);
+        setVestidoPositionId(resolveVestidoPositionId(loadedPositions, data.vestidoPositionId));
         if (snap.exists()) {
-          const data = snap.data();
-          if (Array.isArray(data.positions)) {
-            setPositions(mergeDefaultFixedPositions(data.positions));
-          }
           if (data.manualStaffByDay) {
             setManualStaffByDay(data.manualStaffByDay);
           }
@@ -246,10 +245,13 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
           }
           setIsGeneralVhlManual(data.generalVhlMode === 'manual');
         }
+        setLoadedConfigStoreId(storeId);
+        setSaveState('idle');
       } catch (error) {
+        if (cancelled) return;
         console.error('Error al cargar configuracion de proyeccion:', error);
-      } finally {
-        if (!cancelled) setConfigLoaded(true);
+        setConfigError('No se pudo cargar la configuración de posiciones de esta tienda.');
+        setSaveState('error');
       }
     };
 
@@ -257,7 +259,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
     return () => {
       cancelled = true;
     };
-  }, [storeId]);
+  }, [storeId, configLoadAttempt]);
 
   useEffect(() => {
     if (!storeId) return;
@@ -427,81 +429,10 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
     };
   }, [storeId, refreshToken, dataRefreshVersion]);
 
-  const availableHoursBreakdown = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const isTraineeFlag = (member) =>
-      member?.isTrainee === true || member?.isTrainee === 'true' || member?.isTrainee === 1;
-    const isFullTime = (member) =>
-      member.modality === 'Full Time' ||
-      member.modality === 'Full-Time' ||
-      member.contractType?.includes?.('Full');
-    const isPartTime = (member) =>
-      member.modality === 'Part Time' ||
-      member.modality === 'Part-Time' ||
-      member.contractType?.includes?.('Part');
-
-    const buckets = {
-      fullTime: [],
-      partTime: [],
-      traineeVencido: [],
-      cesados: [],
-      inactivos: [],
-      sinModalidad: [],
-    };
-
-    staffList.forEach((member) => {
-      const normalizedName = `${member.name || ''} ${member.lastName || ''}`
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .trim();
-      const displayName = normalizedName || member.email || member.id || 's/nombre';
-      const isTrainee = isTraineeFlag(member);
-      const entry = {
-        id: member.id,
-        name: displayName,
-        modality: member.modality || member.contractType || '\u2014',
-        isTrainee,
-      };
-
-      if (
-        member.status === 'inactive' ||
-        member.reconstructed_from_history === true ||
-        displayName.toLowerCase().startsWith('historico ')
-      ) {
-        buckets.inactivos.push(entry);
-        return;
-      }
-      if (member.cessationDate) {
-        const cess = new Date(member.cessationDate + 'T00:00:00');
-        if (cess < today) {
-          buckets.cesados.push({ ...entry, cessationDate: member.cessationDate });
-          return;
-        }
-      }
-      if (isTrainee && member.trainingEndDate) {
-        const end = new Date(member.trainingEndDate + 'T00:00:00');
-        if (end < today) {
-          buckets.traineeVencido.push({ ...entry, trainingEndDate: member.trainingEndDate });
-          return;
-        }
-      }
-      if (isFullTime(member)) {
-        buckets.fullTime.push({ ...entry, hours: 48 });
-        return;
-      }
-      if (isPartTime(member)) {
-        buckets.partTime.push({ ...entry, hours: 24 });
-        return;
-      }
-      buckets.sinModalidad.push(entry);
-    });
-
-    const totalHours =
-      buckets.fullTime.length * 48 + buckets.partTime.length * 24;
-
-    return { ...buckets, totalHours };
-  }, [staffList]);
+  const availableHoursBreakdown = useMemo(
+    () => summarizeProjectionAvailableHours(staffList),
+    [staffList]
+  );
 
   const totalAvailableHours = availableHoursBreakdown.totalHours;
 
@@ -534,51 +465,6 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
     }, {});
   }, [historicalDailyTotals, projectedSalesByDay, salesByDay, operativeHours]);
 
-  const calculateRequiredStaff = (sale, position) => {
-    if (!sale && position.logic !== 'fixed') return 0;
-
-    if (position.logic === 'service') {
-      const ticketAverage = getNumber(position.ticketAverage);
-      const transactionsPerCollaborator = getNumber(position.transactionsPerCollaborator);
-      const factor = getNumber(position.factor);
-      if (!ticketAverage || !transactionsPerCollaborator || factor === null) return 0;
-      return ((sale / ticketAverage) / transactionsPerCollaborator) * factor;
-    }
-
-    if (position.logic === 'driver') {
-      const ticketAverage = getNumber(position.ticketAverage);
-      const factor = getNumber(position.factor);
-      if (!ticketAverage || factor === null) return 0;
-
-      const estimatedProducts = sale / ticketAverage;
-      const tripsPerHour = 60 / DEFAULT_DRIVER_ROUND_TRIP_MINUTES;
-      const productsPerDriverHour = DEFAULT_DRIVER_PRODUCTS_PER_TRIP * tripsPerHour;
-      return (estimatedProducts / productsPerDriverHour) * factor;
-    }
-
-    if (position.logic === 'fixed') {
-      return getNumber(position.fixedStaff) || 0;
-    }
-
-    const vhl = getNumber(generalVhl);
-    const normalizedPosition = `${position.id || ''} ${position.name || ''}`.toLowerCase();
-    const configuredFactor = getNumber(position.factor);
-    const referenceFactor = normalizedPosition.includes('sheetout')
-      ? 0.7
-      : normalizedPosition.includes('masa')
-        ? 0.55
-        : normalizedPosition.includes('landing')
-          ? 0.5
-          : 1;
-    const factor = configuredFactor ?? referenceFactor;
-    if (!vhl) return 0;
-
-    const demand = (sale / vhl) * factor;
-    const configuredMaximum = getNumber(position.maxStaff);
-    const maximum = configuredMaximum ?? (normalizedPosition.includes('masa') ? 2 : null);
-    return maximum === null ? demand : Math.min(demand, maximum);
-  };
-
   const buildScheduleMatrix = (hourlySales, dayKey) => {
     let totalRequiredHours = 0;
 
@@ -593,11 +479,11 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
         sale,
         generalVhl,
         positions,
+        vestidoPositionId,
         manualByPosition,
-        getPositionDemand: (position) => calculateRequiredStaff(sale, position),
         isOperativeHour: operativeHoursSet.has(hour),
       });
-      const { generalRequiredStaff, requiredByPosition, totalStaffAtHour } = allocation;
+      const { generalRequiredStaff, vestidoStaff, requiredByPosition, totalStaffAtHour } = allocation;
 
       totalRequiredHours += totalStaffAtHour;
 
@@ -605,8 +491,10 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
         hour,
         sale,
         generalRequiredStaff,
+        vestidoStaff,
         requiredByPosition,
         totalStaffAtHour,
+        staffByDepartment: summarizeProjectionStaffGroups(positions, requiredByPosition),
       };
     });
 
@@ -634,50 +522,66 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
   };
 
   useEffect(() => {
-    if (
-      !storeId ||
-      !configLoaded ||
-      !salesHistoryLoaded ||
-      !salesSource ||
-      !vhlLoaded ||
-      !(Number(generalVhl) > 0)
-    ) return;
+    if (!configLoaded || storedConfigRef.current.storeId !== storeId) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
 
+    let cancelled = false;
+    const version = ++saveVersionRef.current;
+    // Position settings must persist even for a store without historical sales/VHL.
+    // Derived coverage is replaced only after its inputs have finished loading.
+    const changes = {
+      positions,
+      vestidoPositionId,
+      generalVhl: Number(generalVhl) > 0 ? Number(generalVhl) : null,
+      generalVhlMode: isGeneralVhlManual ? 'manual' : 'historical',
+      manualStaffByDay,
+    };
+    if (salesHistoryLoaded && salesSource && vhlLoaded && Number(generalVhl) > 0) {
+      Object.assign(changes, {
+        requirements: buildProjectionRequirements(),
+        salesByDay,
+        historicalGeneralVhl,
+        historicalLaborHours,
+        salesSource: {
+          weekStart: salesSource.weekStart,
+          weekEnd: salesSource.weekEnd,
+          storedDays: salesSource.storedDays,
+        },
+      });
+    }
     setSaveState('saving');
-    saveTimerRef.current = setTimeout(async () => {
-      try {
-        const ref = doc(db, 'stores', storeId, 'config', 'schedule_projection');
-        await setDoc(
-          ref,
-          {
-            positions,
-            requirements: buildProjectionRequirements(),
-            salesByDay,
-            generalVhl: Number(generalVhl),
-            generalVhlMode: isGeneralVhlManual ? 'manual' : 'historical',
-            historicalGeneralVhl,
-            historicalLaborHours,
-            salesSource: {
-              weekStart: salesSource.weekStart,
-              weekEnd: salesSource.weekEnd,
-              storedDays: salesSource.storedDays,
-            },
-            manualStaffByDay,
+    saveTimerRef.current = setTimeout(() => {
+      // Serialize requests so an older, slower write cannot replace a newer edit.
+      saveQueueRef.current = saveQueueRef.current.catch(() => {}).then(async () => {
+        if (cancelled || version !== saveVersionRef.current) return;
+        try {
+          const ref = doc(db, 'stores', storeId, 'config', 'schedule_projection');
+          // The compatibility layer replaces the JSON value; preserve unrelated
+          // fields and prior coverage when only configuration can be saved.
+          const value = {
+            ...storedConfigRef.current.value,
+            ...changes,
             updatedAt: new Date().toISOString(),
-          },
-          { merge: true }
-        );
-        setSaveState('saved');
-      } catch (error) {
-        console.error('Error al guardar configuracion de proyeccion:', error);
-        setSaveState('error');
-      }
+          };
+          await setDoc(ref, value);
+          if (storedConfigRef.current.storeId === storeId) {
+            storedConfigRef.current = { storeId, value };
+          }
+          if (!cancelled && version === saveVersionRef.current) setSaveState('saved');
+        } catch (error) {
+          console.error('Error al guardar configuracion de proyeccion:', error);
+          if (!cancelled && version === saveVersionRef.current) setSaveState('error');
+        }
+      });
     }, 700);
 
-    return () => clearTimeout(saveTimerRef.current);
+    return () => {
+      cancelled = true;
+      clearTimeout(saveTimerRef.current);
+    };
   }, [
     positions,
+    vestidoPositionId,
     salesByDay,
     calculationSalesByDay,
     manualStaffByDay,
@@ -690,11 +594,12 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
     historicalLaborHours,
     isGeneralVhlManual,
     vhlLoaded,
+    saveAttempt,
   ]);
 
   const scheduleMatrix = useMemo(
     () => buildScheduleMatrix(calculationSalesByDay[selectedDay] || createEmptyHourlySales(), selectedDay),
-    [calculationSalesByDay, selectedDay, positions, manualStaffByDay, generalVhl]
+    [calculationSalesByDay, selectedDay, positions, manualStaffByDay, generalVhl, vestidoPositionId]
   );
 
   const calculationDailyTotals = useMemo(() => {
@@ -726,7 +631,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
       );
       return sum + matrix.totalRequiredHours;
     }, 0);
-  }, [calculationSalesByDay, positions, manualStaffByDay, generalVhl]);
+  }, [calculationSalesByDay, positions, manualStaffByDay, generalVhl, vestidoPositionId]);
 
   const resultingGeneralVhl = weeklyRequiredHours > 0
     ? weeklyCalculationSales / weeklyRequiredHours
@@ -758,7 +663,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
   };
 
   const handleAddPosition = () => {
-    if (!newPosition.name.trim()) return;
+    if (!newPosition.name.trim() || !getProjectionDepartment(newPosition.department)) return;
     setPositions((prev) => [
       ...prev,
       {
@@ -767,12 +672,59 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
         name: newPosition.name.trim(),
       },
     ]);
-    setNewPosition((prev) => ({ ...prev, name: '' }));
+    setNewPosition((prev) => ({ ...prev, name: '', department: '' }));
+    setIsAddingPosition(false);
   };
 
   const handleRemovePosition = (id) => {
     setPositions((prev) => prev.filter((position) => position.id !== id));
+    if (id === vestidoPositionId) setVestidoPositionId('');
   };
+
+  useEffect(() => {
+    if (!isPositionsModalOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previousOverflow; };
+  }, [isPositionsModalOpen]);
+
+  useEffect(() => {
+    if (!isPositionsModalOpen || !isAddingPosition) return;
+    const scroller = positionsScrollRef.current;
+    const form = newPositionFormRef.current;
+    if (scroller && form) {
+      scroller.scrollTop += form.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 12;
+    }
+    newPositionNameRef.current?.focus({ preventScroll: true });
+  }, [isPositionsModalOpen, isAddingPosition]);
+
+  const closePositionsModal = () => {
+    setIsPositionsModalOpen(false);
+    setIsAddingPosition(false);
+  };
+
+  const unclassifiedPositions = positions.filter(position => !getProjectionDepartment(position.department));
+
+  if (configError) {
+    return (
+      <div className="p-6">
+        <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800">
+          <p>{configError}</p>
+          <button
+            type="button"
+            onClick={() => setConfigLoadAttempt((attempt) => attempt + 1)}
+            className="mt-3 rounded-lg bg-red-700 px-4 py-2 text-sm font-bold text-white"
+          >
+            Reintentar carga
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!configLoaded) {
+    return <div role="status" className="p-6 text-slate-600">Cargando posiciones de esta tienda...</div>;
+  }
 
   return (
     <div className="p-6 bg-slate-50 min-h-screen text-slate-800 font-sans">
@@ -796,15 +748,24 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
             <Settings className="w-4 h-4" />
             Configurar Posiciones
           </button>
-          <span className={`px-3 py-2 rounded-lg text-xs font-bold border ${
+          <span role="status" aria-live="polite" className={`px-3 py-2 rounded-lg text-xs font-bold border ${
             saveState === 'error'
               ? 'bg-red-50 text-red-700 border-red-200'
               : saveState === 'saving'
                 ? 'bg-amber-50 text-amber-700 border-amber-200'
                 : 'bg-emerald-50 text-emerald-700 border-emerald-200'
           }`}>
-            {saveState === 'saving' ? 'Guardando...' : saveState === 'error' ? 'Error al guardar' : 'Guardado'}
+            {saveState === 'saving' ? 'Guardando...' : saveState === 'error' ? 'Error al guardar' : saveState === 'saved' ? 'Guardado' : 'Configuración cargada'}
           </span>
+          {saveState === 'error' && (
+            <button
+              type="button"
+              onClick={() => setSaveAttempt((attempt) => attempt + 1)}
+              className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700"
+            >
+              Reintentar guardado
+            </button>
+          )}
 
           <button
             type="button"
@@ -917,7 +878,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
               aria-describedby="general-vhl-help"
             />
             <div id="general-vhl-help" className="mt-1 flex items-center justify-between gap-2 text-[10px] text-slate-400">
-              <span>{vhlLoading ? 'Calculando...' : 'Base = venta/hora ÷ VHL'}</span>
+              <span>{vhlLoading ? 'Calculando...' : 'Vestido = venta/hora ÷ VHL'}</span>
               {isGeneralVhlManual && historicalGeneralVhl > 0 ? (
                 <button
                   type="button"
@@ -958,6 +919,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
                 Ver desglose
               </button>
             </div>
+            <p className="mt-1 text-[11px] text-slate-500">No incluye gerentes ni asistentes.</p>
           </div>
         </div>
 
@@ -973,7 +935,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
           </div>
           <div>
             <span className="text-sm opacity-80 block font-medium">Horas Teoricas Requeridas</span>
-            <span className="text-2xl font-bold">{weeklyRequiredHours.toFixed(0)} hrs</span>
+            <span data-testid="projection-required-week-hours" className="text-2xl font-bold">{weeklyRequiredHours.toFixed(0)} hrs</span>
             <span className="text-xs block mt-0.5 font-bold opacity-80">
               VHL resultante S/. {resultingGeneralVhl.toFixed(2)}
             </span>
@@ -1032,11 +994,30 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
         <div className="p-5 border-b border-slate-100 bg-slate-50/50">
           <h3 className="font-semibold text-slate-900">Distribucion de Personal e Ingresos por Hora</h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            La base por hora es venta / VHL. Cada posicion aplica su propio factor sobre esa base y se redondea a personas completas.
-            Las posiciones fijas y los ajustes manuales se conservan.
+            Vestido se calcula con la venta de la hora dividida entre el VHL general. Las áreas por factor multiplican las personas asignadas a Vestido. La distribución por hora y las horas teóricas se muestran sin decimales.
+            Cada área conserva sus mínimos, topes y ajustes manuales.
             Haz clic para sumar una persona y Ctrl + clic para restarla.
           </p>
+          <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
+            <span className="inline-flex items-center gap-1"><span aria-hidden="true" className="h-3 w-3 rounded bg-blue-100" />1 persona</span>
+            <span className="inline-flex items-center gap-1"><span aria-hidden="true" className="h-3 w-3 rounded bg-amber-200" />Desde 2: amarillo a naranja</span>
+            <span className="inline-flex items-center gap-1"><span aria-hidden="true" className="h-3 w-3 rounded bg-red-200" />Rojo: límite del área alcanzado o superado</span>
+            <span>El color se ajusta al límite configurado de cada posición.</span>
+          </p>
         </div>
+
+        {!positions.some(position => position.id === vestidoPositionId) && positions.some(position => position.logic === 'sales') && (
+          <div className="border-b border-amber-200 bg-amber-50 px-5 py-3 text-sm text-amber-900">
+            Selecciona el Área Vestido en Configurar Posiciones para establecer la referencia de las áreas por factor.
+          </div>
+        )}
+
+        {unclassifiedPositions.length > 0 && (
+          <div data-testid="projection-unclassified-notice" className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-5 py-3 text-sm text-amber-900">
+            <p className="min-w-0 flex-1">Hay {unclassifiedPositions.length} {unclassifiedPositions.length === 1 ? 'área sin clasificar' : 'áreas sin clasificar'}. Elige su Grupo del área en Configurar Posiciones. Sus colaboradores figuran en «Sin clasificar» y siguen incluidos en el total general.</p>
+            <button type="button" onClick={() => setIsPositionsModalOpen(true)} className="shrink-0 rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-bold hover:bg-amber-100">Clasificar áreas</button>
+          </div>
+        )}
 
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
@@ -1058,44 +1039,61 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
                 <td className="p-4 text-center bg-orange-100/40">-</td>
                 {scheduleMatrix.columns.map((col) => (
                   <td key={col.hour} className="p-3 text-center text-orange-700 font-bold">
-                    S/. {col.sale.toFixed(0)}
+                    S/. {displayWhole(col.sale)}
                   </td>
                 ))}
               </tr>
 
               {positions.map((position) => (
-                <tr key={position.id} className="hover:bg-slate-50/80 transition-colors">
+                <tr key={position.id} data-position-id={position.id} className="hover:bg-slate-50/80 transition-colors">
                   <td className="p-4 sticky left-0 bg-white shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] z-10 font-medium text-slate-700">
                     {position.name}
+                    <span className={`mt-1 block text-[10px] font-semibold ${getProjectionDepartment(position.department) ? 'text-slate-500' : 'text-amber-700'}`}>
+                      {PROJECTION_DEPARTMENTS[getProjectionDepartment(position.department)] || 'Sin clasificar'}
+                    </span>
                   </td>
                   <td className="p-3 text-center bg-slate-50 text-xs font-bold text-slate-600">
-                    {LOGIC_LABELS[position.logic]}
+                    {position.id === vestidoPositionId ? 'Venta por hora ÷ VHL general' : LOGIC_LABELS[position.logic]}
                   </td>
                   {scheduleMatrix.columns.map((col) => {
                     const requiredStaff = col.requiredByPosition[position.id] || 0;
+                    const shownStaff = displayWhole(requiredStaff);
+                    const staffColor = getProjectionStaffColor(requiredStaff, position.id === vestidoPositionId ? { ...position, logic: 'sales' } : position);
                     return (
                       <td
                         key={col.hour}
+                        data-hour={col.hour}
                         onClick={(event) =>
                           handleStaffCellClick(event, position.id, col.hour, requiredStaff)
                         }
-                        title="Asignacion de esta posicion. Clic: sumar | Ctrl + clic: restar"
-                        className={`p-3 text-center font-bold transition-all cursor-pointer select-none hover:ring-2 hover:ring-inset hover:ring-orange-400 ${
-                          requiredStaff > 2
-                            ? 'bg-red-100 text-red-700'
-                            : requiredStaff > 0
-                              ? 'bg-blue-50 text-blue-700'
-                              : 'text-slate-300 font-normal'
-                        }`}
+                        title={`${shownStaff} ${shownStaff === '1' ? 'persona' : 'personas'} · ${staffColor.limit === null ? 'Sin límite configurado' : `Límite: ${displayWhole(staffColor.limit)}`}. Clic: sumar | Ctrl + clic: restar`}
+                        style={staffColor.style}
+                        className={`p-3 text-center transition-all cursor-pointer select-none hover:ring-2 hover:ring-inset hover:ring-orange-400 ${requiredStaff > 0 ? 'font-bold' : 'font-normal'}`}
                       >
-                        {requiredStaff}
+                        {shownStaff}
                       </td>
                     );
                   })}
                 </tr>
               ))}
 
-              <tr className="bg-slate-800 text-white font-semibold">
+              {[
+                { key: 'production', label: 'Producción', className: 'bg-emerald-50 text-emerald-900' },
+                { key: 'service', label: 'Servicio', className: 'bg-sky-50 text-sky-900' },
+                ...(unclassifiedPositions.length > 0 ? [{ key: 'unclassified', label: 'Sin clasificar', className: 'bg-amber-50 text-amber-900' }] : []),
+              ].map(group => (
+                <tr key={group.key} data-staff-total={group.key} className={`${group.className} font-semibold`}>
+                  <td className={`sticky left-0 z-10 p-4 ${group.className}`}>{group.label}</td>
+                  <td className="p-4 text-center text-xs">Subtotal</td>
+                  {scheduleMatrix.columns.map(col => (
+                    <td key={col.hour} data-hour={col.hour} className="p-3 text-center font-extrabold" title={`${group.label}: ${displayWhole(col.staffByDepartment[group.key])} ${displayWhole(col.staffByDepartment[group.key]) === '1' ? 'colaborador' : 'colaboradores'}`}>
+                      {displayWhole(col.staffByDepartment[group.key])}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+
+              <tr data-staff-total="all" className="bg-slate-800 text-white font-semibold">
                 <td className="p-4 sticky left-0 bg-slate-800 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.2)] z-10">
                   Total Colaboradores Requeridos
                 </td>
@@ -1103,12 +1101,13 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
                 {scheduleMatrix.columns.map((col) => (
                   <td
                     key={col.hour}
-                    title={`Base venta ÷ VHL: ${col.generalRequiredStaff.toFixed(2)} · Total asignado: ${col.totalStaffAtHour}`}
+                    data-hour={col.hour}
+                    title={`Base de Vestido (venta ÷ VHL): ${displayWhole(col.generalRequiredStaff)} · Personas en Vestido: ${displayWhole(col.vestidoStaff)} · Total asignado: ${displayWhole(col.totalStaffAtHour)}`}
                     className={`p-3 text-center font-extrabold ${
                       col.totalStaffAtHour > 5 ? 'text-amber-400' : 'text-white'
                     }`}
                   >
-                    {col.totalStaffAtHour}
+                    {displayWhole(col.totalStaffAtHour)}
                   </td>
                 ))}
               </tr>
@@ -1139,6 +1138,7 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
               {[
                 { key: 'fullTime', label: 'Full Time', color: 'bg-blue-50 text-blue-800 border-blue-200', bucket: availableHoursBreakdown.fullTime },
                 { key: 'partTime', label: 'Part Time', color: 'bg-emerald-50 text-emerald-800 border-emerald-200', bucket: availableHoursBreakdown.partTime },
+                { key: 'gerenciales', label: 'Gerentes y asistentes (excluidos)', color: 'bg-indigo-50 text-indigo-800 border-indigo-200', bucket: availableHoursBreakdown.gerenciales },
                 { key: 'traineeVencido', label: 'Trainees vencidos (excluidos)', color: 'bg-purple-50 text-purple-800 border-purple-200', bucket: availableHoursBreakdown.traineeVencido },
                 { key: 'sinModalidad', label: 'Sin modalidad (excluidos)', color: 'bg-amber-50 text-amber-800 border-amber-200', bucket: availableHoursBreakdown.sinModalidad },
                 { key: 'cesados', label: 'Cesados (excluidos)', color: 'bg-red-50 text-red-800 border-red-200', bucket: availableHoursBreakdown.cesados },
@@ -1174,258 +1174,103 @@ export default function ScheduleProjectionDashboard({ staffList = [], storeId, r
       )}
 
       {isPositionsModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl border border-slate-200 max-w-5xl w-full max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col">
-            <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h4 className="font-bold text-slate-900">Configurar Posiciones de la Tienda</h4>
-              <button
-                type="button"
-                onClick={() => setIsPositionsModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 font-bold"
-              >
-                x
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-black/50 p-2 sm:p-4">
+          <div role="dialog" aria-modal="true" aria-labelledby="projection-positions-title"
+            className="flex max-h-[calc(100dvh-1rem)] w-full min-w-0 max-w-6xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl sm:max-h-[90dvh]">
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3 sm:px-5">
+              <h4 id="projection-positions-title" className="min-w-0 text-sm font-bold text-slate-900 sm:text-base">Configurar Posiciones de la Tienda</h4>
+              <button type="button" onClick={closePositionsModal} aria-label="Cerrar configuración de posiciones"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-xl font-bold text-slate-500 hover:bg-slate-200 hover:text-slate-800">
+                ×
               </button>
             </div>
 
-            <div className="p-5 space-y-5 overflow-y-auto">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-                  <span className="text-[11px] uppercase font-bold text-slate-400">Dia seleccionado</span>
-                  <p className="text-lg font-black text-slate-900">{DAYS.find((day) => day.key === selectedDay)?.label}</p>
+            <div ref={positionsScrollRef} className="min-h-0 min-w-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto overscroll-contain p-3 sm:p-5">
+              <div className="grid min-w-0 grid-cols-3 gap-2 sm:gap-3">
+                <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-2 sm:px-4 sm:py-3">
+                  <span className="block text-[10px] font-bold uppercase text-slate-400 sm:text-[11px]">Día seleccionado</span>
+                  <p className="break-words text-sm font-black text-slate-900 sm:text-lg">{DAYS.find((day) => day.key === selectedDay)?.label}</p>
                 </div>
-                <div className="rounded-lg border border-orange-200 bg-orange-50 px-4 py-3">
-                  <span className="text-[11px] uppercase font-bold text-orange-500">Horas requeridas</span>
-                  <p className="text-lg font-black text-orange-700">{selectedDayRequiredHours.toFixed(0)} hrs</p>
+                <div className="min-w-0 rounded-lg border border-orange-200 bg-orange-50 p-2 sm:px-4 sm:py-3">
+                  <span className="block text-[10px] font-bold uppercase text-orange-500 sm:text-[11px]">Horas requeridas</span>
+                  <p data-testid="projection-required-day-hours" className="break-all text-sm font-black text-orange-700 sm:text-lg">{selectedDayRequiredHours.toFixed(0)} hrs</p>
                 </div>
-                <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
-                  <span className="text-[11px] uppercase font-bold text-blue-500">Pico de personal</span>
-                  <p className="text-lg font-black text-blue-700">{selectedDayPeakStaff} colab.</p>
+                <div className="min-w-0 rounded-lg border border-blue-200 bg-blue-50 p-2 sm:px-4 sm:py-3">
+                  <span className="block text-[10px] font-bold uppercase text-blue-500 sm:text-[11px]">Pico de personal</span>
+                  <p className="break-all text-sm font-black text-blue-700 sm:text-lg">{displayWhole(selectedDayPeakStaff)} colab.</p>
                 </div>
               </div>
 
-              <div className="overflow-x-auto rounded-xl border border-slate-200">
-                <table className="w-full min-w-[1180px] text-sm">
-                  <colgroup>
-                    <col className="w-[20%]" />
-                    <col className="w-[16%]" />
-                    <col className="w-[7%]" />
-                    <col className="w-[10%]" />
-                    <col className="w-[10%]" />
-                    <col className="w-[11%]" />
-                    <col className="w-[8%]" />
-                    <col className="w-[7%]" />
-                    <col className="w-[6%]" />
-                    <col className="w-[5%]" />
-                  </colgroup>
-                  <thead className="bg-slate-100 text-[11px] uppercase tracking-wide text-slate-500">
-                    <tr>
-                      <th className="px-3 py-2 text-left font-black">Posicion</th>
-                      <th className="px-3 py-2 text-left font-black">Logica</th>
-                      <th className="px-3 py-2 text-left font-black" title="Mínimo por hora operativa">Mín</th>
-                      <th className="px-3 py-2 text-left font-black">Tope / Fijo</th>
-                      <th className="px-3 py-2 text-left font-black">Ticket</th>
-                      <th className="px-3 py-2 text-left font-black">Trx/colab</th>
-                      <th className="px-3 py-2 text-left font-black">Factor</th>
-                      <th className="px-3 py-2 text-center font-black">Hrs dia</th>
-                      <th className="px-3 py-2 text-center font-black">Pico</th>
-                      <th className="px-3 py-2 text-left font-black"></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200 bg-white">
-                    {positions.map((position) => {
-                      const liveValues = scheduleMatrix.columns.map((col) => col.requiredByPosition[position.id] || 0);
-                      const liveHours = liveValues.reduce((sum, value) => sum + value, 0);
-                      const livePeak = Math.max(0, ...liveValues);
-
-                      return (
-                        <tr key={position.id} className="align-middle">
-                          <td className="p-2">
-                            <input
-                              type="text"
-                              value={position.name}
-                              onChange={(e) => updatePosition(position.id, { name: e.target.value })}
-                              className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm font-semibold"
-                            />
-                          </td>
-                          <td className="p-2">
-                            <select
-                              value={position.logic}
-                              onChange={(e) => updatePosition(position.id, { logic: e.target.value })}
-                              className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm"
-                            >
-                            <option value="sales">VHL general × factor</option>
-                            <option value="service">Servicio / punto de venta</option>
-                            <option value="driver">Driver modulo</option>
-                            <option value="fixed">Fijo / no venta</option>
-                            </select>
-                          </td>
-                          <td className="p-2">
-                            <input
-                              type="number"
-                              min="0"
-                              step="1"
-                              value={position.minStaff ?? ''}
-                              onChange={(e) => updatePosition(position.id, { minStaff: e.target.value })}
-                              disabled={position.logic === 'fixed'}
-                              placeholder="0"
-                              title="Mínimo por hora operativa"
-                              className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm disabled:bg-slate-100 disabled:text-slate-400"
-                            />
-                          </td>
-                          <td className="p-2">
-                            <input
-                              type="number"
-                              min="0"
-                              value={position.logic === 'fixed' ? position.fixedStaff ?? '' : position.maxStaff ?? ''}
-                              onChange={(e) =>
-                                updatePosition(
-                                  position.id,
-                                  position.logic === 'fixed'
-                                    ? { fixedStaff: e.target.value }
-                                    : { maxStaff: e.target.value }
-                                )
-                              }
-                              className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm"
-                            />
-                          </td>
-                          <td className="p-2">
-                            <input
-                              type="number"
-                              min="1"
-                              value={position.ticketAverage ?? ''}
-                              onChange={(e) => updatePosition(position.id, { ticketAverage: e.target.value })}
-                              disabled={position.logic !== 'service' && position.logic !== 'driver'}
-                              className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm disabled:bg-slate-100 disabled:text-slate-400"
-                            />
-                          </td>
-                          <td className="p-2">
-                            <input
-                              type="number"
-                              min="1"
-                              value={position.transactionsPerCollaborator ?? ''}
-                              onChange={(e) => updatePosition(position.id, { transactionsPerCollaborator: e.target.value })}
-                              disabled={position.logic !== 'service'}
-                              className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm disabled:bg-slate-100 disabled:text-slate-400"
-                            />
-                          </td>
-                          <td className="p-2">
-                            <input
-                              type="number"
-                              step="0.05"
-                              min="0"
-                              value={position.factor ?? ''}
-                              onChange={(e) => updatePosition(position.id, { factor: e.target.value })}
-                              disabled={position.logic === 'fixed'}
-                              className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm disabled:bg-slate-100 disabled:text-slate-400"
-                            />
-                          </td>
-                          <td className="p-2 text-center">
-                            <span className="inline-flex min-w-12 justify-center rounded-lg bg-orange-50 px-2 py-1.5 text-xs font-black text-orange-700">
-                              {liveHours}
-                            </span>
-                          </td>
-                          <td className="p-2 text-center">
-                            <span className="inline-flex min-w-10 justify-center rounded-lg bg-blue-50 px-2 py-1.5 text-xs font-black text-blue-700">
-                              {livePeak}
-                            </span>
-                          </td>
-                          <td className="p-2">
-                            <button
-                              type="button"
-                              onClick={() => handleRemovePosition(position.id)}
-                              className="w-full text-xs px-3 py-2 text-red-600 hover:bg-red-50 rounded-lg font-bold"
-                            >
-                              Remover
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <div className="min-w-0 rounded-xl border border-violet-200 bg-violet-50 p-3 sm:p-4">
+                <label htmlFor="projection-vestido-position" className="mb-1 block text-sm font-bold text-violet-900">Área Vestido</label>
+                <select id="projection-vestido-position" aria-label="Área Vestido" value={vestidoPositionId}
+                  onChange={(event) => setVestidoPositionId(event.target.value)}
+                  className="block w-full min-w-0 max-w-full rounded-lg border border-violet-300 bg-white px-3 py-2 text-sm text-slate-900">
+                  <option value="">Seleccionar área...</option>
+                  {positions.map((position, index) => <option key={position.id} value={position.id}>{index + 1}. {position.name || 'Sin nombre'}</option>)}
+                </select>
+                <p className="mt-2 text-xs text-violet-800">Esta área usa venta por hora ÷ VHL general. Las áreas por factor multiplican su cantidad de personas. La selección se conserva si cambias el nombre del área.</p>
               </div>
 
-              <div className="border-t border-slate-100 pt-4 space-y-3">
-                <h5 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Anadir Nueva Posicion</h5>
-                <div className="grid grid-cols-1 md:grid-cols-[1.3fr_1fr_0.55fr_0.7fr_0.7fr_0.8fr_0.7fr_auto] gap-2">
-                  <input
-                    type="text"
-                    placeholder="Ej. Drivethru o Modulo"
-                    value={newPosition.name}
-                    onChange={(e) => setNewPosition((prev) => ({ ...prev, name: e.target.value }))}
-                    className="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm"
-                  />
-                  <select
-                    value={newPosition.logic}
-                    onChange={(e) => setNewPosition((prev) => ({ ...prev, logic: e.target.value }))}
-                    className="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm"
-                  >
-                    <option value="sales">VHL general × factor</option>
-                    <option value="service">Servicio / punto de venta</option>
-                    <option value="driver">Driver modulo</option>
-                    <option value="fixed">Fijo / no venta</option>
-                  </select>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    placeholder="Mín"
-                    title="Mínimo por hora operativa"
-                    value={newPosition.minStaff}
-                    onChange={(e) => setNewPosition((prev) => ({ ...prev, minStaff: e.target.value }))}
-                    disabled={newPosition.logic === 'fixed'}
-                    className="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm disabled:bg-slate-100"
-                  />
-                  <input
-                    type="number"
-                    min="0"
-                    placeholder={newPosition.logic === 'sales' ? 'Tope' : 'Fijo'}
-                    value={newPosition.logic === 'fixed' ? newPosition.fixedStaff : newPosition.maxStaff}
-                    onChange={(e) =>
-                      setNewPosition((prev) =>
-                        prev.logic === 'fixed'
-                          ? { ...prev, fixedStaff: e.target.value }
-                          : { ...prev, maxStaff: e.target.value }
-                      )
-                    }
-                    className="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm"
-                  />
-                  <input
-                    type="number"
-                    min="1"
-                    value={newPosition.ticketAverage}
-                    onChange={(e) => setNewPosition((prev) => ({ ...prev, ticketAverage: e.target.value }))}
-                    disabled={newPosition.logic !== 'service' && newPosition.logic !== 'driver'}
-                    className="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm disabled:bg-slate-100"
-                  />
-                  <input
-                    type="number"
-                    min="1"
-                    value={newPosition.transactionsPerCollaborator}
-                    onChange={(e) => setNewPosition((prev) => ({ ...prev, transactionsPerCollaborator: e.target.value }))}
-                    disabled={newPosition.logic !== 'service'}
-                    className="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm disabled:bg-slate-100"
-                  />
-                  <input
-                    type="number"
-                    step="0.05"
-                    min="0"
-                    value={newPosition.factor}
-                    onChange={(e) => setNewPosition((prev) => ({ ...prev, factor: e.target.value }))}
-                    disabled={newPosition.logic === 'fixed'}
-                    className="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm disabled:bg-slate-100"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleAddPosition}
-                    className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white font-medium text-sm rounded-lg transition shadow-sm"
-                  >
-                    Agregar
-                  </button>
-                </div>
-                <p className="text-xs text-slate-500">
-                  Usa Fijo / no venta para areas como Limpieza, Horno, Lavado o Do Sheet. Estas posiciones mantienen una dotacion fija por hora y no dependen de la venta.
-                </p>
+              <section aria-label="Posiciones configuradas" className="min-w-0 space-y-3">
+                <p className="text-xs text-slate-600">El Grupo del área separa los colaboradores requeridos entre Producción y Servicio.</p>
+                {positions.length === 0 && (
+                  <p className="rounded-xl border border-dashed border-slate-300 p-4 text-sm text-slate-500">Todavía no hay posiciones. Usa Nueva posición para agregar una.</p>
+                )}
+                {positions.map((position, index) => {
+                  const liveValues = scheduleMatrix.columns.map((col) => col.requiredByPosition[position.id] || 0);
+                  const liveHours = liveValues.reduce((sum, value) => sum + value, 0);
+                  const livePeak = Math.max(0, ...liveValues);
+                  return (
+                    <fieldset key={position.id} data-position-id={position.id} className="min-w-0 rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
+                      <legend className="sr-only">Posición {position.name}</legend>
+                      <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          <span className="text-xs font-bold text-slate-500">Posición {index + 1}</span>
+                          <span className="rounded-lg bg-orange-50 px-2 py-1 text-xs font-bold text-orange-700">{displayWhole(liveHours)} hrs/día</span>
+                          <span className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-bold text-blue-700">Pico: {displayWhole(livePeak)}</span>
+                        </div>
+                        <button type="button" onClick={() => handleRemovePosition(position.id)} aria-label={`Remover ${position.name || 'posición'}`}
+                          className="shrink-0 rounded-lg border border-red-200 px-3 py-2 text-xs font-bold text-red-600 hover:bg-red-50">
+                          Remover
+                        </button>
+                      </div>
+                      <ProjectionPositionFields position={position} isVestido={position.id === vestidoPositionId} onChange={(changes) => updatePosition(position.id, changes)} idPrefix={`projection-position-${position.id}`} />
+                    </fieldset>
+                  );
+                })}
+              </section>
+
+              {isAddingPosition && (
+                <form id="projection-new-position-form" ref={newPositionFormRef} noValidate onSubmit={(event) => { event.preventDefault(); handleAddPosition(); }} className="min-w-0 scroll-mt-3">
+                  <fieldset className="min-w-0 rounded-xl border border-orange-200 bg-orange-50/50 p-3 sm:p-4">
+                    <legend className="px-1 text-sm font-bold text-orange-800">Nueva posición</legend>
+                    <p className="mb-3 text-xs text-slate-600">Completa el nombre y el Grupo del área para agregarla.</p>
+                    <ProjectionPositionFields position={newPosition} onChange={(changes) => setNewPosition((previous) => ({ ...previous, ...changes }))}
+                      idPrefix="projection-new-position" nameLabel="Nombre de nueva posición" nameInputRef={newPositionNameRef} />
+                    <p className="mt-3 text-xs text-slate-500">Usa Fijo / no venta para áreas como Limpieza, Horno, Lavado o Do Sheet.</p>
+                    <div className="mt-4 flex flex-wrap justify-end gap-2">
+                      <button type="button" onClick={() => setIsAddingPosition(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100">Cancelar</button>
+                    </div>
+                  </fieldset>
+                </form>
+              )}
+            </div>
+
+            <div className="flex shrink-0 flex-col gap-3 border-t border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+              <div aria-live="polite" className="flex min-w-0 flex-wrap items-center gap-2 text-xs font-semibold text-slate-600">
+                <span className={saveState === 'error' ? 'text-red-700' : saveState === 'saving' ? 'text-amber-700' : 'text-emerald-700'}>
+                  {saveState === 'saving' ? 'Guardando...' : saveState === 'error' ? 'Error al guardar' : saveState === 'saved' ? 'Guardado' : 'Configuración cargada'}
+                </span>
+                {saveState === 'error' && <button type="button" onClick={() => setSaveAttempt((attempt) => attempt + 1)} className="rounded border border-red-200 px-2 py-1 text-red-700">Reintentar</button>}
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <button type="button" onClick={closePositionsModal} className="flex-1 rounded-lg border border-slate-300 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100 sm:flex-none">Cerrar</button>
+                {isAddingPosition ? (
+                  <button type="submit" form="projection-new-position-form" disabled={!newPosition.name.trim() || !getProjectionDepartment(newPosition.department)} className="flex-1 whitespace-nowrap rounded-lg bg-orange-600 px-4 py-2 text-sm font-bold text-white hover:bg-orange-700 disabled:opacity-50 sm:flex-none">Agregar</button>
+                ) : (
+                  <button type="button" onClick={() => setIsAddingPosition(true)} className="flex-1 whitespace-nowrap rounded-lg bg-orange-600 px-4 py-2 text-sm font-bold text-white hover:bg-orange-700 sm:flex-none">Nueva posición</button>
+                )}
               </div>
             </div>
           </div>

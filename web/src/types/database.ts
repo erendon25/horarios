@@ -705,6 +705,7 @@ export type Database = {
       }
       staff_profiles: {
         Row: {
+          competition_recognition: Json
           birth_date: string | null
           cessation_date: string | null
           created_at: string
@@ -771,6 +772,7 @@ export type Database = {
           store_id: string
           training_end_date?: string | null
           training_scores?: Json
+          competition_recognition?: Json
           updated_at?: string
           user_id?: string | null
         }
@@ -806,6 +808,7 @@ export type Database = {
           store_id?: string
           training_end_date?: string | null
           training_scores?: Json
+          competition_recognition?: Json
           updated_at?: string
           user_id?: string | null
         }

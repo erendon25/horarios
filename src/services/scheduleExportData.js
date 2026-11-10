@@ -21,6 +21,9 @@ export const shortModality = (modality) => ({ 'full-time': 'FT', 'part-time': 'P
 export const isManagement = (person) => ['GERENTE', 'ASISTENTE', 'LIDER'].includes(
   String(person.position || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase(),
 );
+export const canLimitPositionCoverage = (person) => ['GERENTE', 'ASISTENTE', 'LIDER', 'ENTRENADOR', 'TRAINER'].includes(
+  String(person?.position || '').trim().toUpperCase(),
+);
 export const isActiveOnDate = (person, date) => {
   const end = person.isTrainee ? person.trainingEndDate : (person.cessationDate || person.terminationDate);
   return !end || end.slice(0, 10) >= date;
@@ -65,7 +68,7 @@ export function getHeatmapAssignments(staff, schedules, day, positions, date) {
       position: names.get(normalizeSchedulePosition(segment.position)), start: clockFromMinutes(segment.start), end: clockFromMinutes(segment.end),
       endExclusive: segment.endExclusive,
       staffId: person.id, staffName: `${person.name || ''} ${person.lastName || ''}`.trim(),
-      isTrainer: person.position === 'ENTRENADOR',
+      isTrainer: ['ENTRENADOR', 'TRAINER'].includes(String(person.position || '').trim().toUpperCase()),
       ...(rest ? { breakStartMinutes: rest.startMinutes, breakEndMinutes: rest.endMinutes,
         breakLabel: `${person.name || ''} ${person.lastName || ''}: ${rest.start}-${rest.end}`.trim() } : {}),
     }));
@@ -85,7 +88,8 @@ export function getPositionSegments(shift) {
       item.start >= segment.start && item.end <= segment.end ? [item.start, item.end] : [])])].sort((a, b) => a - b);
     return cuts.slice(0, -1).map((start, index) => ({
       start, end: cuts[index + 1], endExclusive: cuts[index + 1] < segment.end,
-      position: rotations.findLast(item => start >= item.start && start < item.end)?.position || shift.position,
+      position: rotations.findLast(item => start >= item.start && start < item.end)?.position
+        || (shift.positionRangesOnly ? '' : shift.position),
     }));
   });
 }

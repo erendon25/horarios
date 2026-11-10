@@ -1,3 +1,5 @@
+import { operationalStaffCount } from './projectionStaffCount.js';
+
 // Shared by the on-screen matrix and all daily Excel worksheets.
 const HEATMAP_START_MINUTES = 7 * 60;
 const HEATMAP_END_MINUTES = 25 * 60;
@@ -71,7 +73,7 @@ export function buildHeatmapRows(assigned = [], requirements = {}) {
             for (let i = 0; i < projectionOffsetSlots; i++) fullRow.push(0);
 
             for(let i=0; i<21; i++) {
-               const qty = sourceRow[i] || 0;
+               const qty = operationalStaffCount(sourceRow[i]);
                fullRow.push(qty, qty, qty, qty);
             }
             return fullRow.slice(0, HOURS.length);
@@ -188,34 +190,17 @@ export function buildHeatmapRows(assigned = [], requirements = {}) {
                 return;
             }
 
-            // Un bloque "08:00" representa el intervalo [08:00, 08:15)
-            // Un turno 08:00-12:00 CUBRE el bloque 08:00 (empieza en esa hora),
-            // el bloque 11:45 (está dentro) y también INCLUYE el bloque 12:00
-            // (marcando que "está presente en ese punto").
-            //
-            // Para evitar doble conteo en relevos exactos (A: 08-12, B: 12-16):
-            // el bloque 12:00 SOLO se cuenta para el turno que INICIA (B), no para el que termina (A).
-            // Esto se logra usando `<= endMin` para pintar, pero marcando el bloque de fin
-            // solo si NO hay otro turno en esa posición que empieza exactamente ahí.
-
-            const coversBlock = currentBlockMin >= startMin && (p.endExclusive ? currentBlockMin < endMin : currentBlockMin <= endMin);
-
-            if (coversBlock && !isOnBreak(p, currentBlockMin)) {
-                // Si es exactamente el bloque de fin (currentBlockMin === endMin)
-                // Y hay un relevo exacto (otro turno en esta posición empieza en ese mismo minuto),
-                // NO lo contamos para evitar doble conteo.
-                const isExactEnd = currentBlockMin === endMin;
-                const hasRelayAtEnd = isExactEnd && (startMinsByPos[norm]?.has(endMin % 1440));
-
-                // Excluir el bloque de fin solo si hay relevo, de lo contrario incluirlo
-                if (!hasRelayAtEnd) {
-                    assignedMap[norm][hourStr] = (assignedMap[norm][hourStr] || 0) + 1;
-
-                    // Rastrear si este slot específico es un trainer
-                    trainerMap[norm] = trainerMap[norm] || {};
-                    trainerMap[norm][hourStr] = trainerMap[norm][hourStr] || [];
-                    trainerMap[norm][hourStr].push(p.isTrainer || false);
-                }
+            // Preserve the visual exit marker at the end of a real shift.
+            // Internal position changes remain exclusive, so the destination
+            // or resumed base position owns the exact handoff time.
+            const coversBlock = currentBlockMin >= startMin
+                && (p.endExclusive ? currentBlockMin < endMin : currentBlockMin <= endMin);
+            const relayAtExit = currentBlockMin === endMin && startMinsByPos[norm]?.has(endMin % 1440);
+            if (coversBlock && !relayAtExit && !isOnBreak(p, currentBlockMin)) {
+                assignedMap[norm][hourStr] = (assignedMap[norm][hourStr] || 0) + 1;
+                trainerMap[norm] = trainerMap[norm] || {};
+                trainerMap[norm][hourStr] = trainerMap[norm][hourStr] || [];
+                trainerMap[norm][hourStr].push(p.isTrainer || false);
             }
         });
     });
@@ -253,7 +238,7 @@ export function buildHeatmapRows(assigned = [], requirements = {}) {
                     } else if (slotIsRequired && !slotIsAssigned) {
                         return { color: 'bg-yellow-300', text: '' };
                     } else if (!slotIsRequired && slotIsAssigned) {
-                        return { color: isTrainer ? 'bg-orange-500' : 'bg-red-500', isTrainer, text: '' };
+                        return { color: 'bg-red-500', isTrainer, isExcess: true, text: '' };
                     } else {
                         return { color: 'bg-white', text: '' };
                     }
@@ -278,7 +263,7 @@ export function buildHeatmapRows(assigned = [], requirements = {}) {
                         const hasAssignment = ass > extraSlot;
 
                         return hasAssignment ?
-                            { color: isTrainer ? 'bg-orange-500' : 'bg-red-500', isTrainer, text: '' } :
+                            { color: 'bg-red-500', isTrainer, isExcess: true, text: '' } :
                             { color: 'bg-white', text: '' };
                     });
 
@@ -293,7 +278,7 @@ export function buildHeatmapRows(assigned = [], requirements = {}) {
             }
 
             const groupSize = positionRows.length;
-            const hasExcess = positionRows.some(row => row.isExcess);
+            const hasExcess = positionRows.some(row => row.cells.some(cell => cell.isExcess));
             positionRows.forEach((row, index) => {
                 finalRows.push({
                     ...row,

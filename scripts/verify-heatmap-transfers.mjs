@@ -18,7 +18,7 @@ import BreakControl from './src/components/ScheduleBreakControl.jsx';
 import PositionControl from './src/components/SchedulePositionControl.jsx';
 import { getHeatmapAssignments, getPositionTimeline } from './src/services/scheduleExportData.js';
 import { replacePositionInterval, validateHeatmapTransfer } from './src/services/heatmapTransfers.js';
-const staff = [{id:'a',name:'Ana',modality:'Full-Time'}, {id:'b',name:'Beto',modality:'Full-Time'}];
+const staff = [{id:'a',name:'Ana',modality:'Full-Time'}, {id:'b',name:'Beto',modality:'Full-Time',position:'ENTRENADOR'}];
 const shift = {start:'09:00',end:'17:45',position:'Caja',breakStart:'13:00'};
 const initial = {a:{monday:shift},b:{monday:{...shift,breakStart:'14:00'}}};
 const requirements = {positions:['Caja','Cocina','Despacho'],matrix:[Array(21).fill(1),Array(21).fill(1),Array(21).fill(1)]};
@@ -49,7 +49,7 @@ const server = createServer((request, response) => {
 await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
 let browser;
 try {
- browser = await chromium.launch({headless:true});
+ browser = await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH ? {executablePath:process.env.CHROMIUM_PATH} : {})});
  const page = await browser.newPage({viewport:{width:1440,height:1000}});
  const errors = [];
  page.on('pageerror', error => { errors.push(error.message); console.error(error.message); });
@@ -119,6 +119,18 @@ try {
  await page.getByRole('button',{name:'Desplazar mapa',exact:true}).click();
  assert.equal(await page.getByRole('button',{name:'Desplazar mapa',exact:true}).getAttribute('aria-pressed'),'true');
  await page.getByRole('button',{name:'Minimizar mapa de cobertura'}).click();
+ const trainerPage = await browser.newPage({viewport:{width:1440,height:900}});
+ trainerPage.on('pageerror',error=>errors.push(error.message));
+ await trainerPage.goto(url);
+ const trainerExcess = trainerPage.getByLabel('Seleccionar tramo de Caja desde 10:00',{exact:true});
+ assert.match(await trainerExcess.getAttribute('class'),/bg-red-500/);
+ await trainerExcess.press('Enter');
+ await trainerPage.getByLabel('Colaborador',{exact:true}).selectOption('b');
+ await trainerPage.getByLabel('Puesto destino',{exact:true}).selectOption('Cocina');
+ await trainerPage.getByRole('button',{name:'Aplicar tramo',exact:true}).click();
+ assert.equal(await trainerPage.getByLabel('Seleccionar tramo de Caja desde 10:00',{exact:true}).count(),0);
+ assert.equal(await trainerPage.getByTitle('10:00: Entrenador',{exact:true}).count(),1);
+ await trainerPage.screenshot({path:path.join(output,'trainer-transfer.png'),fullPage:true});
  assert.deepEqual(errors,[]);
  console.log('PASS: selección de intervalos en ambos sentidos, break compacto, tramos consecutivos, fin de turno, recarga y móvil. Captura: ' + path.join(output,'desktop.png'));
 } finally { await browser?.close(); await new Promise(resolve=>server.close(resolve)); }

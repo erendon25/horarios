@@ -1,4 +1,18 @@
-import { normalizeSchedulePosition } from './scheduleExportData.js';
+import { getExportShiftSegments, normalizeSchedulePosition } from './scheduleExportData.js';
+import { operationalStaffCount } from './projectionStaffCount.js';
+
+export function validatePositionRange(shift, positions, range) {
+  if (!positions.some(position => normalizeSchedulePosition(position) === normalizeSchedulePosition(range.position))) {
+    return 'Selecciona una posición del día.';
+  }
+  if (!Number.isInteger(range.start) || !Number.isInteger(range.end) || range.start % 15 || range.end % 15 || range.end <= range.start) {
+    return 'Selecciona inicio y fin en bloques de 15 minutos.';
+  }
+  if (!getExportShiftSegments(shift).some(segment => range.start >= segment.start && range.end <= segment.end)) {
+    return 'El rango debe estar dentro de un tramo del turno, sin incluir la pausa de un turno partido.';
+  }
+  return '';
+}
 
 export const heatmapMinutes = time => {
   const [hour, minute] = String(time).split(':').map(Number);
@@ -22,7 +36,7 @@ export function transferCandidates(assigned, source, minute) {
 function requiredAt(requirements, position, minute) {
   const index = (requirements.positions || []).findIndex(item => normalizeSchedulePosition(item) === normalizeSchedulePosition(position));
   const column = Math.floor((minute - 480) / 60);
-  return column < 0 || index < 0 ? 0 : Number(requirements.matrix?.[index]?.[column]) || 0;
+  return column < 0 || index < 0 ? 0 : operationalStaffCount(requirements.matrix?.[index]?.[column]);
 }
 
 export function validateHeatmapTransfer(assigned, requirements, transfer) {
@@ -37,7 +51,7 @@ export function validateHeatmapTransfer(assigned, requirements, transfer) {
     // Every quarter must fit entirely within a real working segment.
     if (!assigned.some(item => item.staffId === staffId && normalizeSchedulePosition(item.position) === normalizeSchedulePosition(source)
       && coversTransferMinute(item, minute + 14.999))) return 'El intervalo supera el horario disponible del colaborador.';
-    if (sourcePeople.length <= requiredAt(requirements, source, minute)) return 'El movimiento dejaría un faltante en el puesto origen. Acorta el intervalo.';
+    if (sourcePeople.length - 1 < requiredAt(requirements, source, minute)) return 'El movimiento dejaría un faltante en el puesto origen. Acorta el intervalo.';
     if (transferCandidates(assigned, position, minute).length >= requiredAt(requirements, position, minute)) return 'El destino no tiene faltantes durante todo el intervalo. Acorta el intervalo o elige otro puesto.';
   }
   return '';
@@ -49,7 +63,7 @@ export function replacePositionInterval(shift, transfer) {
     if (item.end <= transfer.start || item.start >= transfer.end) return [item];
     return [{ ...item, end: transfer.start }, { ...item, start: transfer.end }].filter(part => part.start < part.end);
   });
-  if (normalizeSchedulePosition(shift.position) !== normalizeSchedulePosition(transfer.position)) {
+  if (transfer.position?.trim() && (shift.positionRangesOnly || normalizeSchedulePosition(shift.position) !== normalizeSchedulePosition(transfer.position))) {
     assignments.push({ start: transfer.start, end: transfer.end, position: transfer.position });
   }
   return assignments.sort((a, b) => a.start - b.start);

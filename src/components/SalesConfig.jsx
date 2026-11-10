@@ -1,9 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { getFirestore, doc, getDoc, setDoc } from '../lib/supabase/firestoreCompat';
 import { useAuth } from '../contexts/AuthContext';
-import { Save, Calendar, Clock, DollarSign, Activity, TrendingUp, ArrowLeft, Upload } from 'lucide-react';
+import { supabase } from '../lib/supabase/client';
+import { readSalesHistoryDates } from '../services/salesHistoryRead';
+import { writeSalesHistoryDays } from '../services/salesHistoryWrite';
+import { parseSalesFile } from '../services/salesImport';
+import { Save, Calendar, DollarSign, Activity, TrendingUp, ArrowLeft, Upload } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import * as XLSX from 'xlsx';
+import { getDatesInRange, getWeekdayAverages, mergeSalesAverageSources, SALES_HOURLY_LABELS } from '../services/salesAnalysis';
 
 const normalizeNumericInput = (value) => {
     let text = String(value ?? '').trim().replace(/[^\d.,-]/g, '');
@@ -40,6 +44,8 @@ export default function SalesConfig() {
     const [storeId, setStoreId] = useState('');
     const [loading, setLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
+    const [loadError, setLoadError] = useState('');
+    const [reloadVersion, setReloadVersion] = useState(0);
     const fileInputRef = useRef(null);
 
     // Estado principal
@@ -82,11 +88,37 @@ export default function SalesConfig() {
     useEffect(() => {
         if (!storeId || !selectedMonth) return;
 
+        let cancelled = false;
         const fetchData = async () => {
             setLoading(true);
+            setLoadError('');
+            setMonthlyData({});
+            setDailyHourlyParts({});
+            setRealSalesData({});
             try {
                 const docRef = doc(db, 'stores', storeId, 'sales_config', selectedMonth);
-                const snap = await getDoc(docRef);
+                const [year, month] = selectedMonth.split('-').map(Number);
+                const lastDay = new Date(year, month, 0).getDate();
+                const monthDates = getDatesInRange(`${selectedMonth}-01`, `${selectedMonth}-${lastDay}`);
+                const [snap, history] = await Promise.all([
+                    getDoc(docRef),
+                    readSalesHistoryDates(supabase, storeId, monthDates),
+                ]);
+                if (cancelled) return;
+                const historySales = {};
+                const historyParts = {};
+                history.forEach((values, date) => {
+                    historySales[date] = { ...values, vta: values.totalSales ?? null, txs: values.totalTxs ?? null, updatedAt: values.updatedAt,
+                        ...(values.monthlyArchive ? { importedAt: values.importedAt } : {}) };
+                    historyParts[date] = values.hourlyParticipation || {};
+                    if (Object.keys(values.hourlyData || {}).length && Number(values.totalSales) > 0) {
+                        historyParts[date] = Object.fromEntries(SALES_HOURLY_LABELS.map((hour) => {
+                            const amount = Object.values(values.hourlyData[Number(hour.slice(0, 2))] || {})
+                                .reduce((sum, value) => sum + (Number(value) || 0), 0);
+                            return [hour, amount / Number(values.totalSales) * 100];
+                        }));
+                    }
+                });
 
                 if (snap.exists()) {
                     const data = snap.data();
@@ -101,22 +133,27 @@ export default function SalesConfig() {
                         ])
                     );
                     setMonthlyData(sanitizedMonthlyData);
-                    setDailyHourlyParts(data.dailyHourlyParts || {});
-                    setRealSalesData(data.realSalesData || {});
+                    const averages = mergeSalesAverageSources(
+                        data.realSalesData || {}, data.dailyHourlyParts || {}, historySales, historyParts
+                    );
+                    setDailyHourlyParts(averages.parts);
+                    setRealSalesData(averages.sales);
                 } else {
                     setMonthlyData({});
-                    setDailyHourlyParts({});
-                    setRealSalesData({});
+                    setDailyHourlyParts(historyParts);
+                    setRealSalesData(historySales);
                 }
             } catch (e) {
                 console.error("Error al cargar config de ventas: ", e);
+                if (!cancelled) setLoadError(`No se pudieron cargar los datos de ${selectedMonth}. Reintenta la carga para editar y guardar.`);
             } finally {
-                setLoading(false);
+                if (!cancelled) setLoading(false);
             }
         };
 
         fetchData();
-    }, [storeId, selectedMonth]);
+        return () => { cancelled = true; };
+    }, [storeId, selectedMonth, reloadVersion]);
 
     // Generar días del mes
     const getDaysInMonth = (yearMonthStr) => {
@@ -174,207 +211,41 @@ export default function SalesConfig() {
         setMonthlyData(newMonthlyData);
     };
 
-    const handleFileUpload = (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-
-        const reader = new FileReader();
-        reader.onload = (evt) => {
-            const data = new Uint8Array(evt.target.result);
-            const workbook = XLSX.read(data, { type: 'array', cellDates: true });
-            const sheetName = workbook.SheetNames[0];
-            const sheet = workbook.Sheets[sheetName];
-
-            // Extraer filas genéricas para ubicar la verdadera línea de cabeceras
-            const rowsArray = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-            console.log("Primeras filas para diagnostico interno: ", rowsArray.slice(0, 15));
-
-            let headerRowIndex = 0;
-            let maxMatches = 0;
-            const keywords = ['fecha', 'hora', 'pedido', 'documento', 'correlativo', 'caja', 'estado', 'total', 'importe', 'venta', 'cliente', 'canal', 'estadoitem'];
-            
-            // Buscar en las primeras 20 filas la que tenga la mayor concentración de palabras clave
-            for (let i = 0; i < Math.min(20, rowsArray.length); i++) {
-                const rowStr = rowsArray[i].map(c => String(c).toLowerCase().trim().replace(/\s/g, '')).join('|');
-                
-                let matchCount = 0;
-                for (let kw of keywords) {
-                    if (rowStr.includes(kw)) matchCount++;
-                }
-
-                if (matchCount > maxMatches) {
-                    maxMatches = matchCount;
-                    headerRowIndex = i;
-                }
+    const handleFileUpload = async (event) => {
+        const file = event.target.files[0];
+        event.target.value = '';
+        if (!file || !storeId || isSaving || loadError) return;
+        setIsSaving(true);
+        try {
+            const { days } = await parseSalesFile(file);
+            if (!days.size) throw new Error('El archivo no contiene ventas válidas para importar.');
+            const dates = await writeSalesHistoryDays(supabase, storeId, days);
+            const importedAt = new Date().toISOString();
+            const importedSales = {}, importedParts = {};
+            for (const [date, day] of days) {
+                if (!date.startsWith(selectedMonth + '-')) continue;
+                importedSales[date] = { ...day, vta: day.totalSales, txs: day.totalTxs, importedAt };
+                importedParts[date] = Object.fromEntries(SALES_HOURLY_LABELS.map(hour => {
+                    const amount = Object.values(day.hourlyData[Number(hour.slice(0, 2))] || {})
+                        .reduce((sum, value) => sum + Number(value || 0), 0);
+                    return [hour, day.totalSales > 0 ? amount / day.totalSales * 100 : 0];
+                }));
             }
-            console.log(">>> Cabecera real ganadora en la fila:", headerRowIndex, " con ", maxMatches, " coincidencias.");
-
-            // Convertir a JSON empezando desde la fila real de cabeceras
-            const rawData = XLSX.utils.sheet_to_json(sheet, {
-                range: headerRowIndex,
-                raw: true,      // preserva Date objects nativos
-                defval: '',
-            });
-
-            procesarRows(rawData);
-        };
-        reader.readAsArrayBuffer(file);
-        e.target.value = null;
+            // Merge imported dates without reloading the form: manually edited,
+            // unsaved sales goals must survive an upload too.
+            setRealSalesData(previous => ({ ...previous, ...importedSales }));
+            setDailyHourlyParts(previous => ({ ...previous, ...importedParts }));
+            alert('Ventas guardadas: ' + dates.length + ' jornada(s), del ' + dates[0] + ' al ' + dates.at(-1) + '. Las ventas de 00:00 a 05:59 pertenecen a la jornada anterior. Los días importados anteriormente se conservan y las metas permanecen intactas.');
+        } catch (error) {
+            console.error('Error importando ventas:', error);
+            alert(error?.message || 'No se pudieron importar las ventas.');
+        } finally {
+            setIsSaving(false);
+        }
     };
 
-    const procesarRows = (data) => {
-        if (data.length === 0) return;
-
-        // Diagnóstico: columnas disponibles
-        console.log('=== DIAGNÓSTICO XLSX ===');
-        console.log('Primera fila campos:', Object.keys(data[0]));
-        console.log('Muestra:', { FechaPedido: data[0].FechaPedido || data[0].Fecha, Total: data[0].Total, Pedido: data[0].Pedido });
-        console.log('========================');
-
-
-                // Función utilitaria para buscar columnas sin importar espacios ni mayúsculas
-                const findValue = (row, possibleKeys) => {
-                    const keys = Object.keys(row);
-                    for (let key of keys) {
-                        if (possibleKeys.includes(key.trim().toLowerCase())) {
-                            return row[key];
-                        }
-                    }
-                    return undefined;
-                };
-
-                const ventasPorDiaHora = {}; 
-                const totalesDiarios = {};   
-                const pedidosPorDia = {}; // Pedidos únicos por día para TXS correcto
-
-                data.forEach(fila => {
-                    if (!fila || typeof fila !== 'object') return;
-
-                    // Ignorar ítems anulados/cancelados
-                    const estadoItem = String(findValue(fila, ['estadoitem', 'estado item', 'estado']) || '').trim().toLowerCase();
-                    if (estadoItem && (estadoItem.includes('anulad') || estadoItem.includes('cancel'))) return;
-
-                    // Si es Inforest, ignoramos su fila de resumen final
-                    const pedidoRaw = String(findValue(fila, ['pedido']) || '').trim();
-                    if (pedidoRaw.includes("Total Pedido")) return;
-
-                    const fechaRaw = findValue(fila, ['fecha', 'fechapedido', 'fecha pedido', 'date']);
-                    const totalRaw = findValue(fila, ['total', 'monto', 'venta', 'ventas']);
-                    
-                    if (!fechaRaw || totalRaw === undefined || totalRaw === null || totalRaw === '') return;
-
-                    // Parseo agnóstico de dinero (S/ 1,500.50 -> 1500.50)
-                    let numStr = String(totalRaw).replace(/[^\d.,-]/g, '');
-                    if (numStr.includes(',') && numStr.includes('.')) {
-                        if (numStr.indexOf(',') < numStr.indexOf('.')) {
-                            numStr = numStr.replace(/,/g, ''); // 1,500.50
-                        } else {
-                            numStr = numStr.replace(/\./g, '').replace(',', '.'); // 1.500,50
-                        }
-                    } else if (numStr.includes(',')) {
-                        numStr = numStr.replace(',', '.'); // 500,50
-                    }
-                    const monto = parseFloat(numStr);
-                    if (isNaN(monto) || monto === 0) return;
-
-                    // Parseo de fecha a prueba de balas
-                    let fechaObj;
-                    if (fechaRaw instanceof Date) {
-                        fechaObj = fechaRaw;
-                    } else if (typeof fechaRaw === 'string') {
-                        const cleanStr = fechaRaw.trim().replace(/\s+/g, ' ');
-                        const [datePart, ...timeParts] = cleanStr.split(' ');
-                        const timePart = timeParts.join(' ');
-                        const partes = datePart.split(/[\/\-]/);
-                        if (partes.length === 3) {
-                            let y, m, d;
-                            if (partes[0].length === 4) {
-                                y = parseInt(partes[0], 10); m = parseInt(partes[1], 10) - 1; d = parseInt(partes[2], 10);
-                            } else {
-                                d = parseInt(partes[0], 10); m = parseInt(partes[1], 10) - 1; y = parseInt(partes[2], 10);
-                                if (y < 100) y += 2000;
-                            }
-                            let hh = 0, mm2 = 0, ss = 0;
-                            if (timePart) {
-                                const tParts = timePart.split(':');
-                                hh = parseInt(tParts[0], 10) || 0; mm2 = parseInt(tParts[1], 10) || 0; ss = parseInt(tParts[2], 10) || 0;
-                            }
-                            fechaObj = new Date(y, m, d, hh, mm2, ss);
-                        } else {
-                            fechaObj = new Date(fechaRaw);
-                        }
-                    } else {
-                        fechaObj = new Date(fechaRaw);
-                    }
-
-                    if (!fechaObj || isNaN(fechaObj.getTime())) return;
-
-                    let yr = fechaObj.getFullYear();
-                    let mo = fechaObj.getMonth() + 1;
-                    let da = fechaObj.getDate();
-                    const rawHours = fechaObj.getHours();
-
-                    // Ajuste de Día de Negocio (Shift de Trasnoche)
-                    // Ventas registradas hasta las 05:59am se computan hacia el día anterior
-                    if (rawHours < 6) {
-                        const prevDay = new Date(fechaObj);
-                        prevDay.setDate(prevDay.getDate() - 1);
-                        yr = prevDay.getFullYear();
-                        mo = prevDay.getMonth() + 1;
-                        da = prevDay.getDate();
-                    }
-
-                    const fecha = `${yr}-${String(mo).padStart(2, '0')}-${String(da).padStart(2, '0')}`;
-                    const horaStr = String(rawHours).padStart(2, '0') + ':00'; 
-
-                    if (!ventasPorDiaHora[fecha]) ventasPorDiaHora[fecha] = {};
-                    ventasPorDiaHora[fecha][horaStr] = (ventasPorDiaHora[fecha][horaStr] || 0) + monto;
-                    totalesDiarios[fecha] = (totalesDiarios[fecha] || 0) + monto;
-
-                    // Contar Pedidos ÚNICOS por día (no ítems individuales)
-                    if (!pedidosPorDia[fecha]) pedidosPorDia[fecha] = new Set();
-                    if (pedidoRaw) pedidosPorDia[fecha].add(pedidoRaw);
-                });
-
-                // Log de totales por fecha para diagnóstico
-                console.log('=== TOTALES PARSEADOS POR FECHA ===');
-                Object.keys(totalesDiarios).sort().forEach(f => {
-                    console.log(`${f}: S/${totalesDiarios[f].toFixed(2)} | TXS: ${pedidosPorDia[f]?.size || 0}`);
-                });
-                console.log('===================================');
-
-                const txsDiarios = {};
-                Object.keys(pedidosPorDia).forEach(f => {
-                    txsDiarios[f] = pedidosPorDia[f].size;
-                });
-
-                // Mantener los metas manuales intactos
-                const participacionFinal = {}; 
-                const newRealSalesData = {};
-
-                Object.keys(ventasPorDiaHora).forEach(fecha => {
-                    participacionFinal[fecha] = {};
-                    hourlyLabels.forEach(hourLabel => {
-                        const ventaHora = ventasPorDiaHora[fecha][hourLabel] || 0;
-                        participacionFinal[fecha][hourLabel] = totalesDiarios[fecha] > 0 
-                                                               ? ((ventaHora / totalesDiarios[fecha]) * 100).toFixed(2) 
-                                                               : "0.00";
-                    });
-
-                    // Guardar los totales reales de este CSV para promediarlos
-                    newRealSalesData[fecha] = {
-                        vta: totalesDiarios[fecha],
-                        txs: txsDiarios[fecha] || 0
-                    };
-                });
-
-                setDailyHourlyParts(participacionFinal);
-                setRealSalesData(newRealSalesData);
-                alert("¡Datos procesados! La matriz de participación por hora se ha rellenado correctamente con las proporciones leídas del archivo.\n\nEl cuadro de metas (Ventas Diarias) se mantiene intacto. No olvides guardar.");
-    }; // fin procesarRows
-
     const saveData = async () => {
-        if (!storeId) return;
+        if (!storeId || loading || loadError || isSaving) return;
         setIsSaving(true);
         
         try {
@@ -394,69 +265,11 @@ export default function SalesConfig() {
         }
     };
 
-    // 24 horas en orden de jornada comercial (06:00 -> 05:00)
-    const hourlyLabels = Array.from({ length: 24 }, (_, i) => {
-        const h = (i + 6) % 24; // empieza en 6am, termina en 5am
-        return String(h).padStart(2, '0') + ':00';
-    });
-
-    const averagesByWeekday = React.useMemo(() => {
-        const result = [
-            { id: 1, name: 'Lunes', count: 0, vta: 0, txs: 0, parts: {}, partsCount: 0 },
-            { id: 2, name: 'Martes', count: 0, vta: 0, txs: 0, parts: {}, partsCount: 0 },
-            { id: 3, name: 'Miércoles', count: 0, vta: 0, txs: 0, parts: {}, partsCount: 0 },
-            { id: 4, name: 'Jueves', count: 0, vta: 0, txs: 0, parts: {}, partsCount: 0 },
-            { id: 5, name: 'Viernes', count: 0, vta: 0, txs: 0, parts: {}, partsCount: 0 },
-            { id: 6, name: 'Sábado', count: 0, vta: 0, txs: 0, parts: {}, partsCount: 0 },
-            { id: 0, name: 'Domingo', count: 0, vta: 0, txs: 0, parts: {}, partsCount: 0 },
-        ];
-
-        // Iterar sobre las fechas reales del Excel cargado (no del mes seleccionado)
-        const allDates = new Set([
-            ...Object.keys(realSalesData),
-            ...Object.keys(dailyHourlyParts),
-        ]);
-
-        allDates.forEach(dateStr => {
-            const [y, m, d] = dateStr.split('-').map(Number);
-            const dateObj = new Date(y, m - 1, d);
-            const wKey = dateObj.getDay();
-            const wObj = result.find(w => w.id === wKey);
-            if (!wObj) return;
-
-            const realData = realSalesData[dateStr];
-            if (realData) {
-                const vta = Number(realData.vta || 0);
-                const txs = Number(realData.txs || 0);
-                if (vta > 0 || txs > 0) {
-                    wObj.vta += vta;
-                    wObj.txs += txs;
-                    wObj.count += 1;
-                }
-            }
-
-            const parts = dailyHourlyParts[dateStr];
-            if (parts) {
-                hourlyLabels.forEach(hour => {
-                    if (!wObj.parts[hour]) wObj.parts[hour] = 0;
-                    wObj.parts[hour] += Number(parts[hour] || 0);
-                });
-                wObj.partsCount += 1;
-            }
-        });
-
-        result.forEach(w => {
-            w.avgVta = w.count > 0 ? w.vta / w.count : 0;
-            w.avgTxs = w.count > 0 ? w.txs / w.count : 0;
-            if (w.partsCount > 0) {
-                hourlyLabels.forEach(hour => {
-                    w.parts[hour] = (w.parts[hour] || 0) / w.partsCount;
-                });
-            }
-        });
-
-        return result;
-    }, [realSalesData, dailyHourlyParts, hourlyLabels]);
+    const hourlyLabels = SALES_HOURLY_LABELS;
+    const averagesByWeekday = React.useMemo(
+        () => getWeekdayAverages(selectedMonth, realSalesData, dailyHourlyParts),
+        [selectedMonth, realSalesData, dailyHourlyParts]
+    );
 
     if (loading) {
         return <div className="p-8 text-center text-gray-500">Cargando configuración de ventas...</div>;
@@ -528,22 +341,34 @@ export default function SalesConfig() {
                     
                     <button 
                         onClick={() => fileInputRef.current?.click()}
-                        className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md font-semibold flex items-center gap-2 transition-colors"
-                        title="Subir archivo XLSX/CSV de ventas para calcular la matriz porcentual por hora"
+                        disabled={Boolean(loadError)}
+                        className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md font-semibold flex items-center gap-2 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+                        title="Subir un reporte de Intraview o Inforest para actualizar las ventas y los promedios"
+                        aria-label="Cargar reporte de ventas"
                     >
                         <Upload className="w-4 h-4" />
-                        <span className="hidden sm:inline">Cargar XLSX/CSV</span>
+                        <span className="hidden sm:inline">Cargar Intraview / Inforest</span>
                     </button>
                     
                     <button 
                         onClick={saveData}
-                        className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-md font-semibold flex items-center gap-2 transition-colors"
+                        disabled={Boolean(loadError) || isSaving}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-md font-semibold flex items-center gap-2 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
                     >
                         <Save className="w-4 h-4" />
                         Guardar
                     </button>
                 </div>
             </div>
+
+            {loadError && (
+                <div role="alert" className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+                    <p>{loadError}</p>
+                    <button onClick={() => setReloadVersion(version => version + 1)} className="rounded-md bg-red-700 px-4 py-2 font-bold text-white hover:bg-red-800">
+                        Reintentar
+                    </button>
+                </div>
+            )}
 
             {/* Dashboard Resumen */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-8 lg:w-2/3">
@@ -557,10 +382,10 @@ export default function SalesConfig() {
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div className="grid grid-cols-1 gap-8">
                 
                 {/* Columna Izquierda: Ventas Mensuales */}
-                <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col h-[650px]">
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col h-[650px]">
                     <div className="bg-gray-50 px-6 py-4 border-b border-gray-200 flex items-center gap-2 shrink-0">
                         <Calendar className="w-5 h-5 text-gray-500" />
                         <h2 className="font-bold text-gray-800 text-lg">Ventas Diarias ({selectedMonth})</h2>
@@ -595,6 +420,7 @@ export default function SalesConfig() {
                                                 <input
                                                     type="text"
                                                     value={monthlyData[day]?.vta || ''}
+                                                    disabled={Boolean(loadError)}
                                                     onChange={e => handleMonthlyDataChange(day, 'vta', e.target.value)}
                                                     onPaste={e => handlePasteMonthly(e, 'vta', day)}
                                                     className="focus:ring-blue-500 focus:border-blue-500 block w-full pl-8 pr-3 sm:text-sm border-gray-300 rounded-md py-2 border transition-colors"
@@ -606,6 +432,7 @@ export default function SalesConfig() {
                                             <input
                                                 type="text"
                                                 value={monthlyData[day]?.txs || ''}
+                                                disabled={Boolean(loadError)}
                                                 onChange={e => handleMonthlyDataChange(day, 'txs', e.target.value)}
                                                 onPaste={e => handlePasteMonthly(e, 'txs', day)}
                                                 className="focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md py-2 px-3 border transition-colors"
@@ -630,83 +457,6 @@ export default function SalesConfig() {
                     </div>
                 </div>
 
-                {/* Columna Derecha: Participación por Hora Diaria (Desde CSV) */}
-                <div className="lg:col-span-1 bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col h-[650px]">
-                    <div className="bg-gray-50 px-6 py-4 border-b border-gray-200 flex items-center justify-between shrink-0">
-                        <div className="flex items-center gap-2">
-                            <Clock className="w-5 h-5 text-gray-500" />
-                            <h2 className="font-bold text-gray-800 text-lg">Matriz de Participación Diaria</h2>
-                        </div>
-                    </div>
-                    
-                    <div className="p-4 bg-green-50/50 text-sm text-green-800 border-b border-green-100 flex flex-col gap-2 shrink-0">
-                        <p>Esta matriz se genera <strong>automáticamente</strong> al subir tu archivo CSV de ventas.</p>
-                        <p>Ya no necesitas ingresar los porcentajes base manualmente.</p>
-                        
-                        {Object.keys(dailyHourlyParts).length > 0 ? (
-                            <div className="flex items-center justify-between mt-2">
-                                <span className="font-bold text-green-700">✓ {Object.keys(dailyHourlyParts).length} días cargados</span>
-                                <button 
-                                    onClick={() => {
-                                        if(window.confirm('¿Seguro que deseas limpiar la matriz diaria cargada?')) {
-                                            setDailyHourlyParts({});
-                                        }
-                                    }}
-                                    className="text-xs bg-red-100 text-red-700 px-3 py-1.5 rounded-full font-bold hover:bg-red-200 transition-colors"
-                                >
-                                    Limpiar
-                                </button>
-                            </div>
-                        ) : (
-                            <div className="mt-2 text-orange-600 font-bold bg-orange-50 p-2 rounded border border-orange-200">
-                                ⚠ Sube un archivo CSV con tus ventas para generar la participación por hora de cada día.
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="overflow-y-auto overflow-x-auto flex-1 relative bg-gray-50">
-                        {Object.keys(dailyHourlyParts).length > 0 ? (
-                            <table className="min-w-full divide-y divide-gray-200">
-                                <thead className="bg-white sticky top-0 z-20 shadow-sm border-b border-gray-200">
-                                    <tr>
-                                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider bg-white sticky left-0 z-30 shadow-[1px_0_0_0_#e5e7eb]">Fecha</th>
-                                        {hourlyLabels.map(hour => (
-                                            <th key={hour} className="px-3 py-3 text-center text-xs font-bold text-gray-500 uppercase tracking-wider min-w-[70px]">
-                                                {hour}
-                                            </th>
-                                        ))}
-                                    </tr>
-                                </thead>
-                                <tbody className="bg-white divide-y divide-gray-100">
-                                    {Object.keys(dailyHourlyParts).sort().map(fecha => {
-                                        const horaParticiones = dailyHourlyParts[fecha];
-                                        return (
-                                            <tr key={fecha} className="hover:bg-blue-50/30 transition-colors">
-                                                <td className="px-4 py-2 whitespace-nowrap text-xs font-bold text-gray-700 bg-white sticky left-0 z-10 shadow-[1px_0_0_0_#e5e7eb]">
-                                                    {fecha}
-                                                </td>
-                                                {hourlyLabels.map(hour => {
-                                                    const valNum = Number(horaParticiones[hour] || 0);
-                                                    return (
-                                                        <td key={hour} className={`px-3 py-2 text-center text-xs border-r border-gray-50 ${valNum > 0 ? 'text-green-700 font-bold bg-green-50/30' : 'text-gray-300'}`}>
-                                                            {valNum > 0 ? `${valNum.toFixed(1)}%` : '-'}
-                                                        </td>
-                                                    );
-                                                })}
-                                            </tr>
-                                        );
-                                    })}
-                                </tbody>
-                            </table>
-                        ) : (
-                            <div className="flex flex-col items-center justify-center h-full text-gray-400 p-8 text-center space-y-4">
-                                <Activity className="w-16 h-16 text-gray-300" />
-                                <p>Sube tu CSV Diario ('Cargar CSV Diario') para autocompletar la participación y las ventas del mes.</p>
-                            </div>
-                        )}
-                    </div>
-                </div>
-
             </div>
 
             {/* Promedios por Día de la Semana */}
@@ -716,7 +466,7 @@ export default function SalesConfig() {
                     <h2 className="font-bold text-white text-lg">Promedios por Día de la Semana</h2>
                 </div>
                 <div className="p-4 bg-blue-50/50 text-sm text-blue-800 border-b border-blue-100">
-                    <p>Calculado automáticamente a partir de los datos cargados en el mes seleccionado. Te permite visualizar el comportamiento base de un Lunes, Martes, etc.</p>
+                    <p>Calculado con las ventas reales registradas y los archivos cargados del mes seleccionado. Cada promedio incluye los días registrados con valor cero y excluye los días sin datos.</p>
                 </div>
                 <div className="overflow-x-auto relative bg-gray-50">
                     <table className="min-w-full divide-y divide-gray-200">
@@ -735,9 +485,9 @@ export default function SalesConfig() {
                         <tbody className="bg-white divide-y divide-gray-100">
                             {averagesByWeekday.map(w => (
                                 <tr key={w.name} className="hover:bg-blue-50/30 transition-colors">
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900 bg-white sticky left-0 z-10 shadow-[1px_0_0_0_#e5e7eb] border-r border-gray-100">{w.name}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900 bg-white sticky left-0 z-10 shadow-[1px_0_0_0_#e5e7eb] border-r border-gray-100">{w.name}<span className="block text-xs font-normal text-gray-500 mt-1">{w.count} {w.count === 1 ? 'día registrado' : 'días registrados'}</span></td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-center font-semibold text-green-700 bg-green-50/10">S/ {w.avgVta.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-center font-bold text-blue-700 bg-blue-50/10 border-r border-gray-200 shadow-[1px_0_0_0_#e5e7eb]">{Math.round(w.avgTxs).toLocaleString('en-US')}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-center font-bold text-blue-700 bg-blue-50/10 border-r border-gray-200 shadow-[1px_0_0_0_#e5e7eb]">{w.avgTxs.toLocaleString('es-PE', { maximumFractionDigits: 2 })}</td>
                                     {hourlyLabels.map(hour => {
                                         const valNum = Number(w.parts[hour] || 0);
                                         return (

@@ -1,0 +1,73 @@
+import assert from 'node:assert/strict';
+import { createCompetitionTestDb } from './competition-test-db.mjs';
+const db = await createCompetitionTestDb();
+const scalar = async (sql, params=[]) => Object.values((await db.query(sql,params)).rows[0])[0];
+const rows = async (sql, params=[]) => (await db.query(sql,params)).rows;
+const cmd = (id, action, payload={}) => scalar('select competition_command($1,$2,$3::jsonb)',[id,action,JSON.stringify(payload)]);
+try {
+  const store = await scalar('insert into stores default values returning id');
+  const admin = await scalar('insert into auth.users values(gen_random_uuid()) returning id');
+  const collaborator = await scalar('insert into auth.users values(gen_random_uuid()) returning id');
+  await db.query("insert into user_profiles(id,store_id,role) values($1,$3,'admin'),($2,$3,'collaborator')",[admin,collaborator,store]);
+  const leaders = [];
+  const people = [];
+  for(let i=0;i<3;i++) leaders.push(await scalar("insert into staff_profiles(store_id,first_name,position) values($1,$2,'ENTRENADOR') returning id",[store,`Trainer ${i}`]));
+  for(let i=0;i<22;i++) people.push(await scalar("insert into staff_profiles(store_id,first_name) values($1,$2) returning id",[store,`Colaborador ${i}`]));
+  await db.query("select set_config('request.jwt.claim.sub',$1,false)",[admin]);
+  await db.exec('set role authenticated');
+  const c = await cmd(null,'create',{store_id:store});
+  const teams = [];
+  for(let i=0;i<3;i++) teams.push(await cmd(c.id,'team',{name:`Equipo ${i}`,trainer_staff_id:leaders[i]}));
+  const members = [];
+  for(let i=0;i<12;i++) members.push(await cmd(c.id,'member',{team_id:teams[i<9?0:1].id,staff_id:people[i]}));
+  assert.equal(Number(await scalar('select count(*) from competition_team_members where team_id=$1',[teams[0].id])),9,'Permite más de seis integrantes');
+  await cmd(c.id,'config',{team_size:1,max_areas_per_participant:2});
+  const area = await scalar('select id from competition_areas where competition_id=$1 order by sort_order limit 1',[c.id]);
+  const entries = [];
+  for(const m of members) entries.push(await cmd(c.id,'entry',{member_id:m.id,area_id:area}));
+  await db.exec('reset role');
+  // Controlled point fixtures isolate the arithmetic; full competition tests
+  // exercise scoring, champions, corrections and audit through real RPCs.
+  for(let i=0;i<entries.length;i++) await db.query(
+    "insert into competition_evaluations(competition_id,entry_id,phase_id,attempt_number,minimum_quality,maximum_duration_ms,phase_points,timer_status,quality_score,duration_ms,approved,points_awarded,evaluated_by) values($1,$2,$3,1,90,45000,$4,'saved',100,1000,true,$4,$5)",
+    [c.id,entries[i].id,entries[i].current_phase_id,i<9?4:6,admin]);
+  await db.exec('set role authenticated');
+  const ranked = await rows('select team_id,points,team_points,members from competition_trainer_ranking where competition_id=$1 order by points desc',[c.id]);
+  assert.equal(ranked[0].team_id,teams[1].id,'El equipo menor gana por promedio, pese a tener menos puntos totales');
+  assert.equal(Number(ranked[0].points),6);
+  assert.equal(Number(ranked[0].team_points),18);
+  assert.equal(ranked[0].members,3);
+  assert.equal(Number(ranked[1].points),4);
+  assert.equal(Number(ranked[1].team_points),36);
+  assert.equal(Number(ranked[2].points),0,'Equipo vacío sin división por cero');
+  for(let i=12;i<16;i++) await cmd(c.id,'member',{team_id:teams[1].id,staff_id:people[i]});
+  const average = Number(await scalar('select points from competition_trainer_ranking where team_id=$1',[teams[1].id]));
+  assert.ok(Math.abs(average-18/7)<1e-12,'Incluye integrantes sin puntos y conserva decimales sin redondear');
+  assert.equal(Number(await scalar('select points from competition_team_ranking where team_id=$1',[teams[1].id])),18,'El total del equipo se conserva');
+  const drawContest = await cmd(null,'create',{store_id:store});
+  const template = leaders.map((id,index)=>({name:`Equipo ${index}`,trainer_staff_id:id,staff_ids:[]}));
+  await cmd(drawContest.id,'roster',{teams:template});
+  await cmd(drawContest.id,'draw',{staff_ids:people});
+  const counts = await rows('select count(*)::integer n from competition_team_members where competition_id=$1 group by team_id order by n desc',[drawContest.id]);
+  assert.deepEqual(counts.map(r=>r.n),[8,7,7],'Sorteo sin capacidad fija, reparto equilibrado');
+  const rosterContest = await cmd(null,'create',{store_id:store});
+  await cmd(rosterContest.id,'roster',{teams:[{name:'Equipo grande',trainer_staff_id:leaders[0],staff_ids:people}]});
+  assert.equal(Number(await scalar('select count(*) from competition_team_members where competition_id=$1',[rosterContest.id])),22,'Plantilla sin límite');
+  await cmd(c.id,'publication',{published:true});
+  await db.exec('reset role');
+  await db.query('update user_profiles set staff_profile_id=$1 where id=$2',[people[12],collaborator]);
+  await db.query("select set_config('request.jwt.claim.sub',$1,false)",[collaborator]);
+  await db.exec('set role authenticated');
+  await cmd(c.id,'register',{area_id:area});
+  assert.equal(Number(await scalar('select count(*) from competition_entries x join competition_team_members m on m.id=x.member_id where x.area_id=$1 and m.team_id=$2',[area,teams[1].id])),4,'Inscripción propia permite más de dos por equipo y área');
+  assert.equal(Number(await scalar('select count(*) from competition_trainer_ranking')),3,'Solo ranking del concurso publicado');
+  await db.exec('reset role');
+  await db.query("select set_config('request.jwt.claim.sub',$1,false)",[admin]);
+  await db.exec('set role authenticated');
+  await cmd(c.id,'publication',{published:false});
+  await db.exec('reset role');
+  await db.query("select set_config('request.jwt.claim.sub',$1,false)",[collaborator]);
+  await db.exec('set role authenticated');
+  assert.equal(Number(await scalar('select count(*) from competition_trainer_ranking')),0,'Se conserva la privacidad al ocultar');
+  console.log('PASS: equipos de tamaño variable, asignación/sorteo/plantilla sin límite, promedio equitativo, cero puntos, precisión, totales intactos y publicación.');
+} finally { await db.close(); }
