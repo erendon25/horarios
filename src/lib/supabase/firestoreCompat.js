@@ -291,6 +291,32 @@ async function fetchRows(ref) {
   return applyConstraints(items, ref.constraints);
 }
 
+// Dedicated read-only export query: filter in SQL and page past the API row cap.
+export async function getStoreStaffForStudyExport(storeId) {
+  if (!storeId) throw new Error('No se pudo identificar la tienda.');
+  const rows = [];
+  let offset = 0;
+  while (true) {
+    const result = await supabase.from('staff_profiles')
+      .select('*', { count: 'exact' })
+      .eq('store_id', storeId)
+      .order('id', { ascending: true })
+      .range(offset, offset + 499);
+    throwIfError(result.error);
+    if (!Number.isInteger(result.count) || result.count < 0) {
+      throw new Error('No se pudo comprobar que la lista de colaboradores esté completa.');
+    }
+    const page = result.data ?? [];
+    if (!page.length && offset < result.count) {
+      throw new Error('La lista de colaboradores está incompleta. Vuelve a intentar la descarga.');
+    }
+    rows.push(...page);
+    offset += page.length;
+    if (offset >= result.count) break;
+  }
+  return rows.map(row => ({ ...mapStaff(row), id: String(row.id) }));
+}
+
 export async function getDocs(ref) {
   const items = await fetchRows(ref);
   return new QuerySnapshot(items.map((item) => new DocumentSnapshot(doc(ref, item.id), item.id, item.data)));
