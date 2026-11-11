@@ -235,12 +235,12 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
 
     const panel = (
         <div className="h-full min-h-0 min-w-0 flex flex-col isolate bg-white rounded-xl shadow-lg overflow-hidden border border-gray-200">
-            <div className="max-h-[45%] flex-none overflow-y-auto bg-gray-800 px-3 py-2 text-white sm:max-h-[60%]">
-                <div className="flex flex-wrap justify-between items-center gap-2">
-                    <h3 id={isFullscreen ? 'heatmap-dialog-title' : undefined} className="text-sm font-bold">
+            <div data-testid="heatmap-header" className="relative max-h-[45%] flex-none overflow-y-auto bg-gray-800 px-3 py-2 text-white sm:max-h-[60%]">
+                <div className="flex min-h-8 items-center justify-between gap-2">
+                    <h3 id={isFullscreen ? 'heatmap-dialog-title' : undefined} className={`min-w-0 truncate text-sm font-bold ${cardPlacement?'invisible':''}`}>
                         Mapa de Cobertura{dayLabel || date ? ` - ${dayLabel} ${date}` : ''}
                     </h3>
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className={`flex shrink-0 items-center gap-2 ${cardPlacement?'invisible':''}`}>
                         {canExport && <>
                             <button type="button" disabled={!!exporting || rows.length === 0}
                                 onClick={() => handleExport('pdf')}
@@ -263,34 +263,36 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                     </div>
                 </div>
                 {(isFullscreen || showProjectionSummary) && <ProjectionHoursSummary summary={projectionHours} dayLabel={dayLabel || 'Día'} />}
-                <div className="mt-2 h-10 overflow-y-auto">
-                {cardPlacement ? <div data-testid="heatmap-card-drag-status" data-phase={cardPlacement.phase} className="flex flex-wrap items-center gap-2 rounded border border-blue-300/40 bg-blue-950/50 px-2 py-1 text-xs">
-                    <p role={cardPlacement.error?'alert':'status'} className="min-w-0 flex-1">{cardPlacement.error || (cardPlacement.busy?'Comprobando disponibilidad y plan semanal…':cardPlacement.plan?`Vista previa · ${cardPlacement.plan.modality} · ${cardPlacement.plan.restDays} descanso(s) · ${cardPlacement.plan.patch.start}–${cardPlacement.plan.patch.end}${cardPlacement.plan.patch.breakStart?` · Break ${cardPlacement.plan.patch.breakStart}`:''} · ${cardPlacement.phase==='drag'?'Suelta para aplicar al borrador':'Usa Aplicar para confirmar'}`:'Arrastra sobre la posición y el ingreso del mapa para ver la jornada completa.')}</p>
+                {cardPlacement && <div data-testid="heatmap-card-drag-status" data-phase={cardPlacement.phase} className="absolute inset-x-3 top-2 z-10 flex h-8 items-center gap-2 bg-gray-800 text-xs">
+                    <p role={cardPlacement.error?'alert':'status'} title={cardPlacement.error||'Previsualización: suelta para aplicar al borrador; Guardar publica el horario.'} className="min-w-0 flex-1 truncate">{cardPlacement.error || (cardPlacement.busy?'Comprobando disponibilidad y plan semanal…':cardPlacement.plan?`Vista previa · ${cardPlacement.plan.modality} · ${cardPlacement.plan.restDays} descanso(s) · ${cardPlacement.plan.patch.start}–${cardPlacement.plan.patch.end}${cardPlacement.plan.patch.breakStart?` · Break ${cardPlacement.plan.patch.breakStart}`:''}`:'Elige posición e ingreso en el mapa.')}</p>
                     {cardPlacement.options?.length>1 && <label>Jornada<select aria-label="Jornada aprobada del arrastre" value={cardPlacement.optionId||''} onChange={event=>onCardOption?.(event.target.value)} className="ml-1 max-w-full rounded border bg-white p-1 text-slate-900"><option value="">Elegir salida</option>{cardPlacement.options.map(option=><option key={option.id} value={option.id}>{approvedBukShiftLabel(option)}</option>)}</select></label>}
                     {cardPlacement.phase==='review' && cardPlacement.plan?.valid && <button type="button" onClick={onApplyCardPlacement} className="min-h-8 rounded bg-blue-600 px-2">Aplicar al mapa</button>}
                     {cardPlacement.error && <button type="button" onClick={()=>{const id=cardPlacement.staffId;onCancelCardPlacement?.();openPerson(id);}} className="min-h-8 rounded border border-white/40 px-2">Revisar en ficha</button>}
                     <button type="button" onClick={onCancelCardPlacement} className="min-h-8 rounded border border-white/40 px-2">Cancelar arrastre</button>
-                </div>:<p className="py-1 text-xs text-slate-200">Arrastra una tarjeta desde Equipo para previsualizar su jornada en el mapa.</p>}
-                </div>
-                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                </div>}
+                <div data-testid="heatmap-legend-actions" className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
                     {HEATMAP_LEGEND.map((item) => (
                         <span key={item.color} className="inline-flex items-center gap-1">
                             <span className={`h-3 w-3 rounded border border-white/30 ${item.color}`} />
                             {item.label}
                         </span>
                     ))}
-                </div>
                 {onTransfer || canFindGap ? (
-                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-2 text-[11px]">
                         {onTransfer && <button type="button" aria-pressed={selectMode && !gapMode} onClick={() => { setGapMode(false); clearGap(); setSelectMode(true); }} className={`rounded px-2 py-1 ${selectMode && !gapMode ? 'bg-blue-600 text-white' : 'bg-white/10'}`}>Seleccionar tramo</button>}
                         <button type="button" aria-pressed={!gapMode && (!onTransfer || !selectMode)} onClick={() => { setGapMode(false); clearGap(); setSelectMode(false); rangeDrag.current = null; }} className={`rounded px-2 py-1 ${!gapMode && (!onTransfer || !selectMode) ? 'bg-blue-600 text-white' : 'bg-white/10'}`}>Desplazar mapa</button>
                         {canFindGap && <button type="button" aria-pressed={gapMode} onClick={() => {
                             clearGap(); setGapMode(true); drag.current = null; rangeDrag.current = null;
                             setTransferSelection(null); setRangePreview(null);
                         }} className={`rounded px-2 py-1 ${gapMode ? 'bg-blue-600 text-white' : 'bg-white/10'}`}>Buscar cobertura</button>}
-                        <span className="text-gray-300">{gapMode ? 'Toca el primer y el último recuadro amarillo del mismo carril. El último incluye sus 15 minutos.' : onTransfer && selectMode ? 'Arrastra sobre un exceso para marcar el intervalo.' : 'Arrastra o desliza para navegar.'}</span>
                     </div>
-                ) : <p className="mt-2 text-[10px] text-gray-300">Arrastra con el mouse o desliza para navegar. En teclado usa las flechas; Esc cierra la vista ampliada.</p>}
+                ) : null}
+                    <details className="min-w-0 open:order-last open:basis-full"><summary className="min-h-7 cursor-pointer rounded px-2 py-1 text-gray-300 hover:bg-white/10">Ayuda</summary><div className="space-y-1 py-2 text-xs text-gray-200">
+                        <p>Arrastra una tarjeta desde Equipo para previsualizar su jornada. Suelta para aplicarla al borrador y usa Guardar para publicarla.</p>
+                        <p>{gapMode ? 'Toca el primer y el último recuadro amarillo del mismo carril. El último incluye sus 15 minutos.' : onTransfer && selectMode ? 'Arrastra sobre un exceso para marcar el intervalo.' : 'Arrastra con el mouse o desliza para navegar.'}</p>
+                        <p>Las flechas desplazan el mapa. Esc cancela el arrastre o cierra la vista ampliada.</p>
+                    </div></details>
+                </div>
                 {gapMode && gapRange?.date === date && <div role="status" data-testid="heatmap-gap-selection" className="mt-2 flex flex-wrap items-center gap-2 text-xs text-blue-100">
                     <span>{gapRange.complete
                         ? `${gapRange.position} · ${heatmapClock(gapRange.start)}–${heatmapClock(gapRange.end)} · Duración ${gapDuration(gapRange.end - gapRange.start)}`
@@ -305,9 +307,10 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                     onApply={onTransfer} onCancel={() => { setTransferSelection(null); setRangePreview(null); }}
                     onBreak={onBreak}
                 />}
+                <div data-testid="heatmap-secondary-tools" className="mt-1 flex flex-wrap items-start gap-x-4 gap-y-1">
                 {assigned.some(person => person.breakLabel) && (
-                    <details className="mt-2 text-xs text-amber-200">
-                        <summary className="cursor-pointer">Breaks asignados (no suman cobertura)</summary>
+                    <details className="min-w-0 text-xs text-amber-200 open:basis-full">
+                        <summary className="min-h-7 cursor-pointer py-1">Breaks asignados (no suman cobertura)</summary>
                         <ul className="mt-1 space-y-1">
                             {[...new Map(assigned.filter(person => person.breakLabel).map(person => [person.staffId || person.breakLabel, person])).values()].map((person, index) => (
                                 <li key={`${person.breakLabel}-${index}`}>{person.breakLabel}</li>
@@ -315,8 +318,9 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                         </ul>
                     </details>
                 )}
-                {inspected && !cardPlacement && <div data-testid="coverage-occupant-info" className="mt-2 flex flex-wrap items-center gap-2 text-xs"><span>{inspected.staffName} · {inspected.position} · {inspected.start}–{inspected.end}{inspected.exit?' · Salida (sin duración)':''}</span><button type="button" onClick={()=>onInfoPerson?.(inspected.staffId)} className="min-h-8 rounded border border-white/30 px-2">Ver ficha</button></div>}
                 <CoverageInsights assigned={displayAssigned} requirements={requirements} positions={positionDefinitions} status={coverageStatus} filtered={filtered} onSelectPerson={openPerson}/>
+                </div>
+                {inspected && !cardPlacement && <div data-testid="coverage-occupant-info" className="mt-1 flex flex-wrap items-center gap-2 text-xs"><span>{inspected.staffName} · {inspected.position} · {inspected.start}–{inspected.end}{inspected.exit?' · Salida (sin duración)':''}</span><button type="button" onClick={()=>onInfoPerson?.(inspected.staffId)} className="min-h-8 rounded border border-white/30 px-2">Ver ficha</button></div>}
             </div>
             <div ref={matrixRef} role="region" aria-label="Matriz de cobertura por posición y horario" tabIndex={0}
                 onDragOver={handleCardDragOver} onDrop={handleCardDrop}

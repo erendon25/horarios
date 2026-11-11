@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { planCoveragePlacement, placementFingerprint, placementPlanFingerprint, placementPreviewAssignments } from '../services/coveragePlacement';
 import { applyBukSchedulePatch } from '../services/bukSchedule';
 
-export function useCoveragePlacement({ scope, getContext, refreshContext, onBegin, onChanged }) {
+export function useCoveragePlacement({ scope, getContext, refreshContext, onChanged }) {
   const [state, setState] = useState(null);
   const session = useRef(null), latest = useRef(null), freshCache = useRef(null);
-  latest.current = { scope, getContext, refreshContext, onBegin, onChanged };
+  latest.current = { scope, getContext, refreshContext, onChanged };
   const show = next => { session.current = next; setState(next); };
   const cancel = () => { freshCache.current = null; show(null); };
   const valid = (token, revision) => {
@@ -56,8 +56,7 @@ export function useCoveragePlacement({ scope, getContext, refreshContext, onBegi
       interaction: drag ? 'drag' : 'keyboard', phase: drag ? 'drag' : 'choose' };
     freshCache.current = { token: next.token };
     show(next);
-    if (!drag) latest.current.onBegin?.();
-    else {
+    if (drag) {
       // One fresh read per drag, not a request per mouse movement. Applying always reads again.
       Promise.resolve().then(() => { valid(next.token); return latest.current.refreshContext(staffId); }).then(value => {
         valid(next.token); freshCache.current = { token: next.token, value };
@@ -78,7 +77,7 @@ export function useCoveragePlacement({ scope, getContext, refreshContext, onBegi
       optionId: position !== current?.position || start !== current?.start ? undefined : current?.optionId,
       revision: (current?.revision || 0) + 1 };
     try {
-      valid(token || next.token); show(next); latest.current.onBegin?.();
+      valid(token || next.token); show(next);
       const fresh = await latest.current.refreshContext(next.staffId); valid(next.token, next.revision);
       const context = { ...latest.current.getContext(), ...fresh };
       if (!context.ready || context.saving) throw Error('Espera a que el horario esté listo.');
@@ -91,7 +90,6 @@ export function useCoveragePlacement({ scope, getContext, refreshContext, onBegi
 
   const commit = async next => {
     show({ ...next, phase: next.interaction === 'drag' ? 'dropping' : 'preview', busy: true, error: '' });
-    if (next.interaction === 'drag') latest.current.onBegin?.();
     try {
       const fresh = await latest.current.refreshContext(next.staffId); valid(next.token, next.revision);
       const context = { ...latest.current.getContext(), ...fresh };

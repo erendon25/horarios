@@ -69,6 +69,11 @@ la imagen de la tarjeta y aplica al borrador al soltar únicamente si la nueva
 validación es correcta. Usa una franja de estado dentro del mapa y conserva la
 alternativa con controles para teclado/táctil.
 
+Colocar un turno mantiene abierto el panel de colaboradores y conserva su
+búsqueda. La cabecera reúne leyenda y acciones en una fila, y breaks y métricas
+en otra; las instrucciones quedan en Ayuda. El estado del arrastre ocupa la
+línea del título, sin reservar una franja vacía que reste espacio al mapa.
+
 Se conservan las restricciones actuales de guardado para estudios hasta poder
 contrastar las reglas remotas de Supabase. La consulta de esas reglas sigue
 requiriendo un acceso de base autorizado; no se relajan solo en el frontend.

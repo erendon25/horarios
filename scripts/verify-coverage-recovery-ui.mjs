@@ -68,6 +68,8 @@ try{
   await placement().getByLabel('Hora de colocación').selectOption(String(Number(original.start.slice(0,2))*60+Number(original.start.slice(3))));
   await placement().getByRole('button',{name:'Ver propuesta',exact:true}).click();await placement().getByTestId('coverage-placement-preview').waitFor();
   await placement().getByRole('button',{name:'Confirmar colocación',exact:true}).click();await placement().waitFor({state:'hidden'});
+  assert.equal(await panel().isVisible(),true,'Keyboard placement must keep the collaborators panel open');
+  assert.equal(await panel().getByLabel('Buscar colaborador',{exact:true}).inputValue(),'Lucía');
   assert.equal((await draft()).changes.T01.monday.position,'MASA');assert.equal((await draft()).changes.T01.monday.start,original.start);assert.equal((await draft()).changes.T01.monday.end,original.end);await undo();
   pass('Mover un turno existente cambia su posición con vista previa y conserva el rango aprobado; deshacer recupera sus datos');
 

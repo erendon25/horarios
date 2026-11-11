@@ -45,6 +45,17 @@ try{
   page.on('pageerror',error=>errors.push(error.message));await page.route('https://**/*',route=>{external.push(route.request().url());return route.abort();});
   const ftPath='schedules/F01_2026-10-12_to_2026-10-18',ft={...await read(ftPath),monday:{}};await seed(ftPath,ft);
   await page.goto(base);await page.getByRole('button',{name:'Buscar cobertura',exact:true}).waitFor();
+  await source('Camila');
+  const header=await page.getByTestId('heatmap-header').boundingBox();
+  const legend=await page.getByTestId('heatmap-legend-actions').getByText('Faltante',{exact:true}).boundingBox();
+  const rangeButton=await page.getByRole('button',{name:'Seleccionar tramo',exact:true}).boundingBox();
+  assert.ok(header.height<=136,`Header takes too much matrix space: ${header.height}`);
+  assert.ok(Math.abs((legend.y+legend.height/2)-(rangeButton.y+rangeButton.height/2))<5,'Legend and selection action must share a row');
+  const help=page.getByTestId('heatmap-legend-actions').locator('details');
+  const instructions=help.getByText('Arrastra una tarjeta desde Equipo para previsualizar su jornada. Suelta para aplicarla al borrador y usa Guardar para publicarla.',{exact:true});
+  assert.equal(await instructions.isVisible(),false);await help.locator('summary').click();assert.equal(await instructions.isVisible(),true);await help.locator('summary').click();
+  await page.screenshot({path:`${output}/compact-header.png`});
+  pass('Cabecera compacta: acciones junto a la leyenda, instrucciones en Ayuda y más espacio para el mapa');
   await begin('F01','Camila');await hover(21);
   await poll(async()=>await selected().count()===33,'Full-Time preview did not paint 8 net hours plus exit marker');
   assert.match(await status().textContent(),/12:15–21:00/);await noMutation('F01');
@@ -54,8 +65,12 @@ try{
   assert.equal(await selected().count(),33);await noMutation('F01');await page.screenshot({path:`output/coverage-drag/preview-full-time.png`});
   await page.mouse.up();await poll(async()=>(await draft())?.changes.F01?.monday?.start==='12:45','Drop did not apply the full shift');
   assert.equal((await draft()).changes.F01.monday.end,'21:30');assert.deepEqual(await page.evaluate(()=>window.bukQaWrites),[]);
+  assert.equal(await page.getByTestId('focus-staff-panel').isVisible(),true,'Dropping a shift must keep the collaborators panel open');
+  assert.equal(await page.getByTestId('focus-staff-panel').getByLabel('Buscar colaborador',{exact:true}).inputValue(),'Camila');
+  const afterDropHeader=await page.getByTestId('heatmap-header').boundingBox();
+  assert.ok(Math.abs(afterDropHeader.width-header.width)<1,'Placement must preserve the matrix width');
   await page.getByRole('button',{name:'Deshacer cambio',exact:true}).click();await noMutation('F01');
-  pass('Arrastre nativo pinta la jornada Full-Time completa, sigue el cursor, oculta la tarjeta flotante y aplica solo al soltar, sin modal');
+  pass('Arrastre nativo pinta la jornada completa sin tarjeta flotante ni modal y conserva el panel y su búsqueda al soltar');
 
   await begin('F01','Camila');await hover(21);await poll(async()=>await selected().count()>0,'No cancellation preview');
   await page.keyboard.press('Escape');await page.mouse.up();await poll(async()=>await status().count()===0,'Escape did not cancel');

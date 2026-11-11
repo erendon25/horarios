@@ -1210,7 +1210,7 @@ export default function WeeklyScheduleEditor() {
         return {staff:activeStaff.map(item=>item.id===staffId?person:item),verifiedSchedule:{...(current.exists()?current.data():{}),...dirtyDays},previousWeekSchedules:{[staffId]:previous.exists()?previous.data():{}},nextWeekSchedules:{[staffId]:next.exists()?next.data():{}}};
     };
     const placement=useCoveragePlacement({scope:`${currentUser?.uid}|${userRole}|${storeId}|${wk}|${selectedDay}`,
-        getContext:getPlacementContext,refreshContext:refreshPlacementContext,onBegin:()=>setFocusPanelOpen(false),
+        getContext:getPlacementContext,refreshContext:refreshPlacementContext,
         onChanged:()=>{setSaveStatus('idle');setSaveErrorMessage('');}});
     const historyAction=action=>{if(saveStatus==='saving')return;if(draftController[action]()){setSaveStatus('idle');setSaveErrorMessage('');}};
     const quickDayChange=(id,field,value)=>{
