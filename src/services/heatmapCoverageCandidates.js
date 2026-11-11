@@ -27,8 +27,21 @@ const workSegments = (shift) => {
     ...segment, start: minute(shift.start) - extraMinutes(shift.extraHoursPre),
   });
 };
-const covers = (segments, selection) => segments.some((segment) =>
-  segment.start <= selection.start && segment.end >= selection.end);
+// Count actual work in the selected quarters, excluding breaks and exit markers.
+const coverageFor = (segments, selection, rest = null) => {
+  const coverageRanges = [], uncoveredRanges = [];
+  let coveredMinutes = 0;
+  for (let time = selection.start; time < selection.end; time += 15) {
+    const covered = segments.some(segment => segment.start <= time && segment.end >= time + 15)
+      && !(rest && overlap({ start: time, end: time + 15 }, { start: rest.startMinutes, end: rest.endMinutes }));
+    const ranges = covered ? coverageRanges : uncoveredRanges;
+    if (ranges.at(-1)?.end === time) ranges.at(-1).end += 15;
+    else ranges.push({ start: time, end: time + 15 });
+    if (covered) coveredMinutes += 15;
+  }
+  return { coverageRanges, uncoveredRanges, coveredMinutes, remainingMinutes: selection.end - selection.start - coveredMinutes,
+    fullCoverage: coveredMinutes === selection.end - selection.start };
+};
 const active = (person, date) => person.status !== 'inactive' && isActiveOnDate(person, date);
 
 const neighboringWork = (id, schedules, previous, next, dayIndex) => {
@@ -95,7 +108,7 @@ export const getHeatmapCoverageCandidates = ({
   for(let minute=selection.start;minute<selection.end;minute+=15){
     const index=HOURS.indexOf(clockFromMinutes(minute));
     const missing=allRows.filter(row=>row.positionKey===key && row.cells[index]?.color==='bg-yellow-300').length;
-    result.coverageNeed.push({minute,missing,remaining:Math.max(0,missing-1)});
+    result.coverageNeed.push({minute,missing});
   }
   result.selection = { ...selection, position: target };
   result.limitations.push('Agregar turno cambia el borrador; Guardar publica los horarios para los colaboradores.');
@@ -134,14 +147,14 @@ export const getHeatmapCoverageCandidates = ({
     }
     const neighbors = neighboringWork(person.id, schedules, previousWeekSchedules, nextWeekSchedules, dayIndex);
     const options = [];
-    let rejected = { code: 'no_compatible_shift', reason: 'No tiene turnos disponibles que cubran todo el intervalo.' };
+    let rejected = { code: 'no_compatible_shift', reason: 'No tiene turnos aprobados disponibles que coincidan con este tramo, ni siquiera parcialmente.' };
     for (const option of catalog) {
       const patch = option.manual ? { start: option.start, end: option.end, off: false, feriado: false, holiday: false,
         splitShift: false, start2: '', end2: '', bukApprovedShiftId: '', bukBreakMinutes: 0, breakStart: '' }
         : { ...makeApprovedBukPatch(option.id, current, day), feriado: false, holiday: false };
       const proposed = { ...current, ...patch, position: target };
       const segments = workSegments(proposed);
-      if (!covers(segments, selection)) continue;
+      if (!coverageFor(segments, selection).coveredMinutes) continue;
       if ((dayIndex === 0 && previousWeekSchedules === undefined && segments.some((segment) => segment.start < 0))
         || (dayIndex === 6 && nextWeekSchedules === undefined && segments.some((segment) => segment.end > 1440))) {
         rejected = { code: 'adjacent_week_unknown', reason: 'Falta comprobar la semana adyacente que ocuparía este turno.' }; continue;
@@ -153,18 +166,29 @@ export const getHeatmapCoverageCandidates = ({
       if (!availability.available) { rejected = { code: 'study_conflict', reason: availability.reasons[0]?.message || 'Tiene un conflicto de disponibilidad.' }; continue; }
       let breakOptions = [];
       if (requiresScheduleBreak(proposed, modality)) {
-        breakOptions = getScheduleBreakOptions(proposed, modality).filter((breakStart) => {
-          const rest = getScheduleBreak({ ...proposed, breakStart }, modality);
-          return rest && !overlap({ start: rest.startMinutes, end: rest.endMinutes }, selection);
-        });
-        if (!breakOptions.length) { rejected = { code: 'break_required', reason: 'El break requerido impediría cubrir todo el intervalo.' }; continue; }
-        proposed.breakStart = breakOptions.includes(proposed.breakStart) ? proposed.breakStart : breakOptions[0];
+        const rankedBreaks = getScheduleBreakOptions(proposed, modality).map(breakStart => ({
+          breakStart, coverage: coverageFor(segments, selection, getScheduleBreak({ ...proposed, breakStart }, modality)),
+        })).filter(item => item.coverage.coveredMinutes > 0)
+          .sort((a, b) => b.coverage.coveredMinutes - a.coverage.coveredMinutes
+            || Number(b.breakStart === proposed.breakStart) - Number(a.breakStart === proposed.breakStart));
+        breakOptions = rankedBreaks.map(item => item.breakStart);
+        if (!breakOptions.length) { rejected = { code: 'break_required', reason: 'No quedan cuartos de hora cubiertos después del break requerido.' }; continue; }
+        proposed.breakStart = breakOptions[0];
       }
+      const coverage = coverageFor(segments, selection, getScheduleBreak(proposed, modality));
       options.push({ ...option, breakStart: proposed.breakStart || '', breakOptions,
-        breakMinutes: requiresScheduleBreak(proposed, modality) ? 45 : 0 });
+        breakMinutes: requiresScheduleBreak(proposed, modality) ? 45 : 0, ...coverage,
+        outsideMinutes: segments.reduce((sum, segment) => sum + segment.end - segment.start, 0)
+          - (requiresScheduleBreak(proposed, modality) ? 45 : 0) - coverage.coveredMinutes });
     }
+    options.sort((a, b) => b.coveredMinutes - a.coveredMinutes || a.outsideMinutes - b.outsideMinutes
+      || Math.abs(minute(a.start) - selection.start) - Math.abs(minute(b.start) - selection.start)
+      || a.id.localeCompare(b.id));
     if (options.length) result.available.push({ id: person.id, person, kind: 'new-shift', source: null, options });
     else block(rejected.code, rejected.reason);
   }
+  result.available.sort((a, b) => b.options[0].coveredMinutes - a.options[0].coveredMinutes
+    || a.options[0].outsideMinutes - b.options[0].outsideMinutes
+    || `${a.person.name || ''} ${a.person.lastName || ''}`.localeCompare(`${b.person.name || ''} ${b.person.lastName || ''}`, 'es'));
   return result;
 };

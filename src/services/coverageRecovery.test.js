@@ -238,7 +238,7 @@ test('agregar al mapa propone un turno aprobado compatible con la categoría aun
     optionId: 'turno-que-ya-no-existe'
   }), /ya no está disponible/);
 });
-test('exclusiones distinguen sin categorizar e incompatible y explican el faltante restante', () => {
+test('exclusiones distinguen sin categorizar e incompatible y conservan el faltante sin descontar personas que no cubren', () => {
   const result = getHeatmapCoverageCandidates({
     ...context({
       staff: [{
@@ -260,7 +260,8 @@ test('exclusiones distinguen sin categorizar e incompatible y explican el faltan
   assert.equal(result.incompatibleStaffCount, 1);
   assert.equal(result.available.length, 0);
   assert.equal(result.coverageNeed[0].missing, 1);
-  assert.equal(result.coverageNeed[0].remaining, 0);
+  assert.equal(Object.hasOwn(result.coverageNeed[0], 'remaining'), false,
+    'La necesidad no presupone que cada turno sugerido cubra todos los cuartos');
   assert.equal(workCategory({
     legacy_data: {
       workCategory: 'Producción'

@@ -16,9 +16,12 @@ function Candidate({ candidate, date, onView, onApply, busy }) {
   const optionLabel = option => option.manual
     ? `${option.start} → ${option.end} · ${duration(option.duration)}`
     : approvedBukShiftLabel(option);
-  const option = item => <li key={item.id || `${item.start}-${item.end}`} className="py-1 text-xs text-slate-700">
-    {optionLabel(item)}
-    {item.breakStart && <span className="mt-0.5 block text-amber-800">Break fuera del hueco: {item.breakStart}</span>}
+  const option = item => <li key={item.id || `${item.start}-${item.end}`} data-coverage-option-id={item.id} data-coverage-complete={item.fullCoverage} className="border-b border-slate-100 py-2 text-xs text-slate-700 last:border-0">
+    <p className="font-semibold">{optionLabel(item)}</p>
+    <p className={item.fullCoverage ? 'text-emerald-800' : 'text-blue-800'}>{item.fullCoverage ? 'Cobertura completa' : 'Cobertura parcial'} · Cubre {duration(item.coveredMinutes)} de {duration(item.coveredMinutes + item.remainingMinutes)}</p>
+    {item.coverageRanges?.length > 0 && <p>Cubre: {item.coverageRanges.map(range => `${clock(range.start)}–${clock(range.end)}`).join(', ')}</p>}
+    {item.remainingMinutes > 0 && <p className="text-amber-800">Sin cubrir por este turno: {item.uncoveredRanges.map(range => `${clock(range.start)}–${clock(range.end)}`).join(', ')} · {duration(item.remainingMinutes)}</p>}
+    {item.breakStart && <span className="mt-0.5 block text-slate-600">Break: {item.breakStart} · No suma cobertura</span>}
     {onApply && <button type="button" disabled={busy} aria-label={`Agregar turno ${item.start} de ${name}`} onClick={()=>onApply(candidate,item)} className="ml-2 min-h-9 rounded border border-blue-200 bg-blue-50 px-2 font-semibold text-blue-800 disabled:opacity-40">Agregar turno</button>}
   </li>;
   return <article data-coverage-person-id={candidate.id} data-coverage-kind={candidate.kind} className="rounded-xl border border-slate-200 bg-white p-4">
@@ -26,7 +29,7 @@ function Candidate({ candidate, date, onView, onApply, busy }) {
       <div className="min-w-0"><h3 className="break-words text-sm font-bold text-slate-900">{name}</h3><p className="mt-1 text-xs text-slate-500">{[effectiveModality(person, date), person.position].filter(Boolean).join(' · ')}</p></div>
       <button type="button" aria-label={`Ver en editor a ${name}`} onClick={() => onView(candidate)} className="min-h-11 shrink-0 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100">Ver en editor</button>
     </div>
-    <div className="mt-3"><p className="text-xs font-semibold text-slate-600">Turnos compatibles con todo el tramo</p><ul>{options.slice(0, 3).map(option)}</ul>
+    <div className="mt-3"><p className="text-xs font-semibold text-slate-600">Turnos sugeridos · mayor cobertura primero</p><ul>{options.slice(0, 3).map(option)}</ul>
         {options.length > 3 && <details className="mt-2 text-xs text-blue-700"><summary className="min-h-8 cursor-pointer py-1">Ver otros {options.length - 3} turnos</summary><ul>{options.slice(3).map(option)}</ul></details>}
       </div>
   </article>;
@@ -77,12 +80,12 @@ export default function HeatmapCoverageCandidatesDialog({ selection, result, onC
         {error && <p role="alert" className="rounded bg-red-50 p-3 text-red-800">{error}</p>}
         {result?.positionDepartmentLabel && <p className="text-sm">Área: {result.positionDepartmentLabel} · Categorías compatibles: {result.positionDepartmentLabel} y Multifuncional. La habilidad registrada es informativa.</p>}
         {result?.uncategorizedStaffCount>0 && <p className="text-xs text-amber-800">{result.uncategorizedStaffCount} personas sin categorizar. Asigna su categoría en Información para incluirlas.</p>}
-        {result?.coverageNeed?.length>0 && <details className="rounded border p-2 text-xs"><summary className="cursor-pointer font-semibold">Faltante pendiente tras agregar una persona</summary>{result.coverageNeed.map(item=><p key={item.minute}>{clock(item.minute)}: faltan {item.missing}; después quedarán {item.remaining}.</p>)}</details>}
+        {result?.coverageNeed?.length>0 && <details className="rounded border p-2 text-xs"><summary className="cursor-pointer font-semibold">Faltantes por tramo</summary>{result.coverageNeed.map(item=><p key={item.minute}>{clock(item.minute)}: faltan {item.missing} personas.</p>)}</details>}
         {!result?.valid ? <p role={result?.pending ? 'status' : 'alert'} className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{result?.reason || 'Este tramo ya no tiene un faltante continuo. Vuelve a seleccionarlo en el mapa.'}</p> : <>
-          <p className="text-sm text-slate-600">Solo colaboradores sin turno ese día. Se comprueban estudios, habilidades y reglas del plan semanal para cubrir todo el tramo.</p>
+          <p className="text-sm text-slate-600">Colaboradores sin turno ese día, con opciones de cobertura completa o parcial. Se comprueban estudios, categoría y cupos del plan semanal.</p>
           <label className="relative block"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" /><input type="search" aria-label="Buscar candidato para cobertura" placeholder="Buscar colaborador…" value={search} onChange={event => setSearch(event.target.value)} className="min-h-11 w-full rounded-xl border border-slate-300 py-2 pl-9 pr-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500" /></label>
           {available.length > 0 && <section aria-label="Sin turno asignado"><h3 className="mb-2 text-sm font-bold">Sin turno asignado · {available.length}</h3><div className="space-y-3">{available.map(candidate => <Candidate key={candidate.id} candidate={candidate} date={selection.date} onView={onViewCandidate} onApply={onApplyCandidate?apply:undefined} busy={busy}/>)}</div></section>}
-          {!available.length && <p role="status" className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">{query ? 'Ningún candidato coincide con la búsqueda.' : 'No hay colaboradores compatibles con todo este tramo según los datos actuales.'}</p>}
+          {!available.length && <p role="status" className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">{query ? 'Ningún candidato coincide con la búsqueda.' : 'No hay colaboradores con turnos compatibles que cubran parte de este tramo según los datos actuales.'}</p>}
           {(result.limitations || []).length > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">{result.limitations.map((message, index) => <p key={index} className="py-1">{message}</p>)}</div>}
           {(result.blocked || []).length > 0 && <details className="rounded-xl border border-slate-200 p-3 text-xs text-slate-600"><summary className="min-h-8 cursor-pointer font-semibold">Por qué otros colaboradores no aparecen ({result.blocked.length})</summary><ul className="mt-2 divide-y divide-slate-100">{result.blocked.map(item => <li key={item.id} className="py-2"><span className="font-semibold">{nameOf(item.person)}</span> · {item.reason}</li>)}</ul></details>}
         </>}

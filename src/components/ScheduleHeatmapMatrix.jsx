@@ -1,5 +1,5 @@
 // ScheduleHeatmapMatrix.jsx - Matriz operativa de 07:00 a 26:00
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { Maximize2, Minimize2, FileText, Download } from 'lucide-react';
 import { HEATMAP_LEGEND, downloadHeatmap } from '../services/heatmapExport';
@@ -10,6 +10,7 @@ import ProjectionHoursSummary from './ProjectionHoursSummary';
 import CoverageInsights from './CoverageInsights';
 import { cellOccupants } from '../services/coverageInsights';
 import { approvedBukShiftLabel } from '../services/bukSchedule';
+import HeatmapOccupantTooltip from './HeatmapOccupantTooltip';
 export { HOURS } from '../services/heatmapModel';
 
 const EMPTY_ASSIGNED = [];
@@ -28,8 +29,11 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
     const displayAssigned=cardPlacement?.proposedAssignments || assigned;
     const rows = useMemo(() => buildHeatmapRows(displayAssigned, requirements), [displayAssigned, requirements]);
     const occupants=useMemo(()=>cellOccupants(displayAssigned,rows),[displayAssigned,rows]);
-    const [inspectedCell,setInspectedCell]=useState('');
-    const inspected=occupants.get(inspectedCell);
+    const [inspectedCell,setInspectedCell]=useState(null);
+    const tooltipId = useId();
+    const hoverTimeout = useRef(null);
+    const inspected = inspectedCell?.date === date && inspectedCell.element.isConnected
+        && occupants.get(inspectedCell.key)?.staffId === inspectedCell.staffId ? occupants.get(inspectedCell.key) : null;
     const [isFullscreen, setIsFullscreen] = useState(false);
     const dialogRef = useRef(null);
     const maximizeRef = useRef(null);
@@ -49,6 +53,43 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
     gapScope.current = { rows, date, onGapSelect, onGapReset, gapMode };
     const canFindGap = typeof onGapSelect === 'function';
     const openPerson=id=>{if(isFullscreen){setIsFullscreen(false);requestAnimationFrame(()=>onSelectPerson?.(id));}else onSelectPerson?.(id);};
+
+    const keepCellInfo = () => clearTimeout(hoverTimeout.current);
+    const hideCellInfo = () => { keepCellInfo(); setInspectedCell(null); };
+    const leaveCellInfo = () => {
+        keepCellInfo();
+        hoverTimeout.current = setTimeout(() => setInspectedCell(null), 150);
+    };
+    const inspectCell = (element, key, hour) => {
+        keepCellInfo();
+        const person = occupants.get(key);
+        setInspectedCell(person && !cardPlacement && !drag.current && !rangeDrag.current
+            ? { element, key, hour, date, staffId: person.staffId } : null);
+    };
+    useEffect(() => {
+        hideCellInfo();
+    }, [date, isFullscreen, cardPlacement?.token, assigned]);
+    useEffect(() => {
+        const dismiss = () => { clearTimeout(hoverTimeout.current); setInspectedCell(null); };
+        window.addEventListener('scroll', dismiss, true);
+        window.addEventListener('resize', dismiss);
+        window.addEventListener('pointerdown', dismiss, true);
+        return () => {
+            clearTimeout(hoverTimeout.current);
+            window.removeEventListener('scroll', dismiss, true);
+            window.removeEventListener('resize', dismiss);
+            window.removeEventListener('pointerdown', dismiss, true);
+        };
+    }, []);
+    useEffect(() => {
+        if (!inspected) return undefined;
+        const dismiss = event => {
+            if (event.key !== 'Escape' || [...document.querySelectorAll('dialog[open]')].some(dialog => dialog !== dialogRef.current)) return;
+            event.preventDefault(); event.stopPropagation(); hideCellInfo();
+        };
+        window.addEventListener('keydown', dismiss, true);
+        return () => window.removeEventListener('keydown', dismiss, true);
+    }, [inspected]);
 
     const clearGap = (notify = true) => {
         const hadSelection = Boolean(gapRef.current);
@@ -320,7 +361,6 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                 )}
                 <CoverageInsights assigned={displayAssigned} requirements={requirements} positions={positionDefinitions} status={coverageStatus} filtered={filtered} onSelectPerson={openPerson}/>
                 </div>
-                {inspected && !cardPlacement && <div data-testid="coverage-occupant-info" className="mt-1 flex flex-wrap items-center gap-2 text-xs"><span>{inspected.staffName} · {inspected.position} · {inspected.start}–{inspected.end}{inspected.exit?' · Salida (sin duración)':''}</span><button type="button" onClick={()=>onInfoPerson?.(inspected.staffId)} className="min-h-8 rounded border border-white/30 px-2">Ver ficha</button></div>}
             </div>
             <div ref={matrixRef} role="region" aria-label="Matriz de cobertura por posición y horario" tabIndex={0}
                 onDragOver={handleCardDragOver} onDrop={handleCardDrop}
@@ -422,15 +462,18 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                                                 filter: rangePreview?.row === `${row.positionKey}-${row.slot}` && j >= rangePreview.from && j <= rangePreview.to ? 'brightness(0.8)' : undefined }}
                                             data-range-hour={j} data-range-row={rowKey} data-position={row.name} data-position-key={row.positionKey} data-slot={row.slot} data-excess={cell.isExcess}
                                             data-missing={missing} data-gap-selected={gapSelected || undefined}
-                                            data-occupant-id={occupant?.staffId} data-exit-marker={occupant?.exit||undefined}
+                                            data-occupant-id={occupant?.staffId} data-occupant-name={occupant?.staffName} data-exit-marker={occupant?.exit||undefined}
                                             data-card-placement-selected={cardSelected||undefined} data-card-placement-target={cardTarget||undefined}
                                             data-card-placement-conflict={cardConflict||undefined}
                                             role={gapMode && missing ? 'button' : undefined}
                                             tabIndex={gapMode ? (missing ? 0 : undefined) : occupant || onTransfer && cell.isExcess ? 0 : undefined}
                                             aria-pressed={gapMode && missing ? Boolean(gapSelected) : undefined}
-                                            aria-label={gapMode && missing ? `Seleccionar faltante de ${row.name}, carril ${row.slot + 1}, a las ${HOURS[j]}` : onTransfer && cell.isExcess && !gapMode ? `Seleccionar tramo de ${row.name} desde ${HOURS[j]}` : undefined}
-                                            onMouseEnter={occupant&&!cardPlacement?()=>setInspectedCell(`${rowKey}:${j}`):undefined}
-                                            onFocus={occupant?()=>setInspectedCell(`${rowKey}:${j}`):undefined}
+                                            aria-label={gapMode && missing ? `Seleccionar faltante de ${row.name}, carril ${row.slot + 1}, a las ${HOURS[j]}` : onTransfer && cell.isExcess && !gapMode ? `Seleccionar tramo de ${row.name} desde ${HOURS[j]}${occupant ? `, ${occupant.staffName}` : ''}` : occupant ? `${occupant.staffName}, ${row.name}, ${HOURS[j]}` : undefined}
+                                            aria-describedby={inspected && inspectedCell.key === `${rowKey}:${j}` ? tooltipId : undefined}
+                                            onMouseEnter={event=>inspectCell(event.currentTarget,`${rowKey}:${j}`,HOURS[j])}
+                                            onMouseLeave={leaveCellInfo}
+                                            onFocus={event=>inspectCell(event.currentTarget,`${rowKey}:${j}`,HOURS[j])}
+                                            onBlur={hideCellInfo}
                                             onClick={gapMode ? () => selectGapCell(rowKey, j) : occupant && !cell.isExcess?()=>openPerson(occupant.staffId):undefined}
                                             onDoubleClick={occupant?()=>onInfoPerson?.(occupant.staffId):undefined}
                                             onKeyDown={event => {
@@ -448,7 +491,7 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                                                     setRangePreview({ row: `${row.positionKey}-${row.slot}`, from: j, to: j });
                                                 }
                                             }}
-                                            title={`${HOURS[j]}: ${occupant?`${occupant.staffName} · ${occupant.start}–${occupant.end}${occupant.exit?' · Salida (sin duración)':''} · `:''}${cell.isTrainer ? (cell.isExcess ? 'Entrenador · Exceso' : 'Entrenador') : cell.color.includes('yellow') ? 'Faltante' : cell.color.includes('blue') ? 'Asignado' : cell.isExcess ? 'Exceso' : 'Sin requerimiento'}`}
+                                            title={occupant ? undefined : `${HOURS[j]}: ${cell.isTrainer ? (cell.isExcess ? 'Entrenador · Exceso' : 'Entrenador') : cell.color.includes('yellow') ? 'Faltante' : cell.color.includes('blue') ? 'Asignado' : cell.isExcess ? 'Exceso' : 'Sin requerimiento'}`}
                                         >{occupant?.exit && <span aria-label="Salida" className="block text-center text-[9px] font-bold leading-none text-white">↗</span>}</td>
                                         );
                                     })}
@@ -476,6 +519,9 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                 </dialog>,
                 document.body
             )}
+            {inspected && !cardPlacement && <HeatmapOccupantTooltip id={tooltipId} person={inspected}
+                hour={inspectedCell.hour} anchor={inspectedCell.element} container={isFullscreen ? dialogRef.current : document.body}
+                onMouseEnter={keepCellInfo} onMouseLeave={leaveCellInfo} />}
         </>
     );
 }

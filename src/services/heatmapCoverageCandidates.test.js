@@ -51,18 +51,19 @@ test('un faltante de 225 minutos admite un turno aprobado de 240 que lo cubra co
   const option = optionsFor(result).find(item => item.start === '12:00' && item.end === '16:00');
   assert.ok(option, '12:00–16:00 debe cubrir 12:00–15:45 aunque no coincida exactamente');
   assert.equal(option.duration, 240);
-  assert.ok(optionsFor(result).every(item => {
-    const interval = spans(item);
-    return interval.start <= selection.start && interval.end >= selection.end;
-  }));
-  assert.equal(run({ selection:{...selection,end:1020} }).available.length, 0, 'Un Part-Time de cuatro horas no cubre cinco horas');
+  assert.equal(optionsFor(result)[0].fullCoverage, true, 'La cobertura completa se ordena antes de las opciones parciales');
+  assert.ok(optionsFor(result).every(item => item.coveredMinutes > 0));
+  const longer = optionsFor(run({ selection:{...selection,end:1020} }));
+  assert.ok(longer.length > 0, 'Un Part-Time de cuatro horas puede cubrir parte de cinco horas');
+  assert.ok(longer.every(item => !item.fullCoverage && item.remainingMinutes >= 60));
 });
 
 test('respeta la cuota semanal restante en lugar de proponer una duración ya agotada', () => {
   const schedule = Object.fromEntries(['monday','wednesday','thursday','friday','saturday']
     .map(key => [key,{start:'12:00',end:'16:00'}]));
-  assert.equal(run({schedules:{a:schedule}}).available.length, 0,
-    'Solo quedan 225 minutos y ningún turno del catálogo cubre todo 12:00–15:45');
+  const partial = optionsFor(run({schedules:{a:schedule}}));
+  assert.ok(partial.length > 0, 'El cupo restante de 225 minutos se ofrece como cobertura parcial');
+  assert.ok(partial.every(item => item.duration === 225 && !item.fullCoverage));
   const result = run({schedules:{a:schedule},selection:{...selection,start:735,end:960}});
   assert.ok(optionsFor(result).length > 0);
   assert.ok(optionsFor(result).every(item=>item.duration===225));
@@ -89,12 +90,14 @@ test('excluye cesados, entrenamiento terminado, inactivos, días libres y feriad
 test('comprueba el turno propuesto completo aunque la clase esté fuera del hueco seleccionado', () => {
   const staff = [person('a',{study_schedule:{tuesday:{free:false,blocks:[{start:'15:45',end:'16:00'}]}}})];
   const result = run({staff});
-  assert.equal(result.available.length,0,'La clase empieza cuando acaba el hueco, pero coincide con 12:00–16:00');
-  assert.ok(result.blocked.some(item=>item.id==='a'));
+  assert.ok(optionsFor(result).length > 0, 'Se pueden ofrecer turnos parciales que terminen antes de la clase');
+  assert.equal(optionsFor(result).some(option => option.start === '12:00' && option.end === '16:00'), false,
+    'La clase empieza cuando acaba el hueco, pero coincide con 12:00–16:00');
+  assert.ok(optionsFor(result).every(option => getShiftAvailability({date,shift:option,studySchedule:staff[0].study_schedule}).available));
   assert.equal(run({staff:[person('a',{study_schedule:{tuesday:{free:true,blocks:[]}}})]}).available.length,0);
 });
 
-test('recomienda breaks fuera de la cobertura y no ofrece una jornada que exigiría cubrir su propio break', () => {
+test('recomienda breaks fuera de la cobertura cuando es posible y descuenta su duración en propuestas parciales', () => {
   const staff = [person('a',{modality:'Full-Time'})];
   const result = run({staff});
   assert.ok(optionsFor(result).length > 0);
@@ -104,10 +107,14 @@ test('recomienda breaks fuera de la cobertura y no ofrece una jornada que exigir
     assert.ok(option.breakOptions.length>0);
     const rest=getScheduleBreak({...option,bukApprovedShiftId:option.id},'Full-Time');
     assert.ok(rest);
-    assert.ok(rest.endMinutes<=selection.start||rest.startMinutes>=selection.end);
+    if(option.fullCoverage) assert.ok(rest.endMinutes<=selection.start||rest.startMinutes>=selection.end);
+    else assert.ok(option.remainingMinutes > 0);
   }
   const entire = run({staff,selection:{...selection,start:495,end:1020}});
-  assert.equal(entire.available.length,0,'525 minutos de cobertura continua no dejan 45 minutos para break');
+  assert.ok(optionsFor(entire).length > 0);
+  assert.equal(optionsFor(entire)[0].coveredMinutes,480);
+  assert.equal(optionsFor(entire)[0].remainingMinutes,45);
+  assert.ok(optionsFor(entire).every(option=>!option.fullCoverage && option.coveredMinutes<=480));
 });
 
 test('las cuotas nocturnas y las clases del día siguiente se respetan a la vez', () => {
@@ -186,7 +193,8 @@ test('gerentes y asistentes sin turno pueden usar el tramo solicitado sin catál
 test('los turnos del día anterior y sus extras impiden sugerir trabajo superpuesto', () => {
   const chosen={...selection,start:480,end:600};
   const blocked=run({selection:chosen,schedules:{a:{monday:{start:'23:30',end:'08:15'}}}});
-  assert.equal(blocked.available.length,0);
+  assert.ok(optionsFor(blocked).length > 0, 'Permite turnos posteriores que cubran solo parte del faltante');
+  assert.ok(optionsFor(blocked).every(option=>spans(option).start>=495));
   const touching=run({selection:chosen,schedules:{a:{monday:{start:'23:00',end:'07:45',extraHoursPost:0.25}}}});
   assert.ok(optionsFor(touching).some(option=>option.start==='08:00'));
   assert.equal(optionsFor(touching).some(option=>option.start==='06:00'),false);
@@ -225,4 +233,26 @@ test('la búsqueda es de lectura y conserva personas, turnos y proyección sin c
   const before=structuredClone(input);
   candidates(input);
   assert.deepEqual(input,before);
+});
+
+test('08:00–14:00 incluye 09:00–13:00 y explica las dos horas que esa opción deja pendientes', () => {
+  const result = run({selection:{...selection,start:480,end:840}});
+  const option = optionsFor(result).find(item=>item.start==='09:00'&&item.end==='13:00');
+  assert.ok(option);
+  assert.equal(option.coveredMinutes,240);
+  assert.equal(option.remainingMinutes,120);
+  assert.equal(option.fullCoverage,false);
+  assert.deepEqual(option.coverageRanges,[{start:540,end:780}]);
+  assert.deepEqual(option.uncoveredRanges,[{start:480,end:540},{start:780,end:840}]);
+  assert.ok(optionsFor(result).every(item=>item.coveredMinutes<=240));
+});
+
+test('las opciones parciales también respetan cupos agotados, conflictos totales y la ausencia de coincidencia', () => {
+  const chosen={...selection,start:480,end:840};
+  const exhausted=Object.fromEntries(['monday','wednesday','thursday','friday','saturday'].map(key=>[key,{start:'09:00',end:'13:00'}]));
+  exhausted.sunday={start:'09:15',end:'13:00'};
+  assert.equal(run({selection:chosen,schedules:{a:exhausted}}).available.length,0);
+  assert.equal(run({selection:chosen,staff:[person('a',{study_schedule:{tuesday:{blocks:[{start:'00:00',end:'23:59'}]}}})]}).available.length,0);
+  assert.equal(run({selection:{...selection,start:1545,end:1560},day:'sunday',date:'2026-11-08',
+    staff:[person('a',{study_schedule:{monday:{blocks:[{start:'00:00',end:'06:00'}]}}})],nextWeekSchedules:{a:{}}}).available.length,0);
 });

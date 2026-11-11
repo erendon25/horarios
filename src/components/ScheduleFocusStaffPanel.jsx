@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, ArrowLeft, Search, X } from 'lucide-react';
 import { WORK_CATEGORIES } from '../services/coverageInsights';
+import ScheduleStaffInfoButton from './ScheduleStaffInfoButton';
 
 const filters = [['all', 'Todos'], ['unassigned', 'Sin turno'], ['alerts', 'Con alertas']];
 const nativeDialogOpen = () => Boolean(document.querySelector('dialog[open]'));
@@ -192,7 +193,6 @@ export default function ScheduleFocusStaffPanel({
           draggable={Boolean(onStartPlacement && draftReady && !item.off && !item.holiday && !item.ceased)}
           onDragStart={event=>{const token=onStartPlacement?.(item.id,{drag:true});if(!token){event.preventDefault();return;}dragTokenRef.current=token;event.dataTransfer.setData('application/x-lc-schedule',token);event.dataTransfer.effectAllowed='copyMove';if(dragImageRef.current)event.dataTransfer.setDragImage(dragImageRef.current,0,0);}}
           onDragEnd={()=>{const token=dragTokenRef.current;dragTokenRef.current=null;onEndDrag?.(token);}}
-          title={item.contextLabel}
           className={`min-h-20 w-full rounded-xl border p-3 text-left transition-colors hover:border-blue-400 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500 ${item.hasAlert ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200 bg-white'}`}>
           <button type="button" aria-label={`Seleccionar a ${item.name || 'colaborador'}`} className="flex w-full items-start justify-between gap-2 text-left"><span data-testid="focus-staff-name" className="min-w-0 flex-1 break-words text-sm font-bold leading-snug text-slate-900">{item.name || 'Colaborador'}</span>
             <ScheduleModalityBadge id={`${titleId}-${item.id}-modality`} modality={item.modality} />
@@ -205,7 +205,7 @@ export default function ScheduleFocusStaffPanel({
           {item.hasAlert && <span id={`${titleId}-${item.id}-alert`} className="mt-2 block text-xs font-medium text-amber-800">{item.alertLabel || 'Revisar turno'}</span>}
           <div onClick={event=>event.stopPropagation()} className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs">
             {onQuickDayChange && !item.ceased && <><label className="flex min-h-8 items-center gap-1"><input type="checkbox" aria-label={`Día libre de ${item.name}`} checked={item.off} disabled={!draftReady || saving} onChange={event=>onQuickDayChange(item.id,'off',event.target.checked)}/>Libre</label><label className="flex min-h-8 items-center gap-1"><input type="checkbox" aria-label={`Feriado compensado de ${item.name}`} checked={item.holiday} disabled={!draftReady || saving} onChange={event=>onQuickDayChange(item.id,'feriado',event.target.checked)}/>Compensación</label></>}
-            {onInfo && <button type="button" aria-label={`Información de ${item.name}`} onClick={()=>onInfo(item.id)} className="min-h-8 text-blue-700 underline">Información</button>}
+            {onInfo && <ScheduleStaffInfoButton item={item} onInfo={onInfo} />}
             {onStartPlacement && !item.off && !item.holiday && !item.ceased && <button type="button" disabled={!draftReady || saving} onClick={()=>onStartPlacement(item.id)} className="min-h-8 text-blue-700 underline">{item.unassigned?'Elegir destino sin arrastrar':'Mover turno'}</button>}
           </div>
         </article>) : <p role="status" className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">No hay colaboradores que coincidan con los filtros.</p>}

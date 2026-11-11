@@ -75,10 +75,21 @@ try{
 
   await page.getByRole('button',{name:'Ver horario semanal',exact:true}).click();const weekly=page.getByRole('dialog',{name:'Horario semanal',exact:true});
   await weekly.getByRole('button',{name:'Ver breaks',exact:true}).click();assert.match(await weekly.textContent(),/Break:/);await weekly.getByRole('button',{name:'Cerrar Horario semanal',exact:true}).click();
-  await search('Camila');await card('F01').getByRole('button',{name:/Información de/}).click();const info=page.getByRole('dialog',{name:/Ficha de Camila/});
+  await search('Camila');
+  const infoButton=card('F01').getByRole('button',{name:/Información de/});
+  assert.equal(await infoButton.locator('svg').count(),1,'Information action must use an icon');
+  await infoButton.hover();const infoPreview=page.getByTestId('staff-info-preview');await infoPreview.waitFor();
+  assert.match(await infoPreview.textContent(),/Camila.*Semana:.*Ayer:.*Cumpleaños.*Lunes:/s);
+  assert.equal(await page.getByRole('dialog',{name:/Ficha de Camila/}).count(),0,'Hover only shows the preview');
+  await page.screenshot({path:`${output}/info-icon-preview.png`});
+  await page.keyboard.press('Escape');await infoPreview.waitFor({state:'hidden'});assert.equal(await panel().isVisible(),true);
+  await infoButton.focus();await infoPreview.waitFor();
+  await infoButton.click();const info=page.getByRole('dialog',{name:/Ficha de Camila/});
+  assert.equal(await infoPreview.count(),0,'Click dismisses the preview and opens the information modal');
   assert.match(await info.textContent(),/Estudios/);await info.getByLabel('Categoría de trabajo').selectOption('production');await info.getByRole('button',{name:'Guardar categoría',exact:true}).click();
   await poll(async()=>(await (await page.request.get(`${base}/qa-document?path=staff_profiles/F01`)).json()).data?.workCategory==='production','Category not saved');
   await info.getByRole('button',{name:/Cerrar Ficha/}).click();
+  await infoPreview.waitFor({state:'hidden'});
   await panel().getByText('Modalidad y categoría',{exact:false}).click();await panel().getByLabel('Categoría del listado').selectOption('uncategorized');assert.equal(await panel().locator('[data-focus-person-id]').count(),0);
   await panel().getByLabel('Categoría del listado').selectOption('all');
   pass('Vista semanal alterna turnos/breaks; ficha muestra contexto y permite asignar categoría sin afectar horarios; filtro del listado usa la categoría');

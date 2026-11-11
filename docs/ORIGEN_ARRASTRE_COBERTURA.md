@@ -74,6 +74,27 @@ búsqueda. La cabecera reúne leyenda y acciones en una fila, y breaks y métric
 en otra; las instrucciones quedan en Ayuda. El estado del arrastre ocupa la
 línea del título, sin reservar una franja vacía que reste espacio al mapa.
 
+La información del ocupante vuelve a aparecer en una ficha flotante junto al
+recuadro al pasar el mouse o fijar el foco. Incluye nombre, puesto, hora y tramo,
+con la salida identificada sin duración. La ficha no agrega filas a la cabecera,
+funciona dentro del mapa maximizado y se retira al desplazar el mapa o con Escape.
+
+El acceso a la información del panel utiliza el icono de información: mouse o
+foco muestra el resumen semanal y hacer clic abre el modal de la ficha. Al cerrar
+el modal se devuelve el foco al icono sin reabrir la vista previa sobre los filtros.
+
+Buscar cobertura admite también coincidencias parciales, ordenadas por minutos
+efectivos cubiertos y horas fuera del intervalo. Cada opción muestra el tramo
+cubierto, los cuartos pendientes y el break, que no suma cobertura. Por ejemplo,
+08:00–14:00 puede sugerir el turno aprobado 09:00–13:00, con 4 h cubiertas y 2 h
+pendientes. Se conservan categoría, estudios, semanas vecinas y cuotas BUK; al
+agregar se vuelve a leer la disponibilidad y el horario guardado antes de aplicar
+la jornada completa al borrador. Guardar sigue siendo la acción de publicación.
+
+Regresión de navegador: `scripts/verify-heatmap-hover-ui.mjs`,
+`scripts/verify-coverage-partial-ui.mjs` y `scripts/verify-coverage-recovery-ui.mjs`,
+con documentos ficticios aislados del backend de producción.
+
 Se conservan las restricciones actuales de guardado para estudios hasta poder
 contrastar las reglas remotas de Supabase. La consulta de esas reglas sigue
 requiriendo un acceso de base autorizado; no se relajan solo en el frontend.

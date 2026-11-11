@@ -1363,7 +1363,7 @@ export default function WeeklyScheduleEditor() {
             workCategory:workCategory(person),
             previousShift:selectedDay==='monday'?(previousWeekRead.scope===previousWeekScope && previousWeekRead.status==='ready'?contextShiftLabel(prevWeekSchedules[person.id]?.sunday):'Pendiente de verificar'):contextShiftLabel(schedules[person.id]?.[weekdays[weekdays.indexOf(selectedDay)-1]]),
             birthday:Boolean(person.birthDate && person.birthDate.slice(5)===focusDate?.slice(5)),
-            contextLabel:weekdays.map(day=>`${weekdayLabels[day]}: ${contextShiftLabel(schedules[person.id]?.[day])}; estudios: ${(person.study_schedule?.[day]?.blocks||[]).map(block=>`${block.start}–${block.end}`).join(', ')||'sin bloques'}`).join('\n'),
+            contextLabel:weekdays.map(day=>`${weekdayLabels[day]}: ${contextShiftLabel(schedules[person.id]?.[day])}; ${person.study_schedule?.[day]?.free?'descanso solicitado; ':''}estudios: ${person.studyAvailabilityStatus!=='ready'?'pendiente de verificar':(person.study_schedule?.[day]?.blocks||[]).map(block=>`${block.start}–${block.end}`).join(', ')||'sin bloques'}`).join('\n'),
         };
     };
     const focusItems = focusMode ? orderScheduleStaff(filteredStaff, focusDate).map(makeFocusItem) : [];
@@ -1419,6 +1419,7 @@ export default function WeeklyScheduleEditor() {
         draftController.edit(previous=>{
             if(coverageSelectionRef.current?.token!==token || coverageScopeRef.current!==scope)throw Error('La colocación fue cancelada.');
             if(placementFingerprint(previous,candidate.id)!==source)throw Error('El horario cambió. Vuelve a buscar cobertura.');
+            if(placementFingerprint({[candidate.id]:fresh.verifiedSchedule},candidate.id)!==placementFingerprint(previous,candidate.id))throw Error('El horario o los descansos guardados cambiaron en otra sesión. Recarga antes de agregar el turno.');
             const result=getHeatmapCoverageCandidates({...getPlacementContext(),...fresh,schedules:previous,selection:currentCoverageSelection});
             const selected=result.available.find(item=>item.id===candidate.id)?.options.find(item=>item.id===option.id);
             if(!result.valid || !selected)throw Error('Este turno ya no es compatible. Actualiza la consulta.');
