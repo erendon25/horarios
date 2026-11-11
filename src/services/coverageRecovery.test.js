@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createScheduleDraft } from './scheduleDraft.js';
 import { coverageInsights, coveragePeopleAt, cellOccupants, workCategory } from './coverageInsights.js';
-import { planCoveragePlacement, placementFingerprint } from './coveragePlacement.js';
+import { planCoveragePlacement, placementFingerprint, placementPlanFingerprint, placementPreviewAssignments } from './coveragePlacement.js';
+import { calculateScheduleDay } from './scheduleHours.js';
 import { planHeatmapTransfer } from './heatmapTransfers.js';
 import { buildHeatmapRows, HOURS } from './heatmapModel.js';
 import { getHeatmapCoverageCandidates } from './heatmapCoverageCandidates.js';
@@ -184,6 +185,47 @@ const request = ctx => ({
   position: 'Masa',
   start: 720
 });
+test('la jornada pintada usa modalidad, descansos, duración aprobada y break completos',()=>{
+  const expected=[['Full-Time',1,525,480],['Part-Time',1,225,225],['Part-Time',2,285,285],['Part-Time',3,405,360],['Part-Time',4,525,480]];
+  for(const [modality,rests,gross,net] of expected){
+    const days=['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
+    const schedule=Object.fromEntries(days.slice(-rests).map(day=>[day,{off:true}]));
+    const ctx=context({staff:[{...person,modality}],schedules:{a:schedule}});
+    const req={...request(ctx),start:735};
+    const plan=planCoveragePlacement(ctx,req),hours=calculateScheduleDay(plan.patch,modality);
+    assert.equal(plan.patch.start,'12:15');assert.equal(hours.grossMinutes,gross);assert.equal(hours.totalMinutes,net);
+    const before=JSON.stringify(ctx.schedules),preview=placementPreviewAssignments(ctx,req,plan);
+    assert.equal(JSON.stringify(ctx.schedules),before,'La previsualización nunca modifica el horario');
+    assert.equal(preview[0].start,'12:15');assert.ok(preview[0].end);
+    if(gross!==net)assert.ok(preview[0].breakStartMinutes);
+  }
+});
+test('un gerente sin jornada no recibe un turno inventado de quince minutos',()=>{
+  const ctx=context({staff:[{...person,position:'GERENTE',modality:'Full-Time'}]});
+  assert.throws(()=>planCoveragePlacement(ctx,{...request(ctx),start:885}),/Define primero su jornada completa/);
+});
+test('no aproxima ingresos ni convierte el inicio 24:00 a la mañana del mismo día',()=>{
+  const ctx=context({staff:[{...person,modality:'Full-Time'}]});
+  assert.throws(()=>planCoveragePlacement(ctx,{...request(ctx),start:720}),/exactamente/);
+  assert.throws(()=>planCoveragePlacement(ctx,{...request(ctx),start:1440}),/antes de medianoche/);
+});
+test('la disponibilidad se comprueba sobre toda la jornada pintada',()=>{
+  const ctx=context({staff:[{...person,modality:'Full-Time',study_schedule:{tuesday:{blocks:[{start:'19:00',end:'20:00'}]}}}]});
+  assert.throws(()=>planCoveragePlacement(ctx,{...request(ctx),start:735}),/horario de estudio/);
+  const preview=planCoveragePlacement(ctx,{...request(ctx),start:735},{preview:true});
+  assert.equal(preview.valid,false);assert.deepEqual(preview.academicIntervals,[{start:1140,end:1200}]);
+  assert.equal(preview.patch.end,'21:00');
+});
+test('cambio de modalidad, cupo semanal agotado y descansos remotos impiden colocar',()=>{
+  const original=context(),stamp=placementPlanFingerprint(original,'a');
+  const changed=context({staff:[{...person,modality:'Full-Time'}]});
+  assert.throws(()=>planCoveragePlacement(changed,{...request(changed),start:735,planFingerprint:stamp}),/modalidad.*plan de descansos/);
+  const exhausted={monday:{},tuesday:{start:'12:15',end:'21:00'},wednesday:{start:'12:00',end:'20:30'},thursday:{start:'12:15',end:'21:00'},friday:{off:true},saturday:{off:true},sunday:{off:true}};
+  for(const value of Object.values(exhausted)){value.bukRestDays=4;value.bukRestDaysBasis=3;}
+  const ctx=context({schedules:{a:exhausted},day:'monday',date:'2026-10-12',previousWeekSchedules:{a:{}}});
+  assert.throws(()=>planCoveragePlacement(ctx,{...request(ctx),start:735}),/cupos del plan semanal/);
+  assert.throws(()=>planCoveragePlacement(context({verifiedSchedule:{sunday:{off:true}}}),request(original)),/otra sesión/);
+});
 test('agregar al mapa propone un turno aprobado compatible con la categoría aunque no exista habilidad', () => {
   const ctx = context(),
     plan = planCoveragePlacement(ctx, request(ctx));
@@ -268,7 +310,7 @@ test('una nueva colocación rechaza estudios, descanso, cambio de categoría o d
         }
       }
     }
-  }), request(context())), /horario cambió/);
+  }), request(context())), /horario.*descansos cambiaron/);
 });
 const ft = {
   ...person,

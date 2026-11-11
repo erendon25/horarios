@@ -52,6 +52,8 @@ export default function ScheduleFocusStaffPanel({
   const backRef = useRef(null);
   const listRef = useRef(null);
   const rowRefs = useRef(new Map());
+  const dragImageRef=useRef(null);
+  const dragTokenRef=useRef(null);
   const scrollTop = useRef(0);
   const previousSelection = useRef(null);
   const closeAction = useRef(onClose);
@@ -159,6 +161,7 @@ export default function ScheduleFocusStaffPanel({
   const panel = <aside ref={panelRef} id="focus-staff-panel" data-testid="focus-staff-panel"
     role={desktop ? undefined : 'dialog'} aria-modal={desktop ? undefined : true} aria-labelledby={titleId}
     className="fixed inset-x-0 bottom-0 z-50 flex h-[85dvh] min-h-0 min-w-0 flex-col overflow-hidden rounded-t-2xl border border-blue-100 bg-white shadow-2xl lg:relative lg:inset-auto lg:z-auto lg:h-full lg:max-h-full lg:w-[400px] lg:shrink-0 lg:self-stretch lg:rounded-none lg:border-y-0 lg:border-r-0 lg:shadow-none">
+    <canvas ref={dragImageRef} data-testid="focus-card-drag-image" width={1} height={1} aria-hidden="true" className="pointer-events-none fixed left-0 top-0 h-px w-px"/>
     <header className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
       <div className="min-w-0"><h2 id={titleId} className="text-base font-bold text-slate-900">Colaboradores</h2>
         {dayLabel && <p className="mt-1 break-words text-sm text-slate-600">{dayLabel}</p>}
@@ -187,8 +190,8 @@ export default function ScheduleFocusStaffPanel({
           ref={node => { if (node) rowRefs.current.set(item.id, node); else rowRefs.current.delete(item.id); }}
           onClick={() => { scrollTop.current = listRef.current?.scrollTop || 0; onSelect?.(item.id); }}
           draggable={Boolean(onStartPlacement && draftReady && !item.off && !item.holiday && !item.ceased)}
-          onDragStart={event=>{const token=onStartPlacement?.(item.id,{drag:true});if(!token){event.preventDefault();return;}event.dataTransfer.setData('application/x-lc-schedule',token);event.dataTransfer.effectAllowed='move';}}
-          onDragEnd={onEndDrag}
+          onDragStart={event=>{const token=onStartPlacement?.(item.id,{drag:true});if(!token){event.preventDefault();return;}dragTokenRef.current=token;event.dataTransfer.setData('application/x-lc-schedule',token);event.dataTransfer.effectAllowed='copyMove';if(dragImageRef.current)event.dataTransfer.setDragImage(dragImageRef.current,0,0);}}
+          onDragEnd={()=>{const token=dragTokenRef.current;dragTokenRef.current=null;onEndDrag?.(token);}}
           title={item.contextLabel}
           className={`min-h-20 w-full rounded-xl border p-3 text-left transition-colors hover:border-blue-400 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500 ${item.hasAlert ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200 bg-white'}`}>
           <button type="button" aria-label={`Seleccionar a ${item.name || 'colaborador'}`} className="flex w-full items-start justify-between gap-2 text-left"><span data-testid="focus-staff-name" className="min-w-0 flex-1 break-words text-sm font-bold leading-snug text-slate-900">{item.name || 'Colaborador'}</span>

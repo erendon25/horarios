@@ -1193,19 +1193,21 @@ export default function WeeklyScheduleEditor() {
         selectablePositionsByNorm.get(normalizePosition(position)) || '';
 
     const assignedArray = getHeatmapAssignments(filteredStaff, schedules, selectedDay, safeRequirements.positions, getSelectedDateStr());
-    coverageActionContext.current=()=>({staff:activeStaff,schedules:draftController.getSnapshot().schedules,
+    coverageActionContext.current=()=>({staff:activeStaff,displayStaff:filteredStaff,schedules:draftController.getSnapshot().schedules,
         ready:draft.ready && projectionLoadState.storeId===storeId && projectionLoadState.status==='ready',saving:saveStatus==='saving',role:userRole,
         controller:draftController,day:selectedDay,date:getSelectedDateStr(),weekStart:weekStartDate,requirements:safeRequirements,positionDefinitions:projectionPositions});
     const getPlacementContext=()=>coverageActionContext.current();
     const refreshPlacementContext=async staffId=>{
         const adjacent=offset=>{const value=new Date(`${weekStartDate}T12:00:00`);value.setDate(value.getDate()+offset);return getWeekKey(`${value.getFullYear()}-${String(value.getMonth()+1).padStart(2,'0')}-${String(value.getDate()).padStart(2,'0')}`);};
-        const [profile,studies,previous,next]=await Promise.all([
+        const [profile,studies,previous,next,current]=await Promise.all([
             getDoc(doc(db,'staff_profiles',staffId)),getDoc(doc(db,'study_schedules',staffId)),
             getDoc(doc(db,'schedules',`${staffId}_${adjacent(-7)}`)),getDoc(doc(db,'schedules',`${staffId}_${adjacent(7)}`)),
+            getDoc(doc(db,'schedules',`${staffId}_${wk}`)),
         ]);
         if(!profile.exists() || profile.data().storeId!==storeId)throw Error('El colaborador ya no pertenece a esta tienda.');
         const person={...profile.data(),id:staffId,study_schedule:studies.exists()?studies.data():{},studyAvailabilityStatus:'ready'};
-        return {staff:activeStaff.map(item=>item.id===staffId?person:item),previousWeekSchedules:{[staffId]:previous.exists()?previous.data():{}},nextWeekSchedules:{[staffId]:next.exists()?next.data():{}}};
+        const dirtyDays=draftController.beginSave()?.changes[staffId]||{};
+        return {staff:activeStaff.map(item=>item.id===staffId?person:item),verifiedSchedule:{...(current.exists()?current.data():{}),...dirtyDays},previousWeekSchedules:{[staffId]:previous.exists()?previous.data():{}},nextWeekSchedules:{[staffId]:next.exists()?next.data():{}}};
     };
     const placement=useCoveragePlacement({scope:`${currentUser?.uid}|${userRole}|${storeId}|${wk}|${selectedDay}`,
         getContext:getPlacementContext,refreshContext:refreshPlacementContext,onBegin:()=>setFocusPanelOpen(false),
@@ -2346,7 +2348,9 @@ export default function WeeklyScheduleEditor() {
                                     coverageStatus={!draft.ready||projectionLoadState.storeId!==storeId?'loading':projectionLoadState.status} filtered={globalFiltersActive}
                                     onSelectPerson={id=>{setFocusSelectedId(id);setFocusPanelOpen(true);}}
                                     onInfoPerson={setInfoStaffId}
-                                    onCardTarget={['admin','superadmin'].includes(userRole)?placement.target:undefined}
+                                    cardPlacement={placement.state?.interaction==='drag'?placement.state:null}
+                                    onCardTarget={['admin','superadmin'].includes(userRole)?placement.drop:undefined}
+                                    onCardPreview={placement.previewDrag} onCancelCardPlacement={placement.cancel} onApplyCardPlacement={placement.apply} onCardOption={placement.chooseOption}
                                     onGapSelect={draft.ready && (userRole === 'admin' || userRole === 'superadmin') ? (selection, controls) => {
                                         if (selection.date !== focusDate) return;
                                         coverageControls.current = controls;
@@ -2388,7 +2392,7 @@ export default function WeeklyScheduleEditor() {
                     onApplyCandidate={addCoverageCandidate}
                 />}
 
-                {placement.state && placement.state.phase!=='drag' && <CoveragePlacementDialog key={placement.state.token} placement={placement.state} positions={safeRequirements.positions||[]} onTarget={placement.target} onOption={placement.chooseOption} onApply={placement.apply} onClose={placement.cancel}/>}
+                {placement.state?.interaction==='keyboard' && <CoveragePlacementDialog key={placement.state.token} placement={placement.state} positions={safeRequirements.positions||[]} onTarget={placement.target} onOption={placement.chooseOption} onApply={placement.apply} onClose={placement.cancel}/>}
                 {previewWeek && <ScheduleWeekDialog staff={activeStaff} schedules={schedules} weekStart={weekStartDate} dirty={hasUnsavedChanges} onClose={()=>setPreviewWeek(false)}/>}
                 {infoStaffId && activeStaff.some(person=>person.id===infoStaffId) && <StaffInfoDialog key={infoStaffId} person={activeStaff.find(person=>person.id===infoStaffId)} schedules={schedules} weekStart={weekStartDate} date={focusDate} onClose={()=>setInfoStaffId(null)} onCategory={['admin','superadmin'].includes(userRole)?async(id,workCategory)=>{await setDoc(doc(db,'staff_profiles',id),{workCategory},{merge:true});setStaff(previous=>previous.map(person=>person.id===id?{...person,workCategory}:person));}:undefined}/>}
 

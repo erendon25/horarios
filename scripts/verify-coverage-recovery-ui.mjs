@@ -33,17 +33,17 @@ try{
   await undo();assert.deepEqual(await writes(),[]);
   pass('Libre rápido confirma reemplazos y deshacer/rehacer recuperan el turno completo; ayer y cumpleaños son visibles sin escribir al servidor');
 
-  await search('Hugo');const target=map().locator('td[data-position="VESTIDO"][data-missing="true"][data-range-hour="20"]').first();
+  await search('Hugo');const target=map().locator('td[data-position="VESTIDO"][data-missing="true"][data-range-hour="21"]').first();
   await card('P12').dragTo(target);
   const placement=()=>page.getByRole('dialog',{name:/Colocar en cobertura/});
-  await placement().getByTestId('coverage-placement-preview').waitFor();assert.deepEqual(await writes(),[]);
-  await placement().getByRole('button',{name:'Confirmar colocación',exact:true}).click();await placement().waitFor({state:'hidden'});
+  await poll(async()=>(await draft())?.changes.P12?.monday?.bukApprovedShiftId,'Drop was not applied to the draft');
+  assert.equal(await placement().count(),0);assert.deepEqual(await writes(),[]);
   assert.ok((await draft()).changes.P12.monday.bukApprovedShiftId);assert.equal((await draft()).changes.P12.monday.position,'VESTIDO');
   await undo();assert.equal((await draft()).changes.P12,undefined);
-  pass('Arrastrar tarjeta al mapa propone un turno aprobado, confirma al borrador y se puede deshacer sin publicar');
+  pass('Arrastrar coloca la jornada aprobada al soltar, sin modal; se puede deshacer y todavía no publica en servidor');
 
   await search('Hugo');await card('P12').getByRole('button',{name:'Elegir destino sin arrastrar',exact:true}).click();
-  await placement().getByLabel('Posición de colocación').selectOption('VESTIDO');await placement().getByLabel('Hora de colocación').selectOption('720');
+  await placement().getByLabel('Posición de colocación').selectOption('VESTIDO');await placement().getByLabel('Hora de colocación').selectOption('735');
   await placement().getByRole('button',{name:'Ver propuesta',exact:true}).click();await placement().getByTestId('coverage-placement-preview').waitFor();
   await page.request.post(`${base}/qa-document`,{data:{path:'study_schedules/P12',data:{staffId:'P12',monday:{blocks:[{start:'00:00',end:'23:59'}]}}}});
   await placement().getByRole('button',{name:'Confirmar colocación',exact:true}).click();await placement().getByRole('alert').waitFor();
@@ -56,7 +56,7 @@ try{
   const gate=new Promise(resolve=>{releaseRead=resolve;}),started=new Promise(resolve=>{readStarted=resolve;});
   const delayed='**/qa-document?path=staff_profiles%2FP12';
   await page.route(delayed,async route=>{readStarted();await gate;await route.continue();});
-  await placement().getByLabel('Posición de colocación').selectOption('VESTIDO');await placement().getByLabel('Hora de colocación').selectOption('720');
+  await placement().getByLabel('Posición de colocación').selectOption('VESTIDO');await placement().getByLabel('Hora de colocación').selectOption('735');
   await placement().getByRole('button',{name:'Ver propuesta',exact:true}).click();await started;
   await placement().getByRole('button',{name:'Cancelar',exact:true}).click();
   const resumed=page.waitForResponse(response=>response.url().includes('staff_profiles%2FP12'));releaseRead();await resumed;await page.unroute(delayed);await page.waitForTimeout(150);

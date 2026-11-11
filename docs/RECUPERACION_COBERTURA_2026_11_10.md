@@ -1,5 +1,10 @@
 # Recuperación de cobertura
 
+La corrección posterior del pintado durante el arrastre y la búsqueda de su
+origen están en [`ORIGEN_ARRASTRE_COBERTURA.md`](ORIGEN_ARRASTRE_COBERTURA.md).
+El arrastre nativo previsualiza la jornada completa sin tarjeta flotante ni
+modal al soltar; la alternativa de teclado conserva sus controles explícitos.
+
 La referencia funcional es el release `05fc44d79cbcfeff` documentado en
 `AUDITORIA_COBERTURA_PUBLICADA_2026_11_10.md`. La implementación se integra sobre
 `main` actual, conservando la proyección de 15 minutos, los descansos asignados
