@@ -6,6 +6,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useScheduleDraft } from '../hooks/useScheduleDraft';
 import ScheduleHeatmapMatrix from './ScheduleHeatmapMatrix';
+import { useHeatmapMove } from '../hooks/useHeatmapMove';
 import WeeklyScheduleExcelButton from './WeeklyScheduleExcelButton';
 import { getHeatmapAssignments, getProjectionForDay, getExportShiftSegments, getPositionSegments, canLimitPositionCoverage } from '../services/scheduleExportData';
 import { summarizeProjectionHours } from '../services/projectionHours';
@@ -1212,6 +1213,9 @@ export default function WeeklyScheduleEditor() {
     const placement=useCoveragePlacement({scope:`${currentUser?.uid}|${userRole}|${storeId}|${wk}|${selectedDay}`,
         getContext:getPlacementContext,refreshContext:refreshPlacementContext,
         onChanged:()=>{setSaveStatus('idle');setSaveErrorMessage('');}});
+    const movement=useHeatmapMove({scope:`${currentUser?.uid}|${userRole}|${storeId}|${wk}|${selectedDay}`,
+        getContext:getPlacementContext,refreshContext:refreshPlacementContext,
+        onChanged:()=>{setSaveStatus('idle');setSaveErrorMessage('');}});
     const historyAction=action=>{if(saveStatus==='saving')return;if(draftController[action]()){setSaveStatus('idle');setSaveErrorMessage('');}};
     const quickDayChange=(id,field,value)=>{
         if(!draft.ready || saveStatus==='saving' || !['admin','superadmin'].includes(userRole))return;
@@ -2349,6 +2353,7 @@ export default function WeeklyScheduleEditor() {
                                     coverageStatus={!draft.ready||projectionLoadState.storeId!==storeId?'loading':projectionLoadState.status} filtered={globalFiltersActive}
                                     onSelectPerson={id=>{setFocusSelectedId(id);setFocusPanelOpen(true);}}
                                     onInfoPerson={setInfoStaffId}
+                                    movement={['admin','superadmin'].includes(userRole)?movement:undefined}
                                     cardPlacement={placement.state?.interaction==='drag'?placement.state:null}
                                     onCardTarget={['admin','superadmin'].includes(userRole)?placement.drop:undefined}
                                     onCardPreview={placement.previewDrag} onCancelCardPlacement={placement.cancel} onApplyCardPlacement={placement.apply} onCardOption={placement.chooseOption}

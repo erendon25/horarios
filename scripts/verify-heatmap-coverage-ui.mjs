@@ -24,7 +24,20 @@ const clear=async(scope=page)=>{const button=scope.getByRole('button',{name:'Lim
 const selectGap=async(scope=page,reverse=false,touch=false)=>{
  await mode(scope);await clear(scope);const first=map(scope).locator('td[data-position="VESTIDO"][data-missing="true"][data-range-hour="20"]').first();await first.waitFor();
  const lane=await first.getAttribute('data-range-row'),last=map(scope).locator(`td[data-range-row="${lane}"][data-range-hour="34"]`);assert.equal(await last.getAttribute('data-missing'),'true');
- for(const cell of reverse?[last,first]:[first,last]){await cell.scrollIntoViewIfNeeded();if(touch){const b=await cell.boundingBox();await page.touchscreen.tap(b.x+b.width/2,b.y+b.height/2)}else await cell.click()}
+ for(const cell of reverse?[last,first]:[first,last]){await cell.scrollIntoViewIfNeeded();if(touch){
+  const hit=await cell.evaluate(async element=>{
+   // Low-level touchscreen taps do not wait for swipe inertia like locator.click.
+   let previous='',stable=0;
+   for(let frame=0;frame<90&&stable<3;frame++){
+    await new Promise(requestAnimationFrame);const r=element.getBoundingClientRect(),scroll=element.closest('[role="region"]');
+    const next=[r.x,r.y,scroll.scrollLeft,scroll.scrollTop].join(':');stable=next===previous?stable+1:0;previous=next;
+   }
+   const r=element.getBoundingClientRect(),target=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);
+   return {reachable:target===element||element.contains(target),target:target?.outerHTML.slice(0,180),x:r.x+r.width/2,y:r.y+r.height/2};
+  });
+  assert.equal(hit.reachable,true,`El extremo debe quedar visible y accesible al tocarlo: ${JSON.stringify(hit)}`);
+  await page.touchscreen.tap(hit.x,hit.y)
+ }else await cell.click()}
  await candidates().waitFor();
  await candidates().getByLabel('Buscar candidato para cobertura',{exact:true}).waitFor();
  return {lane,first,last};

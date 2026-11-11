@@ -95,6 +95,25 @@ Regresión de navegador: `scripts/verify-heatmap-hover-ui.mjs`,
 `scripts/verify-coverage-partial-ui.mjs` y `scripts/verify-coverage-recovery-ui.mjs`,
 con documentos ficticios aislados del backend de producción.
 
+El modo **Mover** vuelve a estar disponible junto a la leyenda del propio mapa,
+con **Ajustar movimiento** a su lado. Permite arrastrar celdas ocupadas, conservando
+el desfase entre la celda agarrada y la entrada del turno. El desplazamiento es de
+15 minutos y conserva duración, extras, turnos partidos, break y reposiciones.
+Arrastrar y soltar aplica directamente al borrador: no abre otro recuadro ni exige
+un modal de confirmación. Los ajustes solo se abren si se solicita esa acción.
+Para puestos por rangos permite cambiar el puesto base o solo el tramo elegido.
+La propuesta se pinta antes de editar el borrador; al soltar se consultan de nuevo
+el perfil, los estudios y las tres semanas. Escape, salir del mapa o cancelar
+durante una consulta descarta el movimiento. Los ajustes funcionan con teclado,
+pantalla táctil y mapa maximizado. Se conserva el panel de colaboradores.
+
+Como en la referencia publicada, el desplazamiento puede producir un horario
+manual fuera del catálogo, conservando las horas y mostrando el aviso BUK.
+La exportación conserva sus validaciones. Un movimiento que perdería un break
+existente se rechaza; tampoco se relaja el bloqueo actual por estudios mientras
+no se hayan contrastado las reglas remotas. Las pruebas específicas están en
+`src/services/heatmapMove.test.js` y `scripts/verify-heatmap-move-ui.mjs`.
+
 Se conservan las restricciones actuales de guardado para estudios hasta poder
 contrastar las reglas remotas de Supabase. La consulta de esas reglas sigue
 requiriendo un acceso de base autorizado; no se relajan solo en el frontend.
