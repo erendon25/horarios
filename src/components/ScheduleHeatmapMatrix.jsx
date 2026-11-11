@@ -12,6 +12,7 @@ import { cellOccupants } from '../services/coverageInsights';
 import { approvedBukShiftLabel } from '../services/bukSchedule';
 import HeatmapOccupantTooltip from './HeatmapOccupantTooltip';
 import HeatmapMoveAdjustDialog from './HeatmapMoveAdjustDialog';
+import { normalizeSchedulePosition } from '../services/scheduleExportData';
 export { HOURS } from '../services/heatmapModel';
 
 const EMPTY_ASSIGNED = [];
@@ -31,6 +32,9 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
     const [moveAdjustOpen, setMoveAdjustOpen] = useState(false);
     const moveDrag = useRef(null), moveFrame = useRef(null), suppressMoveClick = useRef(false);
     const moveState = moveMode && !cardPlacement ? movement?.state : null;
+    const compatibilityState = cardPlacement || moveState;
+    const allowedPositions = useMemo(() => compatibilityState?.compatiblePositions
+        ? new Set(compatibilityState.compatiblePositions.map(normalizeSchedulePosition)) : null, [compatibilityState?.compatiblePositions]);
     const activePreview = cardPlacement || (moveState && { staffId: moveState.staffId, plan: moveState.plan,
         proposedAssignments: moveState.plan?.proposedAssignments });
     const displayAssigned=activePreview?.proposedAssignments || assigned;
@@ -134,7 +138,7 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
         const bounds = matrixRef.current?.getBoundingClientRect();
         if (!bounds || x < bounds.left || x >= bounds.right || y < bounds.top || y >= bounds.bottom) return null;
         const cell = document.elementFromPoint(x, y)?.closest('td[data-range-hour]');
-        if (!cell || !matrixRef.current.contains(cell) || Number(cell.dataset.rangeHour) >= HOURS.length - 1) return null;
+        if (!cell || !matrixRef.current.contains(cell) || cell.dataset.placementDisabled === 'true' || Number(cell.dataset.rangeHour) >= HOURS.length - 1) return null;
         return { deltaMinutes: current.deltaOrigin + (Number(cell.dataset.rangeHour) - current.anchorIndex) * 15, position: cell.dataset.position };
     };
     const movePointerPreview = () => {
@@ -274,22 +278,24 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
         if (!onCardTarget || !cardPlacement || !Array.from(event.dataTransfer.types||[]).includes('application/x-lc-schedule')) return null;
         const cell=event.target.closest('td[data-range-hour]');
         if (!cell || !event.currentTarget.contains(cell) || Number(cell.dataset.rangeHour)>=HOURS.length-1) return null;
-        return {position:cell.dataset.position,start:heatmapMinutes(HOURS[Number(cell.dataset.rangeHour)])};
+        return {position:cell.dataset.position,start:heatmapMinutes(HOURS[Number(cell.dataset.rangeHour)]),disabled:cell.dataset.placementDisabled==='true'};
     };
     const handleCardDragOver = event => {
         const cell=cardDragCell(event);if(!cell)return;
-        event.preventDefault();event.dataTransfer.dropEffect='move';
-        onCardPreview?.(cell.position,cell.start);
         const bounds=event.currentTarget.getBoundingClientRect();
         if(event.clientX>bounds.right-24)event.currentTarget.scrollLeft+=20;
         else if(event.clientX<bounds.left+HEATMAP_POSITION_WIDTH+24)event.currentTarget.scrollLeft-=20;
         if(event.clientY>bounds.bottom-24)event.currentTarget.scrollTop+=20;
         else if(event.clientY<bounds.top+50)event.currentTarget.scrollTop-=20;
+        if(cell.disabled){event.dataTransfer.dropEffect='none';onCardPreview?.(null,null);return;}
+        event.preventDefault();event.dataTransfer.dropEffect='move';
+        onCardPreview?.(cell.position,cell.start);
     };
     const handleCardDrop = event => {
         const cell=cardDragCell(event),token=event.dataTransfer.getData('application/x-lc-schedule');
         if(!cell || !token)return;
         event.preventDefault();event.stopPropagation();
+        if(cell.disabled){onCancelCardPlacement?.();return;}
         onCardTarget(cell.position,cell.start,token);
     };
     const handlePointerMove = (event) => {
@@ -384,10 +390,10 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                 </div>
                 {(isFullscreen || showProjectionSummary) && <ProjectionHoursSummary summary={projectionHours} dayLabel={dayLabel || 'Día'} />}
                 {cardPlacement && <div data-testid="heatmap-card-drag-status" data-phase={cardPlacement.phase} className="absolute inset-x-3 top-2 z-10 flex h-8 items-center gap-2 bg-gray-800 text-xs">
-                    <p role={cardPlacement.error?'alert':'status'} title={cardPlacement.error||'Previsualización: suelta para aplicar al borrador; Guardar publica el horario.'} className="min-w-0 flex-1 truncate">{cardPlacement.error || (cardPlacement.busy?'Comprobando disponibilidad y plan semanal…':cardPlacement.plan?`Vista previa · ${cardPlacement.plan.modality} · ${cardPlacement.plan.restDays} descanso(s) · ${cardPlacement.plan.patch.start}–${cardPlacement.plan.patch.end}${cardPlacement.plan.patch.breakStart?` · Break ${cardPlacement.plan.patch.breakStart}`:''}`:'Elige posición e ingreso en el mapa.')}</p>
+                    <p role={cardPlacement.error?'alert':'status'} title={cardPlacement.error||'Previsualización: suelta para aplicar al borrador; Guardar publica el horario.'} className="min-w-0 flex-1 truncate">{cardPlacement.error || (cardPlacement.busy?'Comprobando disponibilidad y plan semanal…':cardPlacement.compatiblePositions?.length===0?'Sin áreas compatibles. Revisa la categoría del colaborador y Proyección.':cardPlacement.plan?`Vista previa · ${cardPlacement.plan.modality} · ${cardPlacement.plan.restDays} descanso(s) · ${cardPlacement.plan.patch.start}–${cardPlacement.plan.patch.end}${cardPlacement.plan.patch.breakStart?` · Break ${cardPlacement.plan.patch.breakStart}`:''}`:'Elige posición e ingreso en el mapa.')}</p>
                     {cardPlacement.options?.length>1 && <label>Jornada<select aria-label="Jornada aprobada del arrastre" value={cardPlacement.optionId||''} onChange={event=>onCardOption?.(event.target.value)} className="ml-1 max-w-full rounded border bg-white p-1 text-slate-900"><option value="">Elegir salida</option>{cardPlacement.options.map(option=><option key={option.id} value={option.id}>{approvedBukShiftLabel(option)}</option>)}</select></label>}
                     {cardPlacement.phase==='review' && cardPlacement.plan?.valid && <button type="button" onClick={onApplyCardPlacement} className="min-h-8 rounded bg-blue-600 px-2">Aplicar al mapa</button>}
-                    {cardPlacement.error && <button type="button" onClick={()=>{const id=cardPlacement.staffId;onCancelCardPlacement?.();openPerson(id);}} className="min-h-8 rounded border border-white/40 px-2">Revisar en ficha</button>}
+                    {(cardPlacement.error || cardPlacement.compatiblePositions?.length===0) && <button type="button" onClick={()=>{const id=cardPlacement.staffId;onCancelCardPlacement?.();openPerson(id);}} className="min-h-8 rounded border border-white/40 px-2">Revisar en ficha</button>}
                     <button type="button" onClick={onCancelCardPlacement} className="min-h-8 rounded border border-white/40 px-2">Cancelar arrastre</button>
                 </div>}
                 {moveState && <div data-testid="heatmap-move-status" className="absolute inset-x-3 top-2 z-10 flex h-8 items-center gap-2 bg-gray-800 text-xs">
@@ -406,10 +412,10 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                     ))}
                 {onTransfer || canFindGap || movement ? (
                     <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                        {onTransfer && <button type="button" aria-pressed={selectMode && !gapMode && !moveMode} onClick={() => { cancelMove(); setMoveMode(false); setGapMode(false); clearGap(); setSelectMode(true); }} className={`rounded px-2 py-1 ${selectMode && !gapMode && !moveMode ? 'bg-blue-600 text-white' : 'bg-white/10'}`}>Seleccionar tramo</button>}
-                        <button type="button" aria-pressed={!moveMode && !gapMode && (!onTransfer || !selectMode)} onClick={() => { cancelMove(); setMoveMode(false); setGapMode(false); clearGap(); setSelectMode(false); rangeDrag.current = null; }} className={`rounded px-2 py-1 ${!moveMode && !gapMode && (!onTransfer || !selectMode) ? 'bg-blue-600 text-white' : 'bg-white/10'}`}>Desplazar mapa</button>
+                        {onTransfer && <button type="button" aria-pressed={selectMode && !gapMode && !moveMode} onClick={() => { onCancelCardPlacement?.(); cancelMove(); setMoveMode(false); setGapMode(false); clearGap(); setSelectMode(true); }} className={`rounded px-2 py-1 ${selectMode && !gapMode && !moveMode ? 'bg-blue-600 text-white' : 'bg-white/10'}`}>Seleccionar tramo</button>}
+                        <button type="button" aria-pressed={!moveMode && !gapMode && (!onTransfer || !selectMode)} onClick={() => { onCancelCardPlacement?.(); cancelMove(); setMoveMode(false); setGapMode(false); clearGap(); setSelectMode(false); rangeDrag.current = null; }} className={`rounded px-2 py-1 ${!moveMode && !gapMode && (!onTransfer || !selectMode) ? 'bg-blue-600 text-white' : 'bg-white/10'}`}>Desplazar mapa</button>
                         {canFindGap && <button type="button" aria-pressed={gapMode} onClick={() => {
-                            cancelMove(); setMoveMode(false); clearGap(); setGapMode(true); drag.current = null; rangeDrag.current = null;
+                            onCancelCardPlacement?.(); cancelMove(); setMoveMode(false); clearGap(); setGapMode(true); drag.current = null; rangeDrag.current = null;
                             setTransferSelection(null); setRangePreview(null);
                         }} className={`rounded px-2 py-1 ${gapMode ? 'bg-blue-600 text-white' : 'bg-white/10'}`}>Buscar cobertura</button>}
                         {movement && <div className="inline-flex items-center">
@@ -512,20 +518,23 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                                 </td>
                             </tr>
                         ) : (
-                            rows.map((row) => (
+                            rows.map((row) => {
+                                const placementDisabled = Boolean(allowedPositions && !allowedPositions.has(row.positionKey));
+                                return (
                                 <tr
                                     key={`${row.positionKey}-${row.slot}`}
+                                    data-placement-position={row.name} data-placement-disabled={placementDisabled || undefined}
                                     className="h-5 border-b border-gray-200 hover:bg-blue-50/30 transition-colors duration-150"
                                 >
                                     {row.showPositionName && (
                                         <td
                                             rowSpan={row.groupSize}
-                                            className="sticky left-0 z-10 align-middle bg-white px-2 py-0 font-semibold text-xs leading-none text-gray-800 border-r border-b border-gray-300 shadow-sm"
-                                            title={`${row.name}: ${row.groupSize} carril${row.groupSize === 1 ? '' : 'es'}${row.hasExcess ? ', incluye exceso' : ''}`}
+                                            className={`sticky left-0 z-10 align-middle px-2 py-0 font-semibold text-xs leading-none border-r border-b border-gray-300 shadow-sm ${placementDisabled?'bg-slate-100 text-slate-500 cursor-not-allowed':'bg-white text-gray-800'}`}
+                                            title={placementDisabled?`${row.name}: área no compatible con la categoría de ${compatibilityState.name}.`:`${row.name}: ${row.groupSize} carril${row.groupSize === 1 ? '' : 'es'}${row.hasExcess ? ', incluye exceso' : ''}`}
                                         >
                                             <div className="flex min-w-0 items-center gap-1">
                                                 {row.hasExcess && (
-                                                    <span className="h-1.5 w-1.5 flex-none rounded-full bg-red-500" aria-label="Incluye exceso"></span>
+                                                    <span className={`h-1.5 w-1.5 flex-none rounded-full ${placementDisabled?'bg-slate-400':'bg-red-500'}`} aria-label="Incluye exceso"></span>
                                                 )}
                                                 <span className="min-w-0 flex-1 truncate">{row.name}</span>
                                                 {row.groupSize > 1 && (
@@ -539,27 +548,28 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                                     {row.cells.map((cell, j) => {
                                         const rowKey = `${row.positionKey}-${row.slot}`;
                                         const occupant=occupants.get(`${rowKey}:${j}`);
-                                        const cardSelected=Boolean(activePreview?.proposedAssignments && occupant?.staffId===activePreview.staffId);
+                                        const cardSelected=Boolean(!placementDisabled && activePreview?.proposedAssignments && occupant?.staffId===activePreview.staffId);
                                         const cardConflict=cardSelected && j<HOURS.length-1 && activePreview.plan?.academicIntervals?.some(range=>range.start<heatmapMinutes(HOURS[j])+15 && range.end>heatmapMinutes(HOURS[j]));
-                                        const cardTarget=Boolean(cardPlacement && row.name===cardPlacement.position && heatmapMinutes(HOURS[j])===cardPlacement.start);
+                                        const cardTarget=Boolean(!placementDisabled && cardPlacement && row.name===cardPlacement.position && heatmapMinutes(HOURS[j])===cardPlacement.start);
                                         const missing = j < HOURS.length-1 && isMissingCell(cell);
                                         const gapSelected = gapMode && gapRange?.date === date && gapRange?.rowKey === rowKey
                                             && j >= gapRange.from && j <= gapRange.to;
                                         return (
                                         <td
                                             key={j}
-                                            className={`border border-gray-200 ${cell.color} hover:opacity-80 transition-opacity duration-150 ${moveMode && occupant ? 'cursor-move' : ''}`}
+                                            className={`border border-gray-200 ${placementDisabled?'bg-slate-200 cursor-not-allowed':cell.color+' hover:opacity-80'} transition-opacity duration-150 ${moveMode && occupant && !placementDisabled ? 'cursor-move' : ''}`}
                                             style={{ height: HEATMAP_CELL_SIZE, width: HEATMAP_CELL_SIZE, padding: 0,
                                                 boxShadow: cardConflict ? 'inset 0 0 0 2px #dc2626' : cardSelected ? 'inset 0 0 0 2px #2563eb' : cardTarget && cardPlacement.error ? 'inset 0 0 0 2px #dc2626' : gapSelected ? 'inset 0 0 0 2px #2563eb' : rangePreview?.row === `${row.positionKey}-${row.slot}` && j >= rangePreview.from && j <= rangePreview.to ? 'inset 0 3px #1d4ed8, inset 0 -3px #1d4ed8' : undefined,
                                                 filter: rangePreview?.row === `${row.positionKey}-${row.slot}` && j >= rangePreview.from && j <= rangePreview.to ? 'brightness(0.8)' : undefined }}
                                             data-range-hour={j} data-range-row={rowKey} data-position={row.name} data-position-key={row.positionKey} data-slot={row.slot} data-excess={cell.isExcess}
+                                            data-placement-disabled={placementDisabled || undefined} aria-disabled={placementDisabled || undefined}
                                             data-missing={missing} data-gap-selected={gapSelected || undefined}
                                             data-occupant-id={occupant?.staffId} data-occupant-name={occupant?.staffName} data-exit-marker={occupant?.exit||undefined}
                                             data-card-placement-selected={cardSelected||undefined} data-card-placement-target={cardTarget||undefined}
                                             data-card-placement-conflict={cardConflict||undefined}
                                             data-move-selected={moveState && cardSelected || undefined} data-move-conflict={moveState && cardConflict || undefined}
                                             role={gapMode && missing || moveMode && (occupant || moveState) ? 'button' : undefined}
-                                            tabIndex={moveMode ? (occupant || moveState ? 0 : undefined) : gapMode ? (missing ? 0 : undefined) : occupant || onTransfer && cell.isExcess ? 0 : undefined}
+                                            tabIndex={placementDisabled ? undefined : moveMode ? (occupant || moveState ? 0 : undefined) : gapMode ? (missing ? 0 : undefined) : occupant || onTransfer && cell.isExcess ? 0 : undefined}
                                             aria-pressed={moveMode && occupant ? Boolean(cardSelected) : gapMode && missing ? Boolean(gapSelected) : undefined}
                                             aria-label={moveMode ? (occupant ? `Mover a ${occupant.staffName}, ${row.name}, ${HOURS[j]}` : `Destino ${row.name}, ${HOURS[j]}`) : gapMode && missing ? `Seleccionar faltante de ${row.name}, carril ${row.slot + 1}, a las ${HOURS[j]}` : onTransfer && cell.isExcess && !gapMode ? `Seleccionar tramo de ${row.name} desde ${HOURS[j]}${occupant ? `, ${occupant.staffName}` : ''}` : occupant ? `${occupant.staffName}, ${row.name}, ${HOURS[j]}` : undefined}
                                             aria-describedby={inspected && inspectedCell.key === `${rowKey}:${j}` ? tooltipId : undefined}
@@ -568,6 +578,7 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                                             onFocus={event=>inspectCell(event.currentTarget,`${rowKey}:${j}`,HOURS[j])}
                                             onBlur={hideCellInfo}
                                             onClick={event => {
+                                                if(placementDisabled)return;
                                                 if(moveMode){
                                                     if(suppressMoveClick.current){suppressMoveClick.current=false;return;}
                                                     if(occupant){if(moveState?.staffId!==occupant.staffId)selectMoveCell(event.currentTarget);}
@@ -578,6 +589,7 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                                             }}
                                             onDoubleClick={!moveMode&&occupant?()=>onInfoPerson?.(occupant.staffId):undefined}
                                             onKeyDown={event => {
+                                                if(placementDisabled)return;
                                                 if(moveMode){
                                                     if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();if(occupant)selectMoveCell(event.currentTarget);else if(moveState)movement.preview({deltaMinutes:heatmapMinutes(HOURS[j])-moveState.anchorMinute,position:row.name});}
                                                     else if(moveState&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)){
@@ -601,12 +613,12 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                                                     setRangePreview({ row: `${row.positionKey}-${row.slot}`, from: j, to: j });
                                                 }
                                             }}
-                                            title={occupant ? undefined : `${HOURS[j]}: ${cell.isTrainer ? (cell.isExcess ? 'Entrenador · Exceso' : 'Entrenador') : cell.color.includes('yellow') ? 'Faltante' : cell.color.includes('blue') ? 'Asignado' : cell.isExcess ? 'Exceso' : 'Sin requerimiento'}`}
-                                        >{occupant?.exit && <span aria-label="Salida" className="block text-center text-[9px] font-bold leading-none text-white">↗</span>}</td>
+                                            title={placementDisabled?`${row.name}: área no compatible con la categoría de ${compatibilityState.name}.`:occupant ? undefined : `${HOURS[j]}: ${cell.isTrainer ? (cell.isExcess ? 'Entrenador · Exceso' : 'Entrenador') : cell.color.includes('yellow') ? 'Faltante' : cell.color.includes('blue') ? 'Asignado' : cell.isExcess ? 'Exceso' : 'Sin requerimiento'}`}
+                                        >{occupant?.exit && !placementDisabled && <span aria-label="Salida" className="block text-center text-[9px] font-bold leading-none text-white">↗</span>}</td>
                                         );
                                     })}
                                 </tr>
-                            ))
+                            );})
                         )}
                     </tbody>
                 </table>

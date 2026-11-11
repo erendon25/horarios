@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { planCoveragePlacement, placementFingerprint, placementPlanFingerprint, placementPreviewAssignments } from '../services/coveragePlacement';
+import { planCoveragePlacement, placementFingerprint, placementPlanFingerprint, placementPreviewAssignments, compatiblePlacementPositions } from '../services/coveragePlacement';
 import { applyBukSchedulePatch } from '../services/bukSchedule';
 
 export function useCoveragePlacement({ scope, getContext, refreshContext, onChanged }) {
@@ -27,16 +27,17 @@ export function useCoveragePlacement({ scope, getContext, refreshContext, onChan
     if (!current || current.interaction !== 'drag' || current.phase === 'dropping') return;
     try { valid(current.token); } catch { cancel(); return; }
     if (!force && current.position === position && current.start === start) return;
+    const cached = freshCache.current;
+    const context = { ...latest.current.getContext(), ...(cached?.token === current.token ? cached.value : {}) };
     const next = { ...current, position, start, plan: null, proposedAssignments: undefined,
+      compatiblePositions: compatiblePlacementPositions(context, current.staffId),
       options: [], error: '', busy: false,
       optionId: position === current.position && start === current.start ? current.optionId : undefined };
     if (!position || start === null) { show(next); return; }
-    const cached = freshCache.current;
     if (cached?.token !== current.token || !cached.value) {
       show({ ...next, busy: !cached?.error, error: cached?.error || '' }); return;
     }
     try {
-      const context = { ...latest.current.getContext(), ...cached.value };
       if (!context.ready || context.saving || !['admin', 'superadmin'].includes(context.role)) throw Error('La edición no está disponible.');
       const plan = planCoveragePlacement(context, next, {preview:true});
       show({ ...next, plan, optionId: plan.optionId, error:plan.error,
@@ -53,6 +54,7 @@ export function useCoveragePlacement({ scope, getContext, refreshContext, onChan
       name: [person.name, person.lastName].filter(Boolean).join(' '),
       sourceFingerprint: placementFingerprint(context.schedules, staffId),
       planFingerprint: placementPlanFingerprint(context, staffId),
+      compatiblePositions: compatiblePlacementPositions(context, staffId),
       interaction: drag ? 'drag' : 'keyboard', phase: drag ? 'drag' : 'choose' };
     freshCache.current = { token: next.token };
     show(next);
@@ -89,10 +91,12 @@ export function useCoveragePlacement({ scope, getContext, refreshContext, onChan
   };
 
   const commit = async next => {
+    let compatiblePositions = next.compatiblePositions;
     show({ ...next, phase: next.interaction === 'drag' ? 'dropping' : 'preview', busy: true, error: '' });
     try {
       const fresh = await latest.current.refreshContext(next.staffId); valid(next.token, next.revision);
       const context = { ...latest.current.getContext(), ...fresh };
+      compatiblePositions = compatiblePlacementPositions(context, next.staffId);
       if (!context.ready || context.saving || !['admin', 'superadmin'].includes(context.role)) throw Error('La edición ya no está disponible.');
       context.controller.finishHistoryGroup();
       context.controller.edit(previous => {
@@ -103,7 +107,7 @@ export function useCoveragePlacement({ scope, getContext, refreshContext, onChan
       latest.current.onChanged?.(); cancel();
     } catch (error) {
       if (session.current?.token === next.token && session.current.scope === latest.current.scope) {
-        show({ ...next, phase: next.interaction === 'drag' ? 'review' : 'preview', busy: false,
+        show({ ...next, compatiblePositions, phase: next.interaction === 'drag' ? 'review' : 'preview', busy: false,
           plan: null, proposedAssignments: undefined, error: error.message, options: error.options || [] });
       }
     }

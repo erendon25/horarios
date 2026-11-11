@@ -1,7 +1,8 @@
 // Mouse, keyboard and touch movement in the real matrix, with fictional local data.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { makeScheduleFocusQaFixture } from './schedule-focus-qa-fixture.mjs';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const port=process.env.BUK_QA_PORT||'4245',base=`http://127.0.0.1:${port}`,output='output/heatmap-move';
 await mkdir(output,{recursive:true});
@@ -38,6 +39,19 @@ try{
   await page.getByRole('button',{name:'Mover colaborador',exact:true}).click();
   assert.equal(await page.getByRole('button',{name:'Mover colaborador',exact:true}).getAttribute('aria-pressed'),'true');
   assert.ok(header.height<=136,'Movement action must fit in the compact header');
+  const profilePath='staff_profiles/T01',profile=await read(profilePath)
+    || makeScheduleFocusQaFixture(JSON.parse(await readFile('artifacts/buk/fixture.json','utf8'))).fixture.staff.find(person=>person.id==='T01');
+  await seed(profilePath,{...profile,workCategory:'production'});
+  await begin();await poll(async()=>await map().locator('td[data-position="SALÓN"][data-placement-disabled="true"]').count()>0,'Move mode did not disable incompatible areas');
+  assert.equal(await map().locator('td[data-position="MASA"][data-placement-disabled="true"]').count(),0);
+  // Previewing MASA on the way adds a lane and pushes SALÓN down; aim again at its new position.
+  await over('SALÓN',26);await over('SALÓN',26);
+  assert.equal(await page.evaluate(([x,y])=>document.elementFromPoint(x,y)?.closest('td')?.dataset.position,
+    await cell('SALÓN',26).boundingBox().then(b=>[b.x+b.width/2,b.y+b.height/2])),'SALÓN');
+  await page.mouse.up();await status().waitFor({state:'hidden'});
+  assert.equal((await draft())?.changes.T01,undefined);assert.equal(await map().locator('td[data-placement-disabled]').count(),0);
+  await seed(profilePath,profile);
+  pass('Mover también deja en gris las áreas incompatibles, rechaza soltarlas y recupera los colores al cancelar sin abrir otro recuadro');
   await begin();await over('MASA',26);
   await poll(async()=>(await status().textContent()).includes('12:45–21:30'),'Move preview did not preserve the grabbed-cell offset');
   assert.equal(await selected().count(),33);

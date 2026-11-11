@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { planHeatmapMove } from '../services/heatmapMove';
-import { placementFingerprint, placementPlanFingerprint } from '../services/coveragePlacement';
+import { placementFingerprint, placementPlanFingerprint, compatiblePlacementPositions } from '../services/coveragePlacement';
 import { applyBukSchedulePatch } from '../services/bukSchedule';
 
 export function useHeatmapMove({ scope, getContext, refreshContext, onChanged }) {
@@ -16,10 +16,11 @@ export function useHeatmapMove({ scope, getContext, refreshContext, onChanged })
   const preview = (changes = {}) => {
     const request = session.current;
     if (!request || !current(request.token) || request.applying) return;
-    const next = { ...request, ...changes, plan: null, error: '', revision: request.revision + 1 };
+    const context = { ...latest.current.getContext(), ...cached.current?.value };
+    const next = { ...request, ...changes, plan: null, error: '', revision: request.revision + 1,
+      compatiblePositions: compatiblePlacementPositions(context, request.staffId) };
     if (!cached.current?.value) { show({ ...next, busy: !cached.current?.error, error: cached.current?.error || '' }); return; }
     try {
-      const context = { ...latest.current.getContext(), ...cached.current.value };
       if (!context.ready || context.saving || !['admin', 'superadmin'].includes(context.role)) throw Error('La edición no está disponible.');
       const plan = planHeatmapMove(context, next, { preview: true });
       show({ ...next, plan, busy: false, error: plan.error });
@@ -34,6 +35,7 @@ export function useHeatmapMove({ scope, getContext, refreshContext, onChanged })
       token: crypto.randomUUID(), scope: latest.current.scope, revision: 0, busy: true,
       name: [person.name, person.lastName].filter(Boolean).join(' '),
       sourceFingerprint: placementFingerprint(context.schedules, staffId), planFingerprint: placementPlanFingerprint(context, staffId) };
+    next.compatiblePositions = compatiblePlacementPositions(context, staffId);
     cached.current = { token: next.token }; show(next);
     Promise.resolve().then(() => { if (!current(next.token)) return; return latest.current.refreshContext(staffId); }).then(value => {
       if (!current(next.token)) return;
@@ -45,11 +47,13 @@ export function useHeatmapMove({ scope, getContext, refreshContext, onChanged })
     const selected = session.current;
     if (!selected || !current(selected.token) || selected.applying) return false;
     const request = { ...selected, ...changes, revision: selected.revision + 1, applying: true, busy: true };
+    let compatiblePositions = request.compatiblePositions;
     show(request);
     try {
       const fresh = await latest.current.refreshContext(request.staffId);
       if (!current(request.token)) return false;
       const context = { ...latest.current.getContext(), ...fresh };
+      compatiblePositions = compatiblePlacementPositions(context, request.staffId);
       if (!context.ready || context.saving || !['admin', 'superadmin'].includes(context.role)) throw Error('La edición ya no está disponible.');
       context.controller.finishHistoryGroup();
       context.controller.edit(previous => {
@@ -59,7 +63,7 @@ export function useHeatmapMove({ scope, getContext, refreshContext, onChanged })
       });
       latest.current.onChanged?.(); cancel(); return true;
     } catch (error) {
-      if (current(request.token)) show({ ...request, applying: false, busy: false, error: error.message, plan: null });
+      if (current(request.token)) show({ ...request, compatiblePositions, applying: false, busy: false, error: error.message, plan: null });
       return false;
     }
   };

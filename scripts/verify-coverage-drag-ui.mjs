@@ -1,7 +1,8 @@
 // Real native drag held over the matrix. All documents and writes are local fixtures.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,writeFile,readFile} from 'node:fs/promises';
+import {makeScheduleFocusQaFixture} from './schedule-focus-qa-fixture.mjs';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const port=process.env.BUK_QA_PORT||'4241',base=`http://127.0.0.1:${port}`,output='output/coverage-drag';
 await mkdir(output,{recursive:true});
@@ -56,6 +57,52 @@ try{
   assert.equal(await instructions.isVisible(),false);await help.locator('summary').click();assert.equal(await instructions.isVisible(),true);await help.locator('summary').click();
   await page.screenshot({path:`${output}/compact-header.png`});
   pass('Cabecera compacta: acciones junto a la leyenda, instrucciones en Ayuda y más espacio para el mapa');
+
+  const profilePath='staff_profiles/F01',originalProfile=await read(profilePath)
+    || makeScheduleFocusQaFixture(JSON.parse(await readFile('artifacts/buk/fixture.json','utf8'))).fixture.staff.find(person=>person.id==='F01');
+  const grey=position=>map().locator(`td[data-position="${position}"][data-placement-disabled="true"]`);
+  const digest=()=>map().locator('td[data-range-hour]').evaluateAll(elements=>elements.map(element=>[element.dataset.rangeRow,element.dataset.rangeHour,[...element.classList].find(value=>value.startsWith('bg-'))]));
+  const originalColors=await digest();
+  await seed(profilePath,{...originalProfile,workCategory:'production'});
+  await begin('F01','Camila');await poll(async()=>await grey('SALÓN').count()>0,'Service areas were not disabled for Production');
+  assert.equal(await grey('VESTIDO').count(),0);
+  assert.ok(await map().locator('td[data-position="VESTIDO"][data-missing="true"]').evaluateAll(elements=>elements.every(element=>element.classList.contains('bg-yellow-300'))));
+  assert.ok(await grey('SALÓN').evaluateAll(elements=>elements.every(element=>element.classList.contains('bg-slate-200')&&element.getAttribute('aria-disabled')==='true')));
+  await hover(21);await poll(async()=>await selected().count()===33,'Compatible area did not paint the full approved shift');
+  await hover(21,'SALÓN');await poll(async()=>await selected().count()===0,'Disabled area retained the prior placement preview');
+  await page.screenshot({path:`${output}/category-production.png`});await page.mouse.up();
+  await poll(async()=>await status().count()===0,'Dropping over a disabled area did not cancel the drag');await noMutation('F01');
+  assert.deepEqual(await digest(),originalColors);assert.equal(await map().locator('td[data-placement-disabled]').count(),0);
+  pass('Producción conserva los faltantes amarillos compatibles, pinta Servicio en gris y rechaza soltar allí sin editar horarios; al terminar recupera los colores originales');
+
+  await seed(profilePath,{...originalProfile,workCategory:'service'});
+  await begin('F01','Camila');await poll(async()=>await grey('VESTIDO').count()>0,'Production areas were not disabled for Service');
+  assert.equal(await grey('SALÓN').count(),0);assert.equal(await grey('DRIVE THRU').count(),0);
+  assert.ok(await map().locator('td[data-position="SALÓN"][data-missing="true"]').evaluateAll(elements=>elements.every(element=>element.classList.contains('bg-yellow-300'))));
+  await page.keyboard.press('Escape');await page.mouse.up();await noMutation('F01');assert.deepEqual(await digest(),originalColors);
+  pass('Servicio habilita su área y desactiva Producción; Escape retira el gris y conserva la cobertura original');
+
+  await seed(profilePath,{...originalProfile,workCategory:'multifunctional'});
+  await begin('F01','Camila');await hover(21);await poll(async()=>await selected().count()===33,'Multifunctional preview missing');
+  assert.equal(await map().locator('td[data-placement-disabled]').count(),0);
+  await page.keyboard.press('Escape');await page.mouse.up();
+  await seed(profilePath,{...originalProfile,workCategory:''});
+  await begin('F01','Camila');await poll(async()=>(await status().textContent()).includes('Sin áreas compatibles'),'Missing category was not explained');
+  assert.equal(await map().locator('td[data-placement-disabled="true"]').count(),await map().locator('td[data-range-hour]').count());
+  await page.keyboard.press('Escape');await page.mouse.up();await noMutation('F01');
+  pass('Multifuncional habilita ambas áreas; sin categoría todas se desactivan y se indica revisar la ficha, sin asignar horas');
+
+  await seed(profilePath,{...originalProfile,workCategory:'production'});
+  await begin('F01','Camila');await hover(21);await poll(async()=>await selected().count()===33,'No category-recheck preview');
+  await seed(profilePath,{...originalProfile,workCategory:'service'});await page.mouse.up();
+  await status().getByRole('alert').filter({hasText:/categoría/}).waitFor();await noMutation('F01');
+  assert.ok(await grey('VESTIDO').count()>0);assert.equal(await grey('SALÓN').count(),0);
+  await page.getByRole('button',{name:'Buscar cobertura',exact:true}).click();
+  await poll(async()=>await status().count()===0,'Changing tools did not clear the placement session');
+  assert.equal(await map().locator('td[data-placement-disabled]').count(),0,'Changing tools must restore the matrix colors');
+  await seed(profilePath,originalProfile);await page.reload();
+  pass('Una categoría modificada durante el arrastre se verifica al soltar, bloquea la asignación y actualiza las áreas grises con el perfil recién leído');
+
   await begin('F01','Camila');await hover(21);
   await poll(async()=>await selected().count()===33,'Full-Time preview did not paint 8 net hours plus exit marker');
   assert.match(await status().textContent(),/12:15–21:00/);await noMutation('F01');
@@ -67,6 +114,7 @@ try{
   assert.equal((await draft()).changes.F01.monday.end,'21:30');assert.deepEqual(await page.evaluate(()=>window.bukQaWrites),[]);
   assert.equal(await page.getByTestId('focus-staff-panel').isVisible(),true,'Dropping a shift must keep the collaborators panel open');
   assert.equal(await page.getByTestId('focus-staff-panel').getByLabel('Buscar colaborador',{exact:true}).inputValue(),'Camila');
+  assert.equal(await map().locator('td[data-placement-disabled]').count(),0,'Successful placement must restore the normal matrix colors');
   const afterDropHeader=await page.getByTestId('heatmap-header').boundingBox();
   assert.ok(Math.abs(afterDropHeader.width-header.width)<1,'Placement must preserve the matrix width');
   await page.getByRole('button',{name:'Deshacer cambio',exact:true}).click();await noMutation('F01');

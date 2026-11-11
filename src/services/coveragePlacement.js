@@ -13,6 +13,15 @@ export const placementFingerprint = (schedules, id) => JSON.stringify(stableValu
 const clock = value => clockFromMinutes((value + 2880) % 1440);
 const overlaps = (a, b) => a.start < b.end && a.end > b.start;
 
+export function compatiblePlacementPositions(context, id) {
+  const category = workCategory(context.staff.find(item => item.id === id));
+  return (context.requirements.positions || []).filter(position => {
+    if (context.positionDefinitions === undefined) return true;
+    const definition = context.positionDefinitions.find(item => normalizeSchedulePosition(item.name) === normalizeSchedulePosition(position));
+    return ['production', 'service'].includes(definition?.department) && [definition.department, 'multifunctional'].includes(category);
+  });
+}
+
 export function placementPlanFingerprint(context, id) {
   const person = context.staff.find(item => item.id === id);
   const modality = effectiveModality(person, context.date);
@@ -23,7 +32,7 @@ export function placementPlanFingerprint(context, id) {
 }
 
 export function planCoveragePlacement(context, request, {preview=false} = {}) {
-  const { staff, schedules, day, date, requirements, weekStart, previousWeekSchedules, nextWeekSchedules, positionDefinitions } = context;
+  const { staff, schedules, day, date, requirements, weekStart, previousWeekSchedules, nextWeekSchedules } = context;
   const person = staff.find(item => item.id === request.staffId);
   if (!person || !isActiveOnDate(person, date) || ['inactive', 'archived', 'ceased', 'terminated'].includes(String(person.status).toLowerCase())) throw Error('El colaborador ya no está activo para esta fecha.');
   if (request.sourceFingerprint !== placementFingerprint(schedules, person.id)) throw Error('El horario o los descansos cambiaron. Vuelve a seleccionar al colaborador.');
@@ -33,8 +42,7 @@ export function planCoveragePlacement(context, request, {preview=false} = {}) {
   const current = schedules[person.id]?.[day] || {};
   if (current.off || current.feriado || current.holiday) throw Error('Retira primero el descanso o feriado desde la tarjeta.');
   if (person.studyAvailabilityStatus !== 'ready') throw Error('No se pudo comprobar la disponibilidad. Reintenta.');
-  const definition = positionDefinitions?.find(item => normalizeSchedulePosition(item.name) === normalizeSchedulePosition(position));
-  if (positionDefinitions && (!definition?.department || ![definition.department, 'multifunctional'].includes(workCategory(person)))) throw Error('La categoría del colaborador no es compatible con el área del destino. Revisa su ficha y Proyección.');
+  if (!compatiblePlacementPositions(context, person.id).includes(position)) throw Error('La categoría del colaborador no es compatible con el área del destino. Revisa su ficha y Proyección.');
   const planFingerprint = placementPlanFingerprint(context, person.id);
   if (request.planFingerprint && request.planFingerprint !== planFingerprint) throw Error('La modalidad o el plan de descansos cambió. Vuelve a revisar la jornada antes de colocarla.');
   const modality = effectiveModality(person, date);

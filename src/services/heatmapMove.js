@@ -1,12 +1,11 @@
 import { getAvailableApprovedBukOptions, getBukRestDays } from './bukSchedule.js';
-import { placementFingerprint, placementPlanFingerprint } from './coveragePlacement.js';
+import { placementFingerprint, placementPlanFingerprint, compatiblePlacementPositions } from './coveragePlacement.js';
 import { SCHEDULE_DAYS, getWeekDates, isActiveOnDate, effectiveModality, getExportShiftSegments,
   getPositionSegments, getHeatmapAssignments, normalizeSchedulePosition } from './scheduleExportData.js';
 import { getScheduleBreak, requiresScheduleBreak } from './scheduleHours.js';
 import { getShiftAvailability } from './shiftAvailability.js';
 import { isBukScheduleExempt } from './scheduleStaffOrder.js';
 import { replacePositionInterval, validatePositionRange } from './heatmapTransfers.js';
-import { workCategory } from './coverageInsights.js';
 
 const minute = value => {
   const match = /^(\d{2}):(\d{2})$/.exec(String(value || ''));
@@ -16,7 +15,7 @@ const clock = value => `${String(Math.floor(((value % 1440) + 1440) % 1440 / 60)
 const overlaps = (a, b) => a.start < b.end && a.end > b.start;
 
 export function planHeatmapMove(context, request, { preview = false } = {}) {
-  const { staff, schedules, day, date, weekStart, requirements, positionDefinitions,
+  const { staff, schedules, day, date, weekStart, requirements,
     previousWeekSchedules, nextWeekSchedules, verifiedSchedule } = context;
   const person = staff.find(item => item.id === request.staffId);
   if (!person || !isActiveOnDate(person, date) || ['inactive', 'archived', 'ceased', 'terminated'].includes(String(person.status).toLowerCase())) throw Error('El colaborador ya no está activo para esta fecha.');
@@ -39,8 +38,7 @@ export function planHeatmapMove(context, request, { preview = false } = {}) {
   if (!['base', 'segment'].includes(scope)) throw Error('Selecciona el alcance del cambio de puesto.');
   const destination = positions.find(name => normalizeSchedulePosition(name) === normalizeSchedulePosition(request.position || request.sourcePosition));
   if (!destination) throw Error('Selecciona un puesto del mapa como destino.');
-  const definition = positionDefinitions?.find(item => normalizeSchedulePosition(item.name) === normalizeSchedulePosition(destination));
-  if (positionDefinitions && (!definition?.department || ![definition.department, 'multifunctional'].includes(workCategory(person)))) throw Error('La categoría del colaborador no corresponde al puesto destino. Revisa su ficha.');
+  if (!compatiblePlacementPositions(context, person.id).includes(destination)) throw Error('La categoría del colaborador no corresponde al puesto destino. Revisa su ficha.');
   const modality = effectiveModality(person, date), previousBreak = getScheduleBreak(current, modality);
   const patch = { ...current };
   if (delta) {
