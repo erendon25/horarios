@@ -36,6 +36,7 @@ try{
  browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
  page=await browser.newPage({viewport:{width:1600,height:1000},hasTouch:true,timezoneId:'America/Lima'});page.on('pageerror',e=>errors.push(e.message));await page.route('https://**/*',route=>{external.push(route.request().url());return route.abort()});
  await page.goto(`${base}/?vista=cobertura`);await page.getByTestId('schedule-focus-workspace').waitFor();await map().waitFor();await poll(async()=>(await map().locator('td[data-missing="true"]').count())>0,'La proyección no terminó de cargar');
+ await page.getByRole('button',{name:'Buscar cobertura',exact:true}).waitFor();
  const originalProjection=await read(projectionPath),originalSchedule=await read(schedulePath),originalMap=await digest(),originalDraft=await draft();
  await selectGap();const range=await assertRange();await candidateAction().waitFor();
  assert.deepEqual(await candidates().locator('[data-coverage-person-id]').evaluateAll(elements=>elements.map(e=>e.dataset.coveragePersonId)),['P12'],'Solo debe ofrecer personal sin turno ese día, aunque haya personal ya asignado en exceso');
@@ -60,15 +61,16 @@ try{
  const fullQuota=structuredClone(originalSchedule);fullQuota.thursday={...fullQuota.tuesday};
  // Preserve an explicit four-rest-day plan while the incomplete week is edited;
  // otherwise the legacy fallback correctly infers a different plan from off days.
- for(const value of Object.values(fullQuota))value.bukRestDays=4;
+ const actualRestDays=Object.values(fullQuota).filter(value=>value.off).length;
+ for(const value of Object.values(fullQuota)){value.bukRestDays=4;value.bukRestDaysBasis=actualRestDays;}
  await seed(schedulePath,fullQuota);await page.reload();await mode();await selectGap();assert.equal(await candidateAction().count(),0,'La cuota semanal agotada debe excluir al candidato');await closeCandidates();
  await seed(schedulePath,originalSchedule);await page.reload();await mode();
  pass('Los estudios se revalidan en vivo, la cuota agotada excluye al candidato y Ver en editor conserva el turno vacío sin preasignarlo');
 
- const columns=map().locator('thead th[scope="col"]');assert.equal(await columns.count(),73);assert.equal((await columns.first().textContent()).trim(),'07:00');assert.equal((await columns.last().textContent()).trim(),'25:00');
+ const columns=map().locator('thead th[scope="col"]');assert.equal(await columns.count(),77);assert.equal((await columns.first().textContent()).trim(),'07:00');assert.equal((await columns.last().textContent()).trim(),'26:00');
  const cellBounds=await map().locator('td[data-range-hour]').first().boundingBox();assert.ok(Math.abs(cellBounds.width-20)<1&&Math.abs(cellBounds.height-20)<1);
  await page.getByRole('button',{name:'Seleccionar tramo',exact:true}).click();await map().locator('td[data-excess="true"]').first().click();await page.getByText(/Mover desde/).waitFor();await page.getByRole('button',{name:'Cancelar',exact:true}).click();assert.deepEqual(await writes(),[]);
- pass('La selección roja de traslados conserva su formulario y el mapa mantiene73 columnas y celdas cuadradas20px');
+ pass('La selección roja de traslados conserva su formulario y el mapa mantiene77 columnas y celdas cuadradas20px');
 
  await page.getByRole('button',{name:'Maximizar mapa de cobertura',exact:true}).click();const fullscreen=page.getByRole('dialog',{name:/Mapa de Cobertura/});await fullscreen.waitFor();await selectGap(fullscreen);assert.equal(await candidates().evaluate(e=>e.matches(':modal')),true);await closeCandidates();assert.equal(await fullscreen.evaluate(e=>e.matches(':modal')),true);
  await selectGap(fullscreen);await candidateAction().click();await candidates().waitFor({state:'detached'});await fullscreen.waitFor({state:'detached'});await panel.waitFor();assert.equal(await panel.getByLabel('Entrada',{exact:true}).inputValue(),'');await panel.getByRole('button',{name:'Cerrar panel de colaboradores',exact:true}).click();assert.equal(await draft(),originalDraft);

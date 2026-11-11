@@ -27,6 +27,7 @@ export function createScheduleDraft(scope, getStorage = () => window.localStorag
     // A completed save must also win over an older in-flight server response.
     let sessionOverrides = {};
     let hasScopedDraft = false;
+    let past = [], future = [], group = null;
     let state = { schedules: {}, dirtyStaff: new Set(), ready: false, updatedAt: null,
         recovered: false, persistenceError: '', loadError: '', legacyChanges: {} };
 
@@ -64,7 +65,7 @@ export function createScheduleDraft(scope, getStorage = () => window.localStorag
 
     function emit(patch = {}) {
         state = { ...state, ...patch, schedules: mergeDays(mergeDays(base, sessionOverrides), changes),
-            dirtyStaff: new Set(Object.keys(changes)) };
+            dirtyStaff: new Set(Object.keys(changes)), canUndo: past.length > 0, canRedo: future.length > 0 };
         listeners.forEach(listener => listener());
     }
     function persist() {
@@ -115,6 +116,7 @@ export function createScheduleDraft(scope, getStorage = () => window.localStorag
         },
         edit(producer) {
             if (!enabled) return;
+            const before = clone(changes);
             const current = state.schedules;
             const next = producer(current);
             let edited = false;
@@ -127,7 +129,26 @@ export function createScheduleDraft(scope, getStorage = () => window.localStorag
                 }
             }
             // Synchronous storage inside the user action, not a delayed effect.
-            if (edited) emit(persist());
+            if (edited) {
+                if (!group || !group.recorded) {
+                    past = [...past.slice(-99), before];
+                    if (group) group.recorded = true;
+                }
+                future = [];
+                emit(persist());
+            }
+        },
+        beginHistoryGroup() { group = { recorded: false }; },
+        finishHistoryGroup() { group = null; },
+        undo() {
+            group = null;
+            if (!past.length || !state.ready) return false;
+            future.push(clone(changes)); changes = past.pop(); emit(persist()); return true;
+        },
+        redo() {
+            group = null;
+            if (!future.length || !state.ready) return false;
+            past.push(clone(changes)); changes = future.pop(); emit(persist()); return true;
         },
         restoreLegacy() {
             // Current edits always take precedence over an explicitly recovered
@@ -142,6 +163,8 @@ export function createScheduleDraft(scope, getStorage = () => window.localStorag
             )) };
         },
         acknowledgeSave(saved) {
+            // The server checkpoint is a new boundary; never undo a completed save.
+            past = []; future = []; group = null;
             base = { ...base, ...saved.schedules };
             sessionOverrides = mergeDays(sessionOverrides, saved.changes);
             const remaining = clone(changes);

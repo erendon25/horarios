@@ -3,7 +3,7 @@ import { projectionQuantityAtMinute } from './projectionTimeline.js';
 
 // Shared by the on-screen matrix and all daily Excel worksheets.
 const HEATMAP_START_MINUTES = 7 * 60;
-const HEATMAP_END_MINUTES = 25 * 60;
+const HEATMAP_END_MINUTES = 26 * 60;
 const HEATMAP_INTERVAL_MINUTES = 15;
 const isOnBreak = (person, minute) => minute >= person.breakStartMinutes && minute < person.breakEndMinutes;
 

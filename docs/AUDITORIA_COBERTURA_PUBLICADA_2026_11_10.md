@@ -1,5 +1,11 @@
 # Auditoría de la vista de cobertura publicada
 
+Actualización: la métrica de descansos y la proyección por cuartos se publicaron
+desde `main` mediante el PR #6. La recuperación posterior de acciones y contexto,
+con sus pruebas y la comprobación pendiente de permisos de Supabase, se detalla en
+[`RECUPERACION_COBERTURA_2026_11_10.md`](RECUPERACION_COBERTURA_2026_11_10.md).
+El diagnóstico siguiente conserva el estado que se observó durante la auditoría.
+
 ## Resultado y corrección del diagnóstico
 
 La recuperación del PR #4 fue incompleta: utilizó el código de las ramas de Git

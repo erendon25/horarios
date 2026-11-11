@@ -7,6 +7,7 @@ import { getScheduleBreakOptions, getScheduleBreak, requiresScheduleBreak } from
 import { isBukScheduleExempt } from './scheduleStaffOrder.js';
 import { getShiftAvailability } from './shiftAvailability.js';
 import { buildHeatmapRows, HOURS } from './heatmapModel.js';
+import { workCategory, WORK_CATEGORIES } from './coverageInsights.js';
 
 const overlap = (first, second) => first.start < second.end && first.end > second.start;
 const minute = (clock) => {
@@ -48,6 +49,7 @@ const neighboringWork = (id, schedules, previous, next, dayIndex) => {
 export const getHeatmapCoverageCandidates = ({
   selection, staff = [], schedules = {}, day, date, weekStart, requirements = {},
   previousWeekSchedules, nextWeekSchedules,
+  positionDefinitions,
 } = {}) => {
   const result = { valid: false, reason: null, selection, available: [], transfers: [], blocked: [], limitations: [] };
   const fail = (reason) => ({ ...result, reason });
@@ -62,7 +64,7 @@ export const getHeatmapCoverageCandidates = ({
   const positions = Array.isArray(projection.positions) ? projection.positions : [];
   const target = positions.find((position) => normalizeSchedulePosition(position) === normalizeSchedulePosition(selection?.position));
   if (!selection || !target || !Number.isInteger(selection.start) || !Number.isInteger(selection.end)
-    || selection.start % 15 || selection.end % 15 || selection.start < 420 || selection.end > 1515 || selection.start >= selection.end
+    || selection.start % 15 || selection.end % 15 || selection.start < 420 || selection.end > 1560 || selection.start >= selection.end
     || (selection.slot !== undefined && (!Number.isInteger(selection.slot) || selection.slot < 0))) {
     return fail('Selecciona un intervalo continuo de una posición en bloques de 15 minutos.');
   }
@@ -73,7 +75,8 @@ export const getHeatmapCoverageCandidates = ({
   }
   const people = [...new Map(staff.filter((person) => person?.id).map((person) => [person.id, person])).values()];
   const assigned = getHeatmapAssignments(people.filter((person) => active(person, date)), schedules, day, positions, date);
-  const rows = buildHeatmapRows(assigned, projection).filter((row) => row.positionKey === key
+  const allRows=buildHeatmapRows(assigned,projection);
+  const rows = allRows.filter((row) => row.positionKey === key
     && (selection.slot === undefined || row.slot === selection.slot));
   const yellow = rows.some((row) => {
     for (let time = selection.start; time < selection.end; time += 15) {
@@ -84,8 +87,18 @@ export const getHeatmapCoverageCandidates = ({
   });
   if (!yellow) return fail('Este intervalo ya no es un faltante de la tienda. Actualiza la selección.');
   result.valid = true;
+  const department=positionDefinitions?.find(item=>normalizeSchedulePosition(item.name)===key)?.department;
+  if(positionDefinitions && !['production','service'].includes(department)) return fail('Configura el área de esta posición en Proyección antes de buscar colaboradores.');
+  result.positionDepartmentLabel=WORK_CATEGORIES[department];
+  result.uncategorizedStaffCount=0; result.incompatibleStaffCount=0;
+  result.coverageNeed=[];
+  for(let minute=selection.start;minute<selection.end;minute+=15){
+    const index=HOURS.indexOf(clockFromMinutes(minute));
+    const missing=allRows.filter(row=>row.positionKey===key && row.cells[index]?.color==='bg-yellow-300').length;
+    result.coverageNeed.push({minute,missing,remaining:Math.max(0,missing-1)});
+  }
   result.selection = { ...selection, position: target };
-  result.limitations.push('Son opciones de consulta: revisa y confirma el turno en el editor antes de guardar.');
+  result.limitations.push('Agregar turno cambia el borrador; Guardar publica los horarios para los colaboradores.');
   if (dayIndex === 0 && previousWeekSchedules === undefined) result.limitations.push('No se cargó la semana anterior; no se proponen extras que entren en esa semana.');
   if (dayIndex === 6 && nextWeekSchedules === undefined) result.limitations.push('No se cargó la semana siguiente; no se proponen turnos que entren en esa semana.');
 
@@ -99,7 +112,13 @@ export const getHeatmapCoverageCandidates = ({
       block('incomplete_shift', 'Tiene datos de un turno que requieren revisión; no se reemplazan automáticamente.'); continue;
     }
     const skills = Array.isArray(person.skills) ? person.skills : person.positionAbilities || [];
-    if (!Array.isArray(skills) || !skills.some((skill) => normalizeSchedulePosition(skill) === key)) {
+    if(positionDefinitions && !workCategory(person)) {
+      result.uncategorizedStaffCount++; block('missing_category','No tiene categoría de trabajo asignada. Edítala en su ficha.'); continue;
+    }
+    if(positionDefinitions && ![department,'multifunctional'].includes(workCategory(person))) {
+      result.incompatibleStaffCount++; block('incompatible_category','Su categoría de trabajo no corresponde al área de esta posición.'); continue;
+    }
+    if (!positionDefinitions && (!Array.isArray(skills) || !skills.some((skill) => normalizeSchedulePosition(skill) === key))) {
       block('missing_skill', 'No tiene registrada la habilidad para esta posición.'); continue;
     }
     if (person.studyAvailabilityStatus !== 'ready') { block('availability_unknown', 'Su disponibilidad aún no se pudo comprobar.'); continue; }

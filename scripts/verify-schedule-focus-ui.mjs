@@ -21,7 +21,7 @@ const draft=()=>page.evaluate(()=>JSON.parse(localStorage.getItem('schedule_draf
 const writes=()=>page.evaluate(()=>window.bukQaWrites);
 const digest=()=>map().locator('td[data-range-hour]').evaluateAll(cells=>cells.map(cell=>[cell.dataset.rangeRow,cell.dataset.rangeHour,cell.title,[...cell.classList].find(name=>/^bg-/.test(name))]));
 const classic=async()=>{await page.getByTestId('focus-toolbar').locator('summary').filter({hasText:'Más'}).click();await page.getByRole('button',{name:'Vista clásica',exact:true}).click();await page.getByRole('button',{name:'Vista cobertura',exact:true}).waitFor();assert.equal(new URL(page.url()).searchParams.get('vista'),'clasica')};
-const assertMap=async()=>{assert.equal(await map().locator('thead th[scope="col"]').count(),73);assert.equal((await map().locator('thead th[scope="col"]').first().textContent()).trim(),'07:00');assert.equal((await map().locator('thead th[scope="col"]').last().textContent()).trim(),'25:00');const size=await map().locator('td[data-range-hour]').first().boundingBox();assert.ok(size&&Math.abs(size.width-20)<1&&Math.abs(size.height-20)<1,`Las celdas deben seguir cuadradas20px: ${JSON.stringify(size)}`)};
+const assertMap=async()=>{assert.equal(await map().locator('thead th[scope="col"]').count(),77);assert.equal((await map().locator('thead th[scope="col"]').first().textContent()).trim(),'07:00');assert.equal((await map().locator('thead th[scope="col"]').last().textContent()).trim(),'26:00');const size=await map().locator('td[data-range-hour]').first().boundingBox();assert.ok(size&&Math.abs(size.width-20)<1&&Math.abs(size.height-20)<1,`Las celdas deben seguir cuadradas20px: ${JSON.stringify(size)}`)};
 const assertBadge=async(container,kind,label)=>{
  const badge=container.getByTestId('focus-modality-badge'),name=container.getByTestId('focus-staff-name');
  await badge.scrollIntoViewIfNeeded();assert.equal(await badge.getAttribute('data-modality'),kind);
@@ -39,7 +39,7 @@ try{
  await page.goto(base);await page.getByTestId('schedule-focus-workspace').waitFor();await map().waitFor();
  await poll(async()=>(await map().locator('td[data-range-hour]').count())>0,'La matriz no terminó de cargar');
  await assertMap();assert.equal(await panel().count(),0,'El panel debe iniciar cerrado');
- const trainerNormal=map().locator('td[title$=": Entrenador"]').first(),trainerExcess=map().locator('td[title$=": Entrenador · Exceso"]').first();
+ const trainerNormal=map().locator('td.bg-orange-500').first(),trainerExcess=map().locator('td[title$="Entrenador · Exceso"]').first();
  await poll(async()=>await trainerNormal.count()&&await trainerExcess.count(),'La cobertura de entrenadores no terminó de cargar');
  assert.ok(await trainerNormal.count());assert.ok(await trainerExcess.count());assert.match(await trainerNormal.getAttribute('class'),/bg-orange-500/);assert.match(await trainerExcess.getAttribute('class'),/bg-red-500/);
  const baseMap=await digest(),baseTotal=await page.getByTestId('heatmap-total-hours').textContent(),baseProjection=await page.getByTestId('projection-hours-day').textContent();
@@ -48,7 +48,7 @@ try{
  await page.reload();await page.getByRole('button',{name:'Vista cobertura',exact:true}).waitFor();assert.equal(await page.getByTestId('schedule-focus-workspace').count(),0,'La URL clásica debe conservarse al actualizar');
  await page.getByRole('button',{name:'Vista cobertura',exact:true}).click();await assertMap();
  assert.equal(await page.getByTestId('heatmap-total-hours').textContent(),baseTotal);assert.equal(await page.getByTestId('projection-hours-day').textContent(),baseProjection);
- pass('Focus inicia por defecto y conserva73 columnas/celdas20px y HH; clásico persiste por URL, trainer normal naranja y exceso rojo');
+ pass('Focus inicia por defecto y conserva77 columnas/celdas20px y HH; clásico persiste por URL, trainer normal naranja y exceso rojo');
 
  await openPanel();assert.equal(await panel().locator('[data-focus-person-id]').count(),21);
  await assertBadge(panel().locator('[data-focus-person-id="F01"]'),'full-time','lista desktop Full-Time');await assertBadge(panel().locator('[data-focus-person-id="P12"]'),'part-time','lista desktop Part-Time');

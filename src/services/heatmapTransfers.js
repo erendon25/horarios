@@ -44,7 +44,7 @@ export function validateHeatmapTransfer(assigned, requirements, transfer) {
   if (!staffId) return 'Selecciona un colaborador.';
   if (!position || normalizeSchedulePosition(source) === normalizeSchedulePosition(position)) return 'Selecciona otro puesto de destino.';
   if (!(requirements.positions || []).some(item => normalizeSchedulePosition(item) === normalizeSchedulePosition(position))) return 'El puesto destino no está en la proyección del día.';
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start % 15 || end % 15 || end <= start || start < 420 || end > 1515) return 'Selecciona un intervalo válido en bloques de 15 minutos.';
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start % 15 || end % 15 || end <= start || start < 420 || end > 1560) return 'Selecciona un intervalo válido en bloques de 15 minutos.';
   for (let minute = start; minute < end; minute += 15) {
     const sourcePeople = transferCandidates(assigned, source, minute);
     if (!sourcePeople.some(item => item.staffId === staffId)) return 'El colaborador no está disponible en el puesto origen durante todo el intervalo. Revisa su turno, break y otros cambios.';
@@ -55,6 +55,19 @@ export function validateHeatmapTransfer(assigned, requirements, transfer) {
     if (transferCandidates(assigned, position, minute).length >= requiredAt(requirements, position, minute)) return 'El destino no tiene faltantes durante todo el intervalo. Acorta el intervalo o elige otro puesto.';
   }
   return '';
+}
+
+export function planHeatmapTransfer(assigned, requirements, transfer) {
+  if (!Number.isInteger(transfer.start) || !Number.isInteger(transfer.end) || transfer.end <= transfer.start
+    || transfer.start < 420 || transfer.end > 1560 || transfer.start % 15 || transfer.end % 15) return [];
+  const ranges = [];
+  for (let start = transfer.start; start < transfer.end; start += 15) {
+    if (validateHeatmapTransfer(assigned, requirements, { ...transfer, start, end: start + 15 })) continue;
+    const last=ranges.at(-1);
+    if(last?.end===start)last.end=start+15;
+    else ranges.push({...transfer,start,end:start+15});
+  }
+  return ranges;
 }
 
 export function replacePositionInterval(shift, transfer) {

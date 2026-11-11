@@ -29,7 +29,7 @@ const spans = option => {
 
 test('valida posición, límites, cuartos de hora y coherencia de día, fecha y semana', () => {
   for (const chosen of [null, { ...selection, position:'Desconocida' }, { ...selection, start:721 },
-    { ...selection, end:720 }, { ...selection, start:405 }, { ...selection, end:1530 }]) {
+    { ...selection, end:720 }, { ...selection, start:405 }, { ...selection, end:1575 }]) {
     const result = run({ selection:chosen });
     assert.equal(result.valid, false);
     assert.ok(result.reason);

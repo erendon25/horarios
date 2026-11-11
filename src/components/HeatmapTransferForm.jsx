@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { clockFromMinutes } from '../services/scheduleExportData';
-import { heatmapMinutes, transferCandidates, validateHeatmapTransfer } from '../services/heatmapTransfers';
+import { heatmapMinutes, transferCandidates, planHeatmapTransfer } from '../services/heatmapTransfers';
 
-export default function HeatmapTransferForm({ selection, assigned, requirements, onApply, onCancel }) {
+export default function HeatmapTransferForm({ selection, assigned, requirements, onApply, onCancel, onBreak }) {
     const [staffId, setStaffId] = useState('');
     const [end, setEnd] = useState(selection.end || selection.start + 15);
     const [position, setPosition] = useState(selection.position || '');
@@ -10,8 +10,9 @@ export default function HeatmapTransferForm({ selection, assigned, requirements,
     const candidates = transferCandidates(assigned, selection.source, selection.start);
     const selectedId = staffId || candidates[0]?.staffId || '';
     const transfer = { staffId: selectedId, source: selection.source, position, start: selection.start, end };
-    const validation = validateHeatmapTransfer(assigned, requirements, transfer);
-    const lastMinute = Math.min(1515, Math.max(selection.start + 15, ...assigned.filter(item => item.staffId === selectedId).map(item => {
+    const plan=planHeatmapTransfer(assigned,requirements,transfer);
+    const validation=plan.length ? '' : 'No hay subtramos compatibles sin quitar cobertura necesaria ni cruzar breaks.';
+    const lastMinute = Math.min(1560, Math.max(selection.start + 15, ...assigned.filter(item => item.staffId === selectedId).map(item => {
         const from = heatmapMinutes(item.start), to = heatmapMinutes(item.end);
         return to <= from ? to + 1440 : to;
     })));
@@ -46,10 +47,12 @@ export default function HeatmapTransferForm({ selection, assigned, requirements,
             </div>
             <p className="mt-2 text-xs">El cambio termina a las {clockFromMinutes(end)}. Al terminar vuelve al puesto base; si coincide con su salida, también se pinta la hora de salida.</p>
             <p className="mt-2 text-xs">Puedes agregar más tramos para este colaborador. Fuera de los tramos asignados mantiene su puesto base. Guarda el horario para publicarlos en su dashboard.</p>
+            {plan.length > 0 && <p data-testid="heatmap-transfer-plan" className="mt-2 text-xs text-blue-800">Se moverán: {plan.map(item=>`${clockFromMinutes(item.start)}–${clockFromMinutes(item.end)}`).join(', ')}. Se omiten breaks, huecos y minutos sin excedente o faltante.</p>}
             {(error || validation) && <p role="status" className="mt-2 text-amber-800">{error || validation}</p>}
             <div className="mt-2 flex gap-2">
                 <button type="submit" disabled={Boolean(validation)} className="rounded bg-blue-600 px-3 py-1 text-white disabled:opacity-40">Aplicar tramo</button>
                 <button type="button" onClick={onCancel} className="rounded border px-3 py-1">Cancelar</button>
+                {onBreak && <button type="button" disabled={!selectedId} onClick={()=>{try{onBreak(selectedId,selection.start);onCancel();}catch(failure){setError(failure.message);}}} className="rounded border px-3 py-1">Asignar break desde aquí</button>}
             </div>
         </form>
     );

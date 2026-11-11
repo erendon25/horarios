@@ -35,7 +35,7 @@ export function addHeatmapWorksheet(workbook, { rows, hours, date = '', dayLabel
   sheet.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F2937' } };
   sheet.getRow(1).height = 30;
   sheet.mergeCells(2, 1, 2, lastColumn);
-  sheet.getCell('A2').value = 'Intervalos de 15 minutos. 24:00 y 25:00 corresponden al día siguiente. Cada fila representa un carril de una posición.';
+  sheet.getCell('A2').value = 'Intervalos de 15 minutos. 24:00, 25:00 y 26:00 corresponden al día siguiente. Cada fila representa un carril de una posición.';
   sheet.getRow(2).height = 24;
   HEATMAP_LEGEND.forEach((item, index) => {
     const start = index === 0 ? 1 : 2 + (index - 1) * 8;
@@ -116,7 +116,7 @@ export async function buildHeatmapPdf({ rows, hours, date = '', dayLabel = '' })
     pdf.text(`Mapa de cobertura - ${dayLabel} ${date}`.trim(), margin, 15);
     pdf.setFont('helvetica', 'normal');
     pdf.setFontSize(9);
-    pdf.text('Intervalos de 15 minutos. 24:00 y 25:00 corresponden al día siguiente. Filas por posición y carril.', margin, 22);
+    pdf.text('Intervalos de 15 minutos. 24:00, 25:00 y 26:00 corresponden al día siguiente. Filas por posición y carril.', margin, 22);
     HEATMAP_LEGEND.forEach((item, index) => {
       const x = margin + index * 65;
       pdf.setFillColor(`#${item.hex}`);

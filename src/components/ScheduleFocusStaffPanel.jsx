@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, ArrowLeft, Search, X } from 'lucide-react';
+import { WORK_CATEGORIES } from '../services/coverageInsights';
 
 const filters = [['all', 'Todos'], ['unassigned', 'Sin turno'], ['alerts', 'Con alertas']];
 const nativeDialogOpen = () => Boolean(document.querySelector('dialog[open]'));
@@ -40,6 +41,9 @@ export default function ScheduleFocusStaffPanel({
   open, onClose, items = [], selectedId, selectedPerson, selectedModality, onSelect, onBack,
   search = '', onSearchChange, filter = 'all', onFilterChange,
   scrollRef, renderEditor, dayLabel, draftReady = true, returnFocusRef,
+  onQuickDayChange,onStartPlacement,onEndDrag,onInfo,
+  modalityFilter='all',onModalityFilter,categoryFilter='all',onCategoryFilter,
+  onSave,saving,saveError,canUndo,canRedo,onUndo,onRedo,
 }) {
   const desktop = useDesktopPanel();
   const titleId = useId();
@@ -174,24 +178,34 @@ export default function ScheduleFocusStaffPanel({
         <div className="grid grid-cols-3 gap-2" aria-label="Filtros de colaboradores">{filters.map(([value, label]) => <button key={value} type="button" aria-pressed={filter === value}
           onClick={() => { resetListScroll(); onFilterChange?.(value); }}
           className={`min-h-11 rounded-full border px-2 py-2 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500 ${filter === value ? 'border-blue-700 bg-blue-700 text-white' : 'border-slate-200 bg-white text-slate-700 hover:bg-blue-50'}`}>{label}</button>)}</div>
+        <details className="text-xs"><summary className="min-h-8 cursor-pointer py-1">Modalidad y categoría{modalityFilter!=='all'||categoryFilter!=='all'?' · Filtros activos':''}</summary><div className="mt-1 grid grid-cols-2 gap-2"><label>Modalidad<select aria-label="Modalidad del listado" value={modalityFilter} onChange={event=>{resetListScroll();onModalityFilter?.(event.target.value);}} className="block w-full rounded border p-2"><option value="all">Todas</option><option value="Full-Time">Full-Time</option><option value="Part-Time">Part-Time</option></select></label><label>Categoría<select aria-label="Categoría del listado" value={categoryFilter} onChange={event=>{resetListScroll();onCategoryFilter?.(event.target.value);}} className="block w-full rounded border p-2"><option value="all">Todas</option><option value="uncategorized">Sin categorizar</option>{Object.entries(WORK_CATEGORIES).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label></div></details>
       </div>
       <div ref={setListNode} data-testid="focus-staff-list-scroll" onScroll={event => { if (!hasSelection) scrollTop.current = event.currentTarget.scrollTop; }}
         className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain p-3 pb-[max(12px,env(safe-area-inset-bottom))]">
-        {items.length ? items.map(item => <button key={item.id} type="button" data-focus-person-id={item.id}
-          aria-label={`Seleccionar a ${item.name || 'colaborador'}`} aria-pressed={selectedId === item.id}
+        {items.length ? items.map(item => <article key={item.id} data-focus-person-id={item.id}
           aria-describedby={`${titleId}-${item.id}-modality${item.role ? ` ${titleId}-${item.id}-metadata` : ''} ${titleId}-${item.id}-shift ${titleId}-${item.id}-hours${item.hasAlert ? ` ${titleId}-${item.id}-alert` : ''}`}
           ref={node => { if (node) rowRefs.current.set(item.id, node); else rowRefs.current.delete(item.id); }}
           onClick={() => { scrollTop.current = listRef.current?.scrollTop || 0; onSelect?.(item.id); }}
+          draggable={Boolean(onStartPlacement && draftReady && !item.off && !item.holiday && !item.ceased)}
+          onDragStart={event=>{const token=onStartPlacement?.(item.id,{drag:true});if(!token){event.preventDefault();return;}event.dataTransfer.setData('application/x-lc-schedule',token);event.dataTransfer.effectAllowed='move';}}
+          onDragEnd={onEndDrag}
+          title={item.contextLabel}
           className={`min-h-20 w-full rounded-xl border p-3 text-left transition-colors hover:border-blue-400 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500 ${item.hasAlert ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200 bg-white'}`}>
-          <span className="flex items-start justify-between gap-2"><span data-testid="focus-staff-name" className="min-w-0 flex-1 break-words text-sm font-bold leading-snug text-slate-900">{item.name || 'Colaborador'}</span>
+          <button type="button" aria-label={`Seleccionar a ${item.name || 'colaborador'}`} className="flex w-full items-start justify-between gap-2 text-left"><span data-testid="focus-staff-name" className="min-w-0 flex-1 break-words text-sm font-bold leading-snug text-slate-900">{item.name || 'Colaborador'}</span>
             <ScheduleModalityBadge id={`${titleId}-${item.id}-modality`} modality={item.modality} />
-            {item.hasAlert && <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" />}
-          </span>
+            {item.hasAlert && <span title={item.alertLabel} aria-label={item.alertLabel}><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" /></span>}
+          </button>
           {item.role && <span id={`${titleId}-${item.id}-metadata`} className="mt-2 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">{item.role}</span>}
           <span id={`${titleId}-${item.id}-shift`} className="mt-2 block text-sm font-semibold tabular-nums text-slate-800">{shiftLabel(item)}</span>
           <span id={`${titleId}-${item.id}-hours`} className="mt-1 block break-words text-xs text-slate-600">{item.position || 'Sin puesto'} · Día {item.dailyHours ?? '—'} · Semana {item.weeklyHours ?? '—'}</span>
+          <p className="mt-1 text-xs text-slate-500">Ayer: {item.previousShift || 'Sin información'}{item.birthday?' · 🎂 Cumpleaños':''}</p>
           {item.hasAlert && <span id={`${titleId}-${item.id}-alert`} className="mt-2 block text-xs font-medium text-amber-800">{item.alertLabel || 'Revisar turno'}</span>}
-        </button>) : <p role="status" className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">No hay colaboradores que coincidan con los filtros.</p>}
+          <div onClick={event=>event.stopPropagation()} className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs">
+            {onQuickDayChange && !item.ceased && <><label className="flex min-h-8 items-center gap-1"><input type="checkbox" aria-label={`Día libre de ${item.name}`} checked={item.off} disabled={!draftReady || saving} onChange={event=>onQuickDayChange(item.id,'off',event.target.checked)}/>Libre</label><label className="flex min-h-8 items-center gap-1"><input type="checkbox" aria-label={`Feriado compensado de ${item.name}`} checked={item.holiday} disabled={!draftReady || saving} onChange={event=>onQuickDayChange(item.id,'feriado',event.target.checked)}/>Compensación</label></>}
+            {onInfo && <button type="button" aria-label={`Información de ${item.name}`} onClick={()=>onInfo(item.id)} className="min-h-8 text-blue-700 underline">Información</button>}
+            {onStartPlacement && !item.off && !item.holiday && !item.ceased && <button type="button" disabled={!draftReady || saving} onClick={()=>onStartPlacement(item.id)} className="min-h-8 text-blue-700 underline">{item.unassigned?'Elegir destino sin arrastrar':'Mover turno'}</button>}
+          </div>
+        </article>) : <p role="status" className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">No hay colaboradores que coincidan con los filtros.</p>}
       </div>
     </div>
 
@@ -208,6 +222,7 @@ export default function ScheduleFocusStaffPanel({
         {person ? renderEditor?.(person) : <p role="status" className="text-sm text-slate-600">Este colaborador ya no está en la lista. Vuelve para seleccionar otro.</p>}
       </div>
     </div>}
+    {onSave && <footer className="shrink-0 border-t bg-white p-3"><div className="flex flex-wrap gap-2"><button type="button" disabled={!canUndo||saving} onClick={onUndo} className="min-h-9 rounded border px-2 disabled:opacity-40">Deshacer</button><button type="button" disabled={!canRedo||saving} onClick={onRedo} className="min-h-9 rounded border px-2 disabled:opacity-40">Rehacer</button><button type="button" disabled={!draftReady||saving} onClick={onSave} className="ml-auto min-h-9 rounded bg-blue-700 px-3 text-white disabled:opacity-40">{saving?'Guardando…':'Guardar desde panel'}</button></div>{saveError && <p role="alert" className="mt-2 text-xs text-red-700">{saveError}</p>}</footer>}
   </aside>;
 
   if (desktop || typeof document === 'undefined') return panel;

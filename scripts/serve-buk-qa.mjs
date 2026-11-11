@@ -40,7 +40,8 @@ function value(ref){
  if(ref.path==='stores/qa-store')return {name:'TIENDA DE PRUEBA'};
  if(ref.path==='stores/qa-store/config/buk_schedule')return {identities:fixture.identities,catalog:fixture.catalog};
  if(ref.path==='stores/qa-store/config/schedule_projection')return {positions:['LANDING','MASA','DRIVE THRU'],requirements:{}};
- if(ref.path.startsWith('schedules/')){const id=ref.path.split('/')[1];const person=id.split('_')[0];return fixture.schedules[person];}
+ if(ref.path.startsWith('staff_profiles/'))return fixture.staff.find(person=>person.id===ref.path.split('/')[1]);
+ if(ref.path.startsWith('schedules/')){const id=ref.path.split('/')[1];const person=id.split('_')[0];return id.endsWith('2026-10-12_to_2026-10-18')?fixture.schedules[person]:null;}
  return null;
 }
 export async function getDoc(ref){const response=await fetch('/qa-document?path='+encodeURIComponent(ref.path));if(!response.ok)throw Error('No se pudo cargar el documento de prueba');const saved=await response.json();return snap(ref.path.split('/').at(-1),saved.found?saved.data:value(ref))}
@@ -60,7 +61,7 @@ export function onSnapshot(ref,callback,onError){
  if(projectionHoursQa){subscriptions.add(subscription);ensureEvents()}
  return ()=>{active=false;subscriptions.delete(subscription);if(projectionHoursQa&&subscriptions.size===0&&eventSource){eventSource.close();eventSource=undefined;window.bukQaRealtimeConnected=false}};
 }
-export async function setDoc(ref,data){const response=await fetch('/qa-document',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:ref.path,data})});if(!response.ok)throw Error('No se pudo guardar la prueba');window.bukQaWrites.push({path:ref.path,data})}
+export async function setDoc(ref,data,options){if(options?.merge){const previous=await getDoc(ref);data={...(previous.exists()?previous.data():{}),...data}}const response=await fetch('/qa-document',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:ref.path,data})});if(!response.ok)throw Error('No se pudo guardar la prueba');window.bukQaWrites.push({path:ref.path,data})}
 export async function addDoc(ref,data){const response=await fetch('/qa-add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:ref.path,data})});const result=await response.json();if(!response.ok)throw Error(result.error||'No se pudo guardar la solicitud de prueba');window.bukQaWrites.push({path:ref.path+'/'+result.id,data});return {id:String(result.id)}}
 export const writeBatch=()=>{const ops=[];return {set:(ref,data)=>ops.push([ref,data]),update:(ref,data)=>ops.push([ref,data]),commit:async()=>{for(const [ref,data] of ops)await setDoc(ref,data)}}};
 `;

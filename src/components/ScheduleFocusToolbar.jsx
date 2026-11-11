@@ -1,5 +1,6 @@
 import React from 'react';
 import { AlertCircle, Calendar, ChevronDown, ClipboardList, Download, Filter, MoreHorizontal, Save, Users } from 'lucide-react';
+import { isHoliday } from '../constants/holidays';
 
 const button = 'inline-flex min-h-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500';
 const menu = 'absolute right-0 z-50 mt-2 max-h-[calc(100dvh-250px)] w-72 max-w-[calc(100vw-24px)] overflow-y-auto overscroll-contain rounded-xl border border-gray-200 bg-white p-3 shadow-xl';
@@ -21,6 +22,7 @@ export default function ScheduleFocusToolbar({
   onOpenStaff, staffCount, staffButtonRef, panelOpen,
   onOpenRequests, requestCount, onOpenConflicts, conflictCount,
   exportControls, extraControls, filters, filterActive,
+  canUndo,canRedo,onUndo,onRedo,onPreviewWeek,dayDates={},
 }) {
   return <header data-testid="focus-toolbar" className="sticky top-0 z-40 border-b border-gray-200 bg-white shadow-sm">
     <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3 sm:px-5">
@@ -29,6 +31,8 @@ export default function ScheduleFocusToolbar({
         <div className="min-w-0"><h1 className="text-base font-bold text-gray-900 sm:text-lg"><span className="sm:hidden">Horario</span><span className="hidden sm:inline">Horario semanal</span></h1><p className="hidden text-xs text-gray-500 sm:block">Cobertura por posición</p></div>
       </div>
       <div className="flex items-center gap-2">
+        <button type="button" aria-label="Deshacer cambio" disabled={!canUndo||saving} onClick={onUndo} className={`${button} disabled:opacity-40`}>↶<span className="hidden md:inline">Deshacer</span></button>
+        <button type="button" aria-label="Rehacer cambio" disabled={!canRedo||saving} onClick={onRedo} className={`${button} disabled:opacity-40`}>↷<span className="hidden md:inline">Rehacer</span></button>
         <span role="status" className={`hidden rounded-full px-2.5 py-1 text-xs font-medium sm:inline ${hasUnsavedChanges ? 'bg-amber-50 text-amber-800' : 'bg-green-50 text-green-800'}`}>
           {hasUnsavedChanges ? `Borrador · ${dirtyCount} cambio${dirtyCount === 1 ? '' : 's'}` : 'Sin cambios pendientes'}
         </span>
@@ -45,10 +49,10 @@ export default function ScheduleFocusToolbar({
         <label className="flex min-h-10 items-center gap-2 rounded-lg border border-gray-200 px-2 text-sm text-gray-700"><Calendar size={16} aria-hidden="true" /><span className="sr-only">Semana comenzando el</span>
           <input aria-label="Semana comenzando el" type="date" value={week} onChange={event => onWeekChange(event.target.value)} disabled={saving} className="min-w-0 w-[135px] bg-white text-sm" />
         </label>
-        <select aria-label="Día del horario" value={day} onChange={event => onDayChange(event.target.value)} className="min-h-10 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 sm:hidden">{days.map(key => <option key={key} value={key}>{dayLabels[key]}</option>)}</select>
+        <select aria-label="Día del horario" value={day} onChange={event => onDayChange(event.target.value)} className="min-h-10 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 sm:hidden">{days.map(key => <option key={key} value={key}>{dayLabels[key]}{isHoliday(dayDates[key])?' · Feriado':''}</option>)}</select>
         <nav aria-label="Día del horario" className="hidden max-w-[calc(100vw-24px)] items-center overflow-x-auto rounded-lg border border-gray-200 bg-gray-50 sm:flex">
-          {days.map(key => <button key={key} type="button" aria-current={day === key ? 'date' : undefined} onClick={() => onDayChange(key)}
-            className={`min-h-10 shrink-0 px-3 py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 ${day === key ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>{dayLabels[key].slice(0, 3)}</button>)}
+          {days.map(key => <button key={key} type="button" title={isHoliday(dayDates[key])?.name} aria-current={day === key ? 'date' : undefined} onClick={() => onDayChange(key)}
+            className={`min-h-10 shrink-0 px-3 py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 ${day === key ? 'bg-blue-600 text-white' : isHoliday(dayDates[key])?'bg-amber-100 text-amber-900':'text-gray-600 hover:bg-gray-100'}`}>{dayLabels[key].slice(0, 3)}{isHoliday(dayDates[key])&&<span className="ml-1 text-[9px]">Feriado</span>}</button>)}
         </nav>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -58,6 +62,7 @@ export default function ScheduleFocusToolbar({
         <button type="button" aria-label={`Solicitudes ${requestCount}`} onClick={onOpenRequests} className={button}><ClipboardList size={16} aria-hidden="true" /><span className="hidden sm:inline">Solicitudes</span><span className="rounded bg-blue-50 px-1.5 text-xs text-blue-700">{requestCount}</span></button>
         <button type="button" aria-label={`Conflictos ${conflictCount}`} onClick={onOpenConflicts} className={`${button} ${conflictCount ? 'border-amber-200 text-amber-800' : ''}`}><AlertCircle size={16} aria-hidden="true" /><span className="hidden sm:inline">Conflictos</span>{conflictCount > 0 && <span className="rounded bg-amber-50 px-1.5 text-xs">{conflictCount}</span>}</button>
         <ActionMenu label="Exportar" icon={Download}>{exportControls}</ActionMenu>
+        <button type="button" onClick={onPreviewWeek} disabled={!ready} className={button}>Ver horario semanal</button>
         <ActionMenu label="Más" icon={MoreHorizontal}>{extraControls}</ActionMenu>
       </div>
     </div>

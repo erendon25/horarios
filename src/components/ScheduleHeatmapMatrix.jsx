@@ -1,4 +1,4 @@
-// ScheduleHeatmapMatrix.jsx - Matriz operativa de 07:00 a 25:00
+// ScheduleHeatmapMatrix.jsx - Matriz operativa de 07:00 a 26:00
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { Maximize2, Minimize2, FileText, Download } from 'lucide-react';
@@ -7,6 +7,8 @@ import { HOURS, buildHeatmapRows } from '../services/heatmapModel';
 import HeatmapTransferForm from './HeatmapTransferForm';
 import { heatmapMinutes } from '../services/heatmapTransfers';
 import ProjectionHoursSummary from './ProjectionHoursSummary';
+import CoverageInsights from './CoverageInsights';
+import { cellOccupants } from '../services/coverageInsights';
 export { HOURS } from '../services/heatmapModel';
 
 const EMPTY_ASSIGNED = [];
@@ -19,8 +21,12 @@ const isMissingCell = cell => Boolean(cell?.color?.includes('yellow'));
 const heatmapClock = minutes => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
 const gapDuration = minutes => `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
 
-export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requirements = EMPTY_REQUIREMENTS, date = '', dayLabel = '', canExport = false, onTransfer, projectionHours, showProjectionSummary = true, onGapSelect, onGapReset, gapResetKey = 0 }) {
+export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requirements = EMPTY_REQUIREMENTS, date = '', dayLabel = '', canExport = false, onTransfer, projectionHours, showProjectionSummary = true, onGapSelect, onGapReset, gapResetKey = 0,
+    onBreak,positionDefinitions=[],coverageStatus='ready',filtered=false,onSelectPerson,onInfoPerson,onCardTarget }) {
     const rows = useMemo(() => buildHeatmapRows(assigned, requirements), [assigned, requirements]);
+    const occupants=useMemo(()=>cellOccupants(assigned,rows),[assigned,rows]);
+    const [inspectedCell,setInspectedCell]=useState('');
+    const inspected=occupants.get(inspectedCell);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const dialogRef = useRef(null);
     const maximizeRef = useRef(null);
@@ -39,6 +45,7 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
     const gapScope = useRef({ rows, date, onGapSelect, onGapReset, gapMode });
     gapScope.current = { rows, date, onGapSelect, onGapReset, gapMode };
     const canFindGap = typeof onGapSelect === 'function';
+    const openPerson=id=>{if(isFullscreen){setIsFullscreen(false);requestAnimationFrame(()=>onSelectPerson?.(id));}else onSelectPerson?.(id);};
 
     const clearGap = (notify = true) => {
         const hadSelection = Boolean(gapRef.current);
@@ -202,7 +209,7 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
 
     const panel = (
         <div className="h-full min-h-0 min-w-0 flex flex-col isolate bg-white rounded-xl shadow-lg overflow-hidden border border-gray-200">
-            <div className="flex-none bg-gray-800 px-3 py-2 text-white">
+            <div className="max-h-[45%] flex-none overflow-y-auto bg-gray-800 px-3 py-2 text-white sm:max-h-[60%]">
                 <div className="flex flex-wrap justify-between items-center gap-2">
                     <h3 id={isFullscreen ? 'heatmap-dialog-title' : undefined} className="text-sm font-bold">
                         Mapa de Cobertura{dayLabel || date ? ` - ${dayLabel} ${date}` : ''}
@@ -261,6 +268,7 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                     key={`${transferSelection.source}-${transferSelection.start}-${transferSelection.end || ''}`}
                     selection={transferSelection} assigned={assigned} requirements={requirements}
                     onApply={onTransfer} onCancel={() => { setTransferSelection(null); setRangePreview(null); }}
+                    onBreak={onBreak}
                 />}
                 {assigned.some(person => person.breakLabel) && (
                     <details className="mt-2 text-xs text-amber-200">
@@ -272,6 +280,8 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                         </ul>
                     </details>
                 )}
+                {inspected && <div data-testid="coverage-occupant-info" className="mt-2 flex flex-wrap items-center gap-2 text-xs"><span>{inspected.staffName} · {inspected.position} · {inspected.start}–{inspected.end}{inspected.exit?' · Salida (sin duración)':''}</span><button type="button" onClick={()=>onInfoPerson?.(inspected.staffId)} className="min-h-8 rounded border border-white/30 px-2">Ver ficha</button></div>}
+                <CoverageInsights assigned={assigned} requirements={requirements} positions={positionDefinitions} status={coverageStatus} filtered={filtered} onSelectPerson={openPerson}/>
             </div>
             <div ref={matrixRef} role="region" aria-label="Matriz de cobertura por posición y horario" tabIndex={0}
                 onPointerDown={handlePointerDown} onPointerMove={handlePointerMove}
@@ -354,7 +364,8 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                                     )}
                                     {row.cells.map((cell, j) => {
                                         const rowKey = `${row.positionKey}-${row.slot}`;
-                                        const missing = isMissingCell(cell);
+                                        const occupant=occupants.get(`${rowKey}:${j}`);
+                                        const missing = j < HOURS.length-1 && isMissingCell(cell);
                                         const gapSelected = gapMode && gapRange?.date === date && gapRange?.rowKey === rowKey
                                             && j >= gapRange.from && j <= gapRange.to;
                                         return (
@@ -366,11 +377,17 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                                                 filter: rangePreview?.row === `${row.positionKey}-${row.slot}` && j >= rangePreview.from && j <= rangePreview.to ? 'brightness(0.8)' : undefined }}
                                             data-range-hour={j} data-range-row={rowKey} data-position={row.name} data-position-key={row.positionKey} data-slot={row.slot} data-excess={cell.isExcess}
                                             data-missing={missing} data-gap-selected={gapSelected || undefined}
+                                            data-occupant-id={occupant?.staffId} data-exit-marker={occupant?.exit||undefined}
                                             role={gapMode && missing ? 'button' : undefined}
-                                            tabIndex={gapMode ? (missing ? 0 : undefined) : onTransfer && cell.isExcess ? 0 : undefined}
+                                            tabIndex={gapMode ? (missing ? 0 : undefined) : occupant || onTransfer && cell.isExcess ? 0 : undefined}
                                             aria-pressed={gapMode && missing ? Boolean(gapSelected) : undefined}
                                             aria-label={gapMode && missing ? `Seleccionar faltante de ${row.name}, carril ${row.slot + 1}, a las ${HOURS[j]}` : onTransfer && cell.isExcess && !gapMode ? `Seleccionar tramo de ${row.name} desde ${HOURS[j]}` : undefined}
-                                            onClick={gapMode ? () => selectGapCell(rowKey, j) : undefined}
+                                            onMouseEnter={occupant?()=>setInspectedCell(`${rowKey}:${j}`):undefined}
+                                            onFocus={occupant?()=>setInspectedCell(`${rowKey}:${j}`):undefined}
+                                            onClick={gapMode ? () => selectGapCell(rowKey, j) : occupant && !cell.isExcess?()=>openPerson(occupant.staffId):undefined}
+                                            onDoubleClick={occupant?()=>onInfoPerson?.(occupant.staffId):undefined}
+                                            onDragOver={onCardTarget && j<HOURS.length-1?event=>{if(event.dataTransfer.types.includes('application/x-lc-schedule')){event.preventDefault();event.dataTransfer.dropEffect='move';}}:undefined}
+                                            onDrop={onCardTarget && j<HOURS.length-1?event=>{const token=event.dataTransfer.getData('application/x-lc-schedule');if(!token)return;event.preventDefault();event.stopPropagation();setIsFullscreen(false);onCardTarget(row.name,heatmapMinutes(HOURS[j]),token);}:undefined}
                                             onKeyDown={event => {
                                                 if (gapMode) {
                                                     if (event.key === 'Enter' || event.key === ' ') {
@@ -378,15 +395,16 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
                                                     }
                                                     return;
                                                 }
-                                                if (!onTransfer || !cell.isExcess) return;
+                                                if(occupant && !cell.isExcess && (event.key==='Enter'||event.key===' ')){event.preventDefault();openPerson(occupant.staffId);return;}
+                                                if (!onTransfer || !cell.isExcess || j===HOURS.length-1) return;
                                                 if (event.key === 'Enter' || event.key === ' ') {
                                                     event.preventDefault();
                                                     setTransferSelection({ source: row.name, start: heatmapMinutes(HOURS[j]), end: heatmapMinutes(HOURS[j]) + 15 });
                                                     setRangePreview({ row: `${row.positionKey}-${row.slot}`, from: j, to: j });
                                                 }
                                             }}
-                                            title={`${HOURS[j]}: ${cell.isTrainer ? (cell.isExcess ? 'Entrenador · Exceso' : 'Entrenador') : cell.color.includes('yellow') ? 'Faltante' : cell.color.includes('blue') ? 'Asignado' : cell.isExcess ? 'Exceso' : 'Sin requerimiento'}`}
-                                        />
+                                            title={`${HOURS[j]}: ${occupant?`${occupant.staffName} · ${occupant.start}–${occupant.end}${occupant.exit?' · Salida (sin duración)':''} · `:''}${cell.isTrainer ? (cell.isExcess ? 'Entrenador · Exceso' : 'Entrenador') : cell.color.includes('yellow') ? 'Faltante' : cell.color.includes('blue') ? 'Asignado' : cell.isExcess ? 'Exceso' : 'Sin requerimiento'}`}
+                                        >{occupant?.exit && <span aria-label="Salida" className="block text-center text-[9px] font-bold leading-none text-white">↗</span>}</td>
                                         );
                                     })}
                                 </tr>

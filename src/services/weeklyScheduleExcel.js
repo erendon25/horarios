@@ -127,7 +127,7 @@ export async function buildWeeklyScheduleWorkbook({ staff = [], schedules = {}, 
     rowIndex += rowCount;
   });
   const notes = [
-    'DUR.: duración de presencia sin descontar refrigerio, con horas extras. 24:00 = 00:00; 25:00 = 01:00.',
+    'DUR.: duración de presencia sin descontar refrigerio, con horas extras. 24:00 = 00:00; 25:00 = 01:00; 26:00 = 02:00.',
     'TOTAL HRS: cálculo del sistema al descargar (refrigerio, extras y crédito de feriado). Es un valor fijo, no la suma de DUR.',
     'Entradas y salidas vacías: descanso. S/A: sin asignación. Verde: gerencia. Amarillo: FT. Azul: PT. Los turnos partidos ocupan dos filas.',
     'Mapas diarios: cobertura de todo el personal de la semana con la proyección actual de la tienda. No se aplican filtros de búsqueda.',

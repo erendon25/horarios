@@ -16,7 +16,7 @@ export function makeScheduleFocusQaFixture(base) {
  fixture.staff=people.map(([id,name,position,plan],index)=>({
   id,name:`${name} Prueba`,lastName:'Ficticio',dni:String(99000101+index),
   modality:plan==='FT1'?'Full-Time':'Part-Time',position,status:'active',storeId:'qa-store',
-  isTrainer:position==='ENTRENADOR',skills:positions,
+  isTrainer:position==='ENTRENADOR',skills:positions,workCategory:'multifunctional',birthDate:id==='F01'?'2000-10-12':'',
  }));
  fixture.schedules=Object.fromEntries(people.map(([id,,,plan],index)=>{
   const schedule=structuredClone(base.schedules[plan]);
@@ -44,5 +44,5 @@ export function makeScheduleFocusQaFixture(base) {
  ]))]))}]));
  // One continuous uncovered lane makes the two-endpoint coverage demo repeatable.
  for(const hour of [4,5,6,7])requirements.monday.matrix['0'][hour]=2;
- return {fixture,studies,projection:{positions,requirements}};
+ return {fixture,studies,projection:{positions:positions.map(name=>({id:name,name,department:['SALÓN','DRIVE THRU'].includes(name)?'service':'production'})),requirements}};
 }
