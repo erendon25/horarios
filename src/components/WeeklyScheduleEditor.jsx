@@ -27,7 +27,7 @@ import { operationalStaffCount } from '../services/projectionStaffCount';
 import SchedulePositionControl from './SchedulePositionControl';
 import { planHeatmapTransfer, replacePositionInterval } from '../services/heatmapTransfers';
 import { exportGroupedPositionsPDF, exportExtraHoursReport } from './PDFExport';
-import { calculateScheduleTotals, calculateScheduleDay, formatScheduleMinutes, getScheduleBreak, requiresScheduleBreak, getScheduleBreakOptions } from '../services/scheduleHours';
+import { calculateScheduleTotals, calculateScheduleDay, formatScheduleMinutes, getScheduleBreak, requiresScheduleBreak, getScheduleBreakOptions, scheduleBreakLabel } from '../services/scheduleHours';
 import ScheduleBreakControl from './ScheduleBreakControl';
 import BukScheduleTools from './BukScheduleTools';
 import BukApprovedShiftControl from './BukApprovedShiftControl';
@@ -1367,7 +1367,18 @@ export default function WeeklyScheduleEditor() {
             workCategory:workCategory(person),
             previousShift:selectedDay==='monday'?(previousWeekRead.scope===previousWeekScope && previousWeekRead.status==='ready'?contextShiftLabel(prevWeekSchedules[person.id]?.sunday):'Pendiente de verificar'):contextShiftLabel(schedules[person.id]?.[weekdays[weekdays.indexOf(selectedDay)-1]]),
             birthday:Boolean(person.birthDate && person.birthDate.slice(5)===focusDate?.slice(5)),
-            contextLabel:weekdays.map(day=>`${weekdayLabels[day]}: ${contextShiftLabel(schedules[person.id]?.[day])}; ${person.study_schedule?.[day]?.free?'descanso solicitado; ':''}estudios: ${person.studyAvailabilityStatus!=='ready'?'pendiente de verificar':(person.study_schedule?.[day]?.blocks||[]).map(block=>`${block.start}–${block.end}`).join(', ')||'sin bloques'}`).join('\n'),
+            studyStatus:person.studyAvailabilityStatus==='ready'?'ready':'pending',
+            weekRows:weekdays.map(day=>{
+                const dayShift=schedules[person.id]?.[day], dayDate=getDateStrForDay(day);
+                return {
+                    day, label:weekdayLabels[day], date:dayDate,
+                    shift:contextShiftLabel(dayShift),
+                    breakLabel:dayShift?scheduleBreakLabel(dayShift,getEffectiveModality(person,dayDate)):'',
+                    freePreference:Boolean(person.study_schedule?.[day]?.free),
+                    studyBlocks:(person.study_schedule?.[day]?.blocks||[]).map(block=>`${block.start}–${block.end}`),
+                    requests:getApprovedRequestsForStaffDay(person.id,day).map(request=>({id:request.id,label:formatApprovedRequestShift(request),mismatch:rangeRequestConflictsWithShift(request,dayShift)})),
+                };
+            }),
         };
     };
     const focusItems = focusMode ? orderScheduleStaff(filteredStaff, focusDate).map(makeFocusItem) : [];

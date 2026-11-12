@@ -1786,21 +1786,22 @@ function AdminDashboard() {
                 </section>
 
                 {/* Filters and Actions - Refinado */}
-                <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-6 mb-8">
-                    <div className="flex flex-col lg:flex-row gap-4 items-center">
-                        <div className="flex-1 w-full lg:w-auto relative">
+                <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-6 mb-8 space-y-4">
+                    <div className="flex flex-col md:flex-row gap-3 md:items-center">
+                        <div className="relative min-w-0 flex-1">
                             <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
                             <input
-                                type="text"
+                                type="search"
+                                aria-label="Buscar colaborador por nombre o DNI"
                                 placeholder="Buscar por nombre o DNI..."
                                 className="w-full pl-11 pr-4 py-3 bg-gray-50 border border-transparent rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-sm outline-none"
                                 value={searchTerm}
                                 onChange={(e) => setSearchTerm(e.target.value)}
                             />
                         </div>
-                        
-                        <div className="admin-controls grid grid-cols-2 items-center gap-3 w-full lg:w-auto lg:flex lg:flex-wrap">
+                        <div className="admin-filters grid grid-cols-2 gap-3 md:flex md:shrink-0">
                             <select
+                                aria-label="Filtrar por modalidad"
                                 className="px-4 py-3 bg-gray-50 border border-transparent rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-sm outline-none font-medium text-gray-700 min-w-[140px]"
                                 value={modalityFilter}
                                 onChange={(e) => setModalityFilter(e.target.value)}
@@ -1821,7 +1822,10 @@ function AdminDashboard() {
                                 <option value="asc">Carnet: vence primero</option>
                                 <option value="desc">Carnet: vence después</option>
                             </select>
+                        </div>
+                    </div>
 
+                    <div className="admin-controls grid grid-cols-2 items-center gap-3 border-t border-gray-100 pt-4 sm:flex sm:flex-wrap sm:justify-end">
                             <button
                                 onClick={handleExportStudyAvailability}
                                 disabled={loading || exportingStudies || !userData?.storeId}
@@ -1848,7 +1852,6 @@ function AdminDashboard() {
                                 Agregar Personal
                             </button>
                             <StaffPlanillaImport storeId={userData?.storeId} storeName={storeName} staff={staff} onImported={fetchAllStaffProfiles} />
-                        </div>
                     </div>
                 </div>
 

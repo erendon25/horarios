@@ -1,7 +1,7 @@
 import React, { useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-export default function ScheduleTooltip({ id, anchor, container, onMouseEnter, onMouseLeave, children, testId, preferSide = false }) {
+export default function ScheduleTooltip({ id, anchor, container, onMouseEnter, onMouseLeave, children, testId, preferSide = false, className }) {
     const ref = useRef(null);
     const [position, setPosition] = useState(null);
 
@@ -22,7 +22,7 @@ export default function ScheduleTooltip({ id, anchor, container, onMouseEnter, o
     return createPortal(
         <div ref={ref} id={id} role="tooltip" data-testid={testId}
             onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave}
-            className="fixed z-[100] w-72 max-w-[calc(100vw-16px)] max-h-[calc(100dvh-16px)] overflow-y-auto break-words rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-xs leading-relaxed text-white shadow-xl"
+            className={`fixed z-[100] max-w-[calc(100vw-16px)] max-h-[calc(100dvh-16px)] overflow-y-auto break-words shadow-xl ${className || 'w-72 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-xs leading-relaxed text-white'}`}
             style={position || { left: 0, top: 0, visibility: 'hidden' }}>
             {children}
         </div>, container || document.body

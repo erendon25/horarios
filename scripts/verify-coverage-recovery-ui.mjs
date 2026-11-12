@@ -79,7 +79,7 @@ try{
   const infoButton=card('F01').getByRole('button',{name:/Información de/});
   assert.equal(await infoButton.locator('svg').count(),1,'Information action must use an icon');
   await infoButton.hover();const infoPreview=page.getByTestId('staff-info-preview');await infoPreview.waitFor();
-  assert.match(await infoPreview.textContent(),/Camila.*Semana:.*Ayer:.*Cumpleaños.*Lunes:/s);
+  assert.match(await infoPreview.textContent(),/Camila.*Cumpleaños.*Semana:.*Ayer:.*Lunes/s);
   assert.equal(await page.getByRole('dialog',{name:/Ficha de Camila/}).count(),0,'Hover only shows the preview');
   await page.screenshot({path:`${output}/info-icon-preview.png`});
   await page.keyboard.press('Escape');await infoPreview.waitFor({state:'hidden'});assert.equal(await panel().isVisible(),true);
