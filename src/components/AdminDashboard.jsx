@@ -1825,14 +1825,14 @@ function AdminDashboard() {
                         </div>
                     </div>
 
-                    <div className="admin-controls grid grid-cols-2 items-center gap-3 border-t border-gray-100 pt-4 sm:flex sm:flex-wrap sm:justify-end">
+                    <div className="admin-controls grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t border-gray-100 pt-4 sm:flex sm:flex-wrap sm:justify-end">
                             <button
                                 onClick={handleExportStudyAvailability}
                                 disabled={loading || exportingStudies || !userData?.storeId}
                                 title="Descarga los estudios y días libres de todos los colaboradores activos de esta tienda, sin aplicar los filtros de búsqueda. Días libres: 08:00 a 23:00."
-                                className="flex items-center gap-2 px-4 py-3 border border-emerald-200 text-emerald-700 rounded-xl hover:bg-emerald-50 transition-all text-sm font-bold whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="flex min-w-0 items-center justify-center gap-2 px-4 py-3 border border-emerald-200 text-emerald-700 rounded-xl hover:bg-emerald-50 transition-all text-sm font-bold text-center leading-tight sm:whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                <Download className="w-4 h-4" />
+                                <Download className="w-4 h-4 shrink-0" aria-hidden="true" />
                                 {exportingStudies ? 'Preparando Excel...' : 'Descargar disponibilidades'}
                             </button>
 
@@ -1840,6 +1840,7 @@ function AdminDashboard() {
                                 onClick={fetchAllStaffProfiles}
                                 className="flex items-center justify-center p-3 border border-gray-200 text-gray-500 rounded-xl hover:bg-gray-50 transition-all"
                                 title="Actualizar lista"
+                                aria-label="Actualizar lista"
                             >
                                 <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
                             </button>
