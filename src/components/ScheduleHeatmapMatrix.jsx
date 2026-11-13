@@ -74,7 +74,10 @@ export default function ScheduleHeatmapMatrix({ assigned = EMPTY_ASSIGNED, requi
     const inspectCell = (element, key, hour) => {
         keepCellInfo();
         const person = occupants.get(key);
-        setInspectedCell(person && !cardPlacement && !moveMode && !drag.current && !rangeDrag.current
+        // En modo Mover se muestra el nombre al pasar el cursor ANTES de agarrar a
+        // nadie, para no mover al colaborador incorrecto. Al seleccionar u arrastrar
+        // (moveState o moveDrag) se oculta para no estorbar la previsualización.
+        setInspectedCell(person && !cardPlacement && !(moveMode && (moveState || moveDrag.current)) && !drag.current && !rangeDrag.current
             ? { element, key, hour, date, staffId: person.staffId } : null);
     };
     useEffect(() => {
