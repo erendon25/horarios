@@ -1278,9 +1278,35 @@ export default function WeeklyScheduleEditor() {
         return conflicts;
     };
 
+    // El turno fuera del plan BUK (no coincide con los horarios aprobados ni la
+    // cuota del plan) por día se convierte en un conflicto navegable para
+    // corregirlo desde el mismo colaborador y día, igual que los de estudio.
+    const getWeeklyBukConflicts = () => {
+        return bukPlanningWarnings(activeStaff, schedules, weekStartDate).flatMap(item => {
+            const person = activeStaff.find(staff => staff.id === item.id);
+            return item.warnings.filter(warning => warning.day && !warning.message.startsWith('Break')).map(warning => {
+                const shift = schedules[item.id]?.[warning.day] || {};
+                return {
+                    id: `buk_${item.id}_${warning.day}`,
+                    staffId: item.id,
+                    name: item.name || `${person?.name || ''} ${person?.lastName || ''}`.trim() || 'Sin nombre',
+                    day: warning.day,
+                    dayLabel: weekdayLabels[warning.day],
+                    position: shift.position,
+                    shiftText: shift.splitShift && shift.start2 && shift.end2
+                        ? `${shift.start}-${shift.end} / ${shift.start2}-${shift.end2}`
+                        : `${shift.start || '—'}-${shift.end || '—'}`,
+                    reasons: ['buk'],
+                    message: warning.message,
+                };
+            });
+        });
+    };
+
+    const getWeeklyConflicts = () => [...getWeeklyStudyConflicts(), ...getWeeklyBukConflicts()];
+
     const handleOpenStudyConflictsModal = () => {
-        const conflicts = getWeeklyStudyConflicts();
-        setWeeklyStudyConflicts(conflicts);
+        setWeeklyStudyConflicts(getWeeklyConflicts());
         setShowStudyConflictsModal(true);
     };
 
@@ -1455,7 +1481,7 @@ export default function WeeklyScheduleEditor() {
                 dirtyCount={dirtyStaff.size} hasUnsavedChanges={hasUnsavedChanges} onSave={saveSchedules}
                 onOpenStaff={() => setFocusPanelOpen(value => !value)} staffCount={focusItems.length} staffButtonRef={focusStaffButton} panelOpen={focusPanelOpen}
                 onOpenRequests={() => setShowApprovedRequestsModal(true)} requestCount={approvedRequests.length}
-                onOpenConflicts={handleOpenStudyConflictsModal} conflictCount={getWeeklyStudyConflicts().length} filterActive={globalFiltersActive}
+                onOpenConflicts={handleOpenStudyConflictsModal} conflictCount={getWeeklyConflicts().length} filterActive={globalFiltersActive}
                 filters={<>
                     <p className="text-xs text-gray-500">Estos filtros cambian la cobertura visible. Las HH conservan el total de la tienda.</p>
                     <label className="block">Buscar en la cobertura<input aria-label="Buscar en la cobertura" value={searchTerm} onChange={event => setSearchTerm(event.target.value)} className="mt-1 w-full rounded border p-2" /></label>
@@ -1466,7 +1492,7 @@ export default function WeeklyScheduleEditor() {
                 </>}
                 exportControls={<>
                     <WeeklyScheduleExcelButton canExport={userRole === 'admin' || userRole === 'superadmin'} staff={activeStaff} schedules={schedules} weekStart={weekStartDate} requirements={requirements} projectionPositions={projectionPositions} hasUnsavedChanges={hasUnsavedChanges} />
-                    <BukScheduleTools storeId={storeId} staff={staff} schedules={schedules} weekStart={weekStartDate} />
+                    <BukScheduleTools storeId={storeId} staff={staff} schedules={schedules} weekStart={weekStartDate} resetKey={`${weekStartDate}:${selectedDay}`} />
                     <details data-testid="schedule-buk-warnings" className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900"><summary className="cursor-pointer font-semibold">Plan semanal / BUK · {planningWarnings.length} por revisar</summary><p className="mt-2">Estas advertencias no impiden guardar. El archivo BUK mantiene sus propias validaciones.</p>{planningWarnings.map(item=><div key={item.id} className="mt-2"><strong>{item.name}</strong>{item.warnings.map((warning,index)=><p key={index}>{warning.day?`${weekdayLabels[warning.day]}: `:''}{warning.message}</p>)}</div>)}</details>
                     <button type="button" className="rounded-lg border p-2 text-sm" onClick={() => setShowTurnoModal(true)}>PDF Posiciones</button>
                 </>}
@@ -1734,7 +1760,7 @@ export default function WeeklyScheduleEditor() {
                                 className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-lg shadow-md hover:shadow-lg transform hover:scale-105 transition-all duration-200 font-medium"
                             >
                                 <AlertCircle className="w-5 h-5" />
-                                Conflictos Estudio
+                                Conflictos
                             </button>
 
                             <button
@@ -1747,7 +1773,7 @@ export default function WeeklyScheduleEditor() {
 
 
 
-                            <BukScheduleTools storeId={storeId} staff={staff} schedules={schedules} weekStart={weekStartDate} />
+                            <BukScheduleTools storeId={storeId} staff={staff} schedules={schedules} weekStart={weekStartDate} resetKey={`${weekStartDate}:${selectedDay}`} />
 
                             <button
                                 onClick={async () => {
@@ -2546,7 +2572,7 @@ export default function WeeklyScheduleEditor() {
                             <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-4 flex justify-between items-center text-white">
                                 <h3 className="text-lg font-bold flex items-center gap-2">
                                     <AlertCircle className="w-5 h-5" />
-                                    Conflictos con Estudios
+                                    Conflictos de la semana
                                 </h3>
                                 <button onClick={() => setShowStudyConflictsModal(false)} className="p-1 hover:bg-white/20 rounded-lg transition-colors">
                                     <X className="w-5 h-5" />
@@ -2557,8 +2583,8 @@ export default function WeeklyScheduleEditor() {
                                 {weeklyStudyConflicts.length === 0 ? (
                                     <div className="bg-white border border-emerald-100 rounded-xl p-8 text-center">
                                         <CheckCircle className="w-10 h-10 text-emerald-500 mx-auto mb-3" />
-                                        <p className="font-black text-slate-900">No se encontraron conflictos de estudio en esta semana.</p>
-                                        <p className="text-sm text-slate-500 mt-1">Los turnos asignados no chocan con horarios de clase ni dias libres de estudio.</p>
+                                        <p className="font-black text-slate-900">No se encontraron conflictos en esta semana.</p>
+                                        <p className="text-sm text-slate-500 mt-1">Los turnos asignados no chocan con estudios ni quedan fuera del plan BUK.</p>
                                     </div>
                                 ) : (
                                     <div className="space-y-3">
@@ -2575,14 +2601,14 @@ export default function WeeklyScheduleEditor() {
                                                             <span className="font-bold text-orange-700">{conflict.dayLabel}</span>
                                                             <span className="mx-2 text-slate-300">|</span>
                                                             {conflict.shiftText}
-                                                            <span className="mx-2 text-slate-300">|</span>
-                                                            {conflict.position}
+                                                            {conflict.position && <><span className="mx-2 text-slate-300">|</span>{conflict.position}</>}
                                                         </p>
+                                                        {conflict.message && <p className="text-xs text-slate-500 mt-1">{conflict.message}</p>}
                                                     </div>
                                                     <div className="flex flex-wrap gap-2">
                                                         {conflict.reasons.map(reason => (
-                                                            <span key={reason} className="px-3 py-1 rounded-full bg-orange-50 text-orange-700 border border-orange-100 text-xs font-black uppercase">
-                                                                {reason === 'estudia' ? 'Dia libre estudio' : 'Cruce horario'}
+                                                            <span key={reason} className={`px-3 py-1 rounded-full border text-xs font-black uppercase ${reason === 'buk' ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-orange-50 text-orange-700 border-orange-100'}`}>
+                                                                {reason === 'estudia' ? 'Día libre estudio' : reason === 'buk' ? 'Fuera del plan BUK' : reason === 'disponibilidad' ? 'Disponibilidad sin verificar' : 'Cruce horario'}
                                                             </span>
                                                         ))}
                                                         <span className="px-3 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-100 text-xs font-black uppercase">

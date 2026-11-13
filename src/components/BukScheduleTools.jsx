@@ -4,13 +4,16 @@ import { getFirestore, doc, getDoc } from '../lib/supabase/firestoreCompat';
 import { useAuth } from '../contexts/AuthContext';
 import { createBukWorkbook, createBukPlanningWorkbook, bukRefrigerioRows } from '../services/bukSchedule';
 
-export default function BukScheduleTools({ storeId, staff, schedules, weekStart }) {
+export default function BukScheduleTools({ storeId, staff, schedules, weekStart, resetKey }) {
   const { currentUser } = useAuth();
   const [storeName, setStoreName] = useState('');
   const [managerName, setManagerName] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  // El error y el aviso son una foto del último intento de exportación. Al cambiar
+  // de día o de semana dejan de corresponder a lo que se ve, así que se limpian.
+  useEffect(() => { setError(''); setNotice(''); }, [resetKey]);
   useEffect(() => {
     let active = true;
     setStoreName(''); setManagerName(''); setError(''); setNotice('');
