@@ -58,8 +58,12 @@ test('un turno nocturno comprueba clases y días libres del día siguiente', () 
   assert.equal(result.reasons[0].day, 'tuesday');
   assert.equal(result.reasons[0].date, '2026-10-27');
   assert.equal(check({ tuesday: blocks(['02:00', '04:00']) }, overnight).available, true);
-  assert.equal(check({ tuesday: { free: true } }, overnight).available, false);
+  // Un día libre solo bloquea turnos que empiezan ese día; la prolongación del
+  // turno del día anterior pasada la medianoche sigue siendo asignable.
+  assert.equal(check({ tuesday: { free: true } }, overnight).available, true);
   assert.equal(check({ tuesday: { free: true } }, { start: '20:00', end: '00:00' }).available, true);
+  // Un turno que arranca el propio día libre sí queda bloqueado.
+  assert.equal(check({ tuesday: { free: true } }, { start: '00:30', end: '06:00' }, '2026-10-27').available, false);
 });
 
 test('las clases que cruzan medianoche también afectan el turno del día posterior', () => {

@@ -90,7 +90,10 @@ export const getShiftAvailability = ({ date, shift, studySchedule } = {}) => {
     const day = studyDay(studySchedule, key);
     const dayStart = offset * MINUTES_PER_DAY;
     if (day.free) {
-      if (segments.some((segment) => overlaps(segment, { start: dayStart, end: dayStart + MINUTES_PER_DAY }))) {
+      // Un día libre solicitado bloquea los turnos que EMPIEZAN ese día. Un turno
+      // que arranca el día anterior y solo se prolonga pasada la medianoche (p. ej.
+      // hasta las 25:00) sigue siendo del día previo y debe poder asignarse.
+      if (segments.some((segment) => segment.start >= dayStart && segment.start < dayStart + MINUTES_PER_DAY)) {
         reasons.push({ code: 'requested_day_off', day: key, date: isoDate,
           message: `Día libre solicitado para el ${label} ${displayDate}.` });
       }
